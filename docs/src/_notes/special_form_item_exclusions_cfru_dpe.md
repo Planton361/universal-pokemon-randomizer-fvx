@@ -4,7 +4,8 @@ Status: settings/serialization, species-pool filtering, and mechanic item-pool f
 Mega, Gigantamax, regional-form, evolutionary-relative, and mirrored item-exclusion semantics for CFRU/DPE Gen9 BPRE.
 GUI controls are exposed through the Limit Pokemon dialog. Source-backed coverage now includes known CFRU/DPE Mega
 identity ranges, the known GMax identity block, known CFRU/DPE Z-Crystal identities/names, and known Pikachu
-irregular-form identities. ROM-facing metadata audits remain follow-up work.
+irregular-form identities. ROM-facing metadata audits remain follow-up work. See `cfru_dpe_item_sources.md` for the
+current CFRU/DPE item-source map and mechanic-filter coverage caveats.
 
 Codex did not run, copy, generate, modify, or inspect ROMs for this note.
 
@@ -261,6 +262,11 @@ source block.
 
 If a local item comes from a static script, gift, or NPC path that UPR-FVX does not randomize through those pools, this
 PR does not blindly patch scripts; that source remains a ROM-backed local audit item.
+
+Additional item-source caveats are documented in `cfru_dpe_item_sources.md`. In short, field/shop RANDOM replacement
+pools are mechanic-filtered, but field/shop SHUFFLE modes move existing items rather than rebuilding from a filtered
+candidate pool. PC Potion currently draws from non-bad non-TM items without the shared mechanic filter. Generic
+script/gift/NPC `giveitem` sources are not broadly modeled by the Gen3 item randomizer.
 
 ## Blockers
 
