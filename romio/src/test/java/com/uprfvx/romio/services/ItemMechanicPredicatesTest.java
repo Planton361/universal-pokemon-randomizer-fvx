@@ -134,6 +134,7 @@ public class ItemMechanicPredicatesTest {
         Item cfruDpeNormaliumZ = item(CFRU_DPE_NORMALIUM_Z, "Normalium Z");
         Item cfruDpeStandardNormaliumZ = item(CFRU_DPE_STANDARD_NORMALIUM_Z, "Normalium Z");
         Item cfruDpeSnorliumZ = item(CFRU_DPE_SNORLIUM_Z, "Snorlium Z");
+        Item cfruDpeAlorichiumZ = item(CfruDpeItemCategories.standardIdForSourceId(0x256), "Alorichium Z");
         Item zRing = item(ItemIDs.zRing, "Z-Ring");
 
         assertTrue(ItemMechanicPredicates.isZMechanicItem(normaliumZ));
@@ -143,6 +144,7 @@ public class ItemMechanicPredicatesTest {
         assertTrue(ItemMechanicPredicates.isZMechanicItem(cfruDpeNormaliumZ));
         assertTrue(ItemMechanicPredicates.isZMechanicItem(cfruDpeStandardNormaliumZ));
         assertTrue(ItemMechanicPredicates.isZMechanicItem(cfruDpeSnorliumZ));
+        assertTrue(ItemMechanicPredicates.isZMechanicItem(cfruDpeAlorichiumZ));
         assertTrue(ItemMechanicPredicates.isZMechanicItem(zRing));
         assertFalse(ItemMechanicPredicates.isItemAllowed(normaliumZ, ItemMechanicExclusionOptions.defaults()));
         assertFalse(ItemMechanicPredicates.isItemAllowed(ultranecroziumZ, ItemMechanicExclusionOptions.defaults()));
@@ -156,17 +158,22 @@ public class ItemMechanicPredicatesTest {
                 ItemMechanicExclusionOptions.defaults()));
         assertFalse(ItemMechanicPredicates.isItemAllowed(cfruDpeSnorliumZ,
                 ItemMechanicExclusionOptions.defaults()));
+        assertFalse(ItemMechanicPredicates.isItemAllowed(cfruDpeAlorichiumZ,
+                ItemMechanicExclusionOptions.defaults()));
         assertTrue(ItemMechanicPredicates.isItemAllowed(ultranecroziumZ,
                 new ItemMechanicExclusionOptions(false, true, false)));
         assertTrue(ItemMechanicPredicates.isItemAllowed(cfruDpeNecroziumZ,
                 new ItemMechanicExclusionOptions(false, true, false)));
         assertTrue(ItemMechanicPredicates.isItemAllowed(cfruDpeStandardNecroziumZ,
                 new ItemMechanicExclusionOptions(false, true, false)));
+        assertTrue(ItemMechanicPredicates.isItemAllowed(cfruDpeAlorichiumZ,
+                new ItemMechanicExclusionOptions(false, true, false)));
     }
 
     @Test
     public void signatureZCrystalNamesAreRecognizedWhenIdsAreNotCanonical() {
         List<Item> signatureZCrystals = List.of(
+                item(5999, "Fairium Z"),
                 item(6000, "Pikanium Z"),
                 item(6001, "Pikashunium Z"),
                 item(6002, "Eevium Z"),
@@ -183,7 +190,10 @@ public class ItemMechanicPredicatesTest {
                 item(6013, "Mimikium Z"),
                 item(6014, "Snorlium Z"),
                 item(6015, "Necrozium Z"),
-                item(6016, "Ultranecrozium Z")
+                item(6016, "Ultranecrozium Z"),
+                item(6017, "Aloraichium Z"),
+                item(6018, "Alorichium Z"),
+                item(6019, "A-Raichunium Z")
         );
         Item rareCandy = item(ItemIDs.rareCandy, "Rare Candy");
         Item zoomLens = item(ItemIDs.zoomLens, "Zoom Lens");

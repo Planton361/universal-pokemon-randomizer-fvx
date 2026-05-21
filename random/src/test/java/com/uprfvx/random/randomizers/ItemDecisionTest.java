@@ -37,14 +37,19 @@ public class ItemDecisionTest {
 
     private static final int CFRU_DPE_ULTRANECROZIUM_Z = 0x214;
     private static final int CFRU_DPE_BLASTOISINITE = 0x218;
+    private static final int CFRU_DPE_ALORAICHIUM_Z = 0x256;
     private static final int CFRU_DPE_SNORLIUM_Z = 0x263;
     private static final int CFRU_DPE_TM51 = 376;
     private static final int CFRU_DPE_STANDARD_ULTRANECROZIUM_Z =
             CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_ULTRANECROZIUM_Z);
     private static final int CFRU_DPE_STANDARD_BLASTOISINITE =
             CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_BLASTOISINITE);
+    private static final int CFRU_DPE_STANDARD_ALORAICHIUM_Z =
+            CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_ALORAICHIUM_Z);
     private static final int NONCANONICAL_PIDGEOTITE = 9000;
     private static final int NONCANONICAL_CAMERUPTITE = 9001;
+    private static final int NONCANONICAL_ALORICHIUM_Z = 9002;
+    private static final int NONCANONICAL_A_RAICHUNIUM_Z = 9003;
 
     @Test
     public void randomizeFieldItemsKeepsSelectionInNonBadAllowedPool() {
@@ -146,6 +151,9 @@ public class ItemDecisionTest {
         Item zCrystal = mechanicItem(30, "ZCrystal", ItemMechanicCategory.Z_CRYSTAL);
         Item necroziumZ = item(CFRU_DPE_ULTRANECROZIUM_Z, "Necrozium Z", true, false);
         Item cfruDpeStandardNecroziumZ = item(CFRU_DPE_STANDARD_ULTRANECROZIUM_Z, "Necrozium Z", true, false);
+        Item aloraichiumZ = item(CFRU_DPE_STANDARD_ALORAICHIUM_Z, "Aloraichium Z", true, false);
+        Item alorichiumZ = item(NONCANONICAL_ALORICHIUM_Z, "Alorichium Z", true, false);
+        Item aRaichuniumZ = item(NONCANONICAL_A_RAICHUNIUM_Z, "A-Raichunium Z", true, false);
         Item snorliumZ = item(CFRU_DPE_SNORLIUM_Z, "Snorlium Z", true, false);
         Item pidgeotite = item(NONCANONICAL_PIDGEOTITE, "Pidgeotite", true, false);
         Item cameruptite = item(NONCANONICAL_CAMERUPTITE, "Cameruptite", true, false);
@@ -153,23 +161,29 @@ public class ItemDecisionTest {
         Item wishingPiece = item(ItemIDs.wishingPiece, "Wishing Piece", true, false);
         Item dynamax = mechanicItem(40, "Dynamax", ItemMechanicCategory.DYNAMAX_GIGANTAMAX);
         Set<Item> allItems = Set.of(normal, mega, blastoiseite, zCrystal, necroziumZ,
-                cfruDpeStandardNecroziumZ, snorliumZ, pidgeotite, cameruptite, dynamaxBand,
+                cfruDpeStandardNecroziumZ, aloraichiumZ, alorichiumZ, aRaichuniumZ, snorliumZ,
+                pidgeotite, cameruptite, dynamaxBand,
                 wishingPiece, dynamax);
         ItemTestRomHandler romHandler = ItemTestRomHandler.create(
                 List.of(mega, blastoiseite, zCrystal, necroziumZ, cfruDpeStandardNecroziumZ,
-                        snorliumZ, pidgeotite, cameruptite, dynamaxBand, wishingPiece, dynamax),
+                        aloraichiumZ, alorichiumZ, aRaichuniumZ, snorliumZ, pidgeotite, cameruptite,
+                        dynamaxBand, wishingPiece, dynamax),
                 allItems,
                 allItems);
         romHandler.shops = List.of(specialShop(List.of(mega, blastoiseite, zCrystal, necroziumZ,
-                cfruDpeStandardNecroziumZ, snorliumZ, pidgeotite, cameruptite, dynamaxBand,
+                cfruDpeStandardNecroziumZ, aloraichiumZ, alorichiumZ, aRaichuniumZ, snorliumZ,
+                pidgeotite, cameruptite, dynamaxBand,
                 wishingPiece, dynamax)));
         romHandler.pickupItems = List.of(new PickupItem(mega), new PickupItem(blastoiseite),
                 new PickupItem(zCrystal), new PickupItem(necroziumZ),
-                new PickupItem(cfruDpeStandardNecroziumZ), new PickupItem(snorliumZ), new PickupItem(pidgeotite),
-                new PickupItem(cameruptite), new PickupItem(dynamaxBand), new PickupItem(wishingPiece),
+                new PickupItem(cfruDpeStandardNecroziumZ), new PickupItem(aloraichiumZ),
+                new PickupItem(alorichiumZ), new PickupItem(aRaichuniumZ), new PickupItem(snorliumZ),
+                new PickupItem(pidgeotite), new PickupItem(cameruptite), new PickupItem(dynamaxBand),
+                new PickupItem(wishingPiece),
                 new PickupItem(dynamax));
         romHandler.starterHeldItems = List.of(mega, blastoiseite, zCrystal, necroziumZ,
-                cfruDpeStandardNecroziumZ, snorliumZ, pidgeotite, cameruptite, dynamaxBand,
+                cfruDpeStandardNecroziumZ, aloraichiumZ, alorichiumZ, aRaichuniumZ, snorliumZ,
+                pidgeotite, cameruptite, dynamaxBand,
                 wishingPiece, dynamax);
         TrainerPokemon trainerPokemon = new TrainerPokemon();
         Trainer trainer = new Trainer();
@@ -186,13 +200,17 @@ public class ItemDecisionTest {
         new StarterRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeStarterHeldItems();
         new TrainerPokemonRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeTrainerHeldItems();
 
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal,
+                        normal, normal, normal),
                 romHandler.writtenFieldItems);
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal,
+                        normal, normal, normal),
                 romHandler.writtenShops.get(0).getItems());
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal,
+                        normal, normal, normal),
                 romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal, normal,
+                        normal, normal, normal),
                 romHandler.writtenStarterHeldItems);
         assertEquals(normal, trainerPokemon.getHeldItem());
     }
@@ -268,6 +286,9 @@ public class ItemDecisionTest {
         Item mega = mechanicItem(20, "Mega", ItemMechanicCategory.MEGA_STONE);
         Item blastoiseite = item(CFRU_DPE_STANDARD_BLASTOISINITE, "Blastoiseite", true, false);
         Item snorliumZ = item(CFRU_DPE_SNORLIUM_Z, "Snorlium Z", true, false);
+        Item aloraichiumZ = item(CFRU_DPE_STANDARD_ALORAICHIUM_Z, "Aloraichium Z", true, false);
+        Item alorichiumZ = item(NONCANONICAL_ALORICHIUM_Z, "Alorichium Z", true, false);
+        Item aRaichuniumZ = item(NONCANONICAL_A_RAICHUNIUM_Z, "A-Raichunium Z", true, false);
         Item dynamax = mechanicItem(40, "Dynamax", ItemMechanicCategory.DYNAMAX_GIGANTAMAX);
         Settings settings = new Settings();
         settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
@@ -287,6 +308,20 @@ public class ItemDecisionTest {
         pickupHandler.pickupItems = List.of(new PickupItem(snorliumZ));
         new ItemRandomizer(pickupHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
 
+        ItemTestRomHandler zFieldHandler = ItemTestRomHandler.create(List.of(alorichiumZ), Set.of(alorichiumZ),
+                Set.of(alorichiumZ));
+        new ItemRandomizer(zFieldHandler.proxy, settings, new ZeroRandom()).randomizeFieldItems();
+
+        ItemTestRomHandler zShopHandler = ItemTestRomHandler.create(List.of(), Set.of(aloraichiumZ),
+                Set.of(aloraichiumZ));
+        zShopHandler.shops = List.of(specialShop(List.of(aloraichiumZ)));
+        new ItemRandomizer(zShopHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
+
+        ItemTestRomHandler zPickupHandler = ItemTestRomHandler.create(List.of(), Set.of(aRaichuniumZ),
+                Set.of(aRaichuniumZ));
+        zPickupHandler.pickupItems = List.of(new PickupItem(aRaichuniumZ));
+        new ItemRandomizer(zPickupHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
+
         ItemTestRomHandler starterHandler = ItemTestRomHandler.create(List.of(), Set.of(dynamax), Set.of(dynamax));
         starterHandler.starterHeldItems = List.of(dynamax);
         new StarterRandomizer(starterHandler.proxy, settings, new ZeroRandom()).randomizeStarterHeldItems();
@@ -294,6 +329,9 @@ public class ItemDecisionTest {
         assertEquals(List.of(mega), fieldHandler.writtenFieldItems);
         assertEquals(List.of(blastoiseite), shopHandler.writtenShops.get(0).getItems());
         assertEquals(snorliumZ, pickupHandler.writtenPickupItems.get(0).getItem());
+        assertEquals(List.of(alorichiumZ), zFieldHandler.writtenFieldItems);
+        assertEquals(List.of(aloraichiumZ), zShopHandler.writtenShops.get(0).getItems());
+        assertEquals(aRaichuniumZ, zPickupHandler.writtenPickupItems.get(0).getItem());
         assertEquals(List.of(dynamax), starterHandler.writtenStarterHeldItems);
     }
 
