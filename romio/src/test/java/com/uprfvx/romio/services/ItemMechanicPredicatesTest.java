@@ -227,6 +227,8 @@ public class ItemMechanicPredicatesTest {
         Item shockDrive = item(ItemIDs.shockDrive, "Shock Drive");
         Item bugMemory = item(ItemIDs.bugMemory, "Bug Memory");
         Item electricMemory = item(ItemIDs.electricMemory, "Electric Memory");
+        Item flyingMemoryAbbrev = item(7002, "Flying Mem.");
+        Item fireMemoryAbbrev = item(7003, "Fire Mem.");
         Item redNectar = item(ItemIDs.redNectar, "Red Nectar");
         Item revealGlass = item(ItemIDs.revealGlass, "Reveal Glass");
 
@@ -236,12 +238,16 @@ public class ItemMechanicPredicatesTest {
         assertTrue(CfruDpeItemCategories.isGenesectDrive(shockDrive));
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(bugMemory));
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(electricMemory));
+        assertTrue(CfruDpeItemCategories.isSilvallyMemory(flyingMemoryAbbrev));
+        assertTrue(CfruDpeItemCategories.isSilvallyMemory(fireMemoryAbbrev));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(redNectar));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(revealGlass));
 
         assertTrue(ItemMechanicPredicates.categoriesFor(flamePlate).contains(ItemMechanicCategory.ARCEUS_PLATE));
         assertTrue(ItemMechanicPredicates.categoriesFor(burnDrive).contains(ItemMechanicCategory.GENESECT_DRIVE));
         assertTrue(ItemMechanicPredicates.categoriesFor(bugMemory).contains(ItemMechanicCategory.SILVALLY_MEMORY));
+        assertTrue(ItemMechanicPredicates.categoriesFor(flyingMemoryAbbrev)
+                .contains(ItemMechanicCategory.SILVALLY_MEMORY));
         assertTrue(ItemMechanicPredicates.categoriesFor(redNectar)
                 .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
         assertTrue(ItemMechanicPredicates.isItemAllowed(flamePlate, ItemMechanicExclusionOptions.defaults()));

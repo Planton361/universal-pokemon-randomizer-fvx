@@ -14,6 +14,9 @@ public class CfruDpeItemPoolPolicyTest {
         assertBadOnly(item(ItemIDs.flamePlate, "Flame Plate"));
         assertBadOnly(item(ItemIDs.burnDrive, "Burn Drive"));
         assertBadOnly(item(ItemIDs.bugMemory, "Bug Memory"));
+        assertBadOnly(item(ItemIDs.flyingMemory, "Flying Mem."));
+        assertBadOnly(item(9000, "Flying Memory"));
+        assertBadOnly(item(9001, "Fire Mem."));
         assertBadOnly(item(ItemIDs.redNectar, "Red Nectar"));
         assertBadOnly(item(ItemIDs.revealGlass, "Reveal Glass"));
         assertBadOnly(item(ItemIDs.dNASplicersFuse, "DNA Splicers"));
@@ -54,6 +57,23 @@ public class CfruDpeItemPoolPolicyTest {
         assertBadOnly(item(ItemIDs.cometShard, "Comet Shard"));
         assertBadOnly(item(ItemIDs.rareBone, "Rare Bone"));
         assertBadOnly(item(9000, "Relic Crown"));
+    }
+
+    @Test
+    public void apricornsAreBadOnlyWhenBanBadItemsIsEnabled() {
+        assertBadOnly(item(ItemIDs.redApricorn, "Red Apricorn"));
+        assertBadOnly(item(ItemIDs.blueApricorn, "Blue Apricorn"));
+        assertBadOnly(item(ItemIDs.greenApricorn, "Green Apricorn"));
+        assertBadOnly(item(ItemIDs.yellowApricorn, "Yellow Apricorn"));
+        assertBadOnly(item(ItemIDs.pinkApricorn, "Pink Apricorn"));
+        assertBadOnly(item(ItemIDs.whiteApricorn, "White Apricorn"));
+        assertBadOnly(item(ItemIDs.blackApricorn, "Black Apricorn"));
+        assertBadOnly(item(CfruDpeItemCategories.standardIdForSourceId(0x266), "Blk Apricorn"));
+        assertBadOnly(item(CfruDpeItemCategories.standardIdForSourceId(0x267), "Blu Apricorn"));
+        assertBadOnly(item(CfruDpeItemCategories.standardIdForSourceId(0x268), "Grn Apricorn"));
+        assertBadOnly(item(CfruDpeItemCategories.standardIdForSourceId(0x26B), "Wht Apricorn"));
+        assertBadOnly(item(CfruDpeItemCategories.standardIdForSourceId(0x26C), "Ylw Apricorn"));
+        assertBadOnly(item(9000, "Red Aprikoko"));
     }
 
     @Test
