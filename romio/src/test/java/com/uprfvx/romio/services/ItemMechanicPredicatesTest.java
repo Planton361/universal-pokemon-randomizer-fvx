@@ -109,11 +109,19 @@ public class ItemMechanicPredicatesTest {
                 item(6106, "Diancite"),
                 item(6107, "Beedrillite"),
                 item(6108, "Sceptilite"),
-                item(6109, "Sablenite")
+                item(6109, "Sablenite"),
+                item(6110, "Kangaskanite"),
+                item(6111, "Houndoomnite"),
+                item(6112, "Aerodactlite"),
+                item(6113, "CharzarditeX"),
+                item(6114, "CharzarditeY"),
+                item(6115, "Charzardite X"),
+                item(6116, "Charzardite Y")
         );
         Item eviolite = item(7000, "Eviolite");
         Item megaDrain = item(7001, "Mega Drain");
         Item lockCapsule = item(CFRU_DPE_STANDARD_VENUSAURITE, "Lock Capsule");
+        Item blackAugurite = item(7002, "Blk Augurite");
 
         for (Item megaStone : megaStones) {
             assertTrue(ItemMechanicPredicates.isMegaMechanicItem(megaStone),
@@ -125,6 +133,7 @@ public class ItemMechanicPredicatesTest {
         assertFalse(ItemMechanicPredicates.isMegaMechanicItem(eviolite));
         assertFalse(ItemMechanicPredicates.isMegaMechanicItem(megaDrain));
         assertFalse(ItemMechanicPredicates.isMegaMechanicItem(lockCapsule));
+        assertFalse(ItemMechanicPredicates.isMegaMechanicItem(blackAugurite));
     }
 
     @Test
@@ -195,7 +204,8 @@ public class ItemMechanicPredicatesTest {
                 item(6016, "Ultranecrozium Z"),
                 item(6017, "Aloraichium Z"),
                 item(6018, "Alorichium Z"),
-                item(6019, "A-Raichunium Z")
+                item(6019, "A-Raichunium Z"),
+                item(6020, "Pikshunium Z")
         );
         Item rareCandy = item(ItemIDs.rareCandy, "Rare Candy");
         Item zoomLens = item(ItemIDs.zoomLens, "Zoom Lens");
@@ -218,16 +228,21 @@ public class ItemMechanicPredicatesTest {
         Item dynamaxCandy = item(ItemIDs.dynamaxCandy, "Dynamax Candy");
         Item dynamaxBand = item(ItemIDs.dynamaxBand, "Dynamax Band");
         Item wishingPiece = item(ItemIDs.wishingPiece, "Wishing Piece");
+        Item wishPiece = item(6000, "Wish Piece");
         Item maxMushrooms = item(ItemIDs.maxMushrooms, "Max Mushrooms");
 
         assertTrue(ItemMechanicPredicates.isDynamaxGigantamaxItem(dynamaxCandy));
         assertTrue(ItemMechanicPredicates.isDynamaxGigantamaxItem(dynamaxBand));
         assertTrue(ItemMechanicPredicates.isDynamaxGigantamaxItem(wishingPiece));
+        assertTrue(ItemMechanicPredicates.isDynamaxGigantamaxItem(wishPiece));
         assertTrue(ItemMechanicPredicates.isDynamaxGigantamaxItem(maxMushrooms));
         assertFalse(ItemMechanicPredicates.isItemAllowed(dynamaxCandy, ItemMechanicExclusionOptions.defaults()));
         assertFalse(ItemMechanicPredicates.isItemAllowed(dynamaxBand, ItemMechanicExclusionOptions.defaults()));
         assertFalse(ItemMechanicPredicates.isItemAllowed(wishingPiece, ItemMechanicExclusionOptions.defaults()));
+        assertFalse(ItemMechanicPredicates.isItemAllowed(wishPiece, ItemMechanicExclusionOptions.defaults()));
         assertTrue(ItemMechanicPredicates.isItemAllowed(maxMushrooms,
+                new ItemMechanicExclusionOptions(false, false, true)));
+        assertTrue(ItemMechanicPredicates.isItemAllowed(wishPiece,
                 new ItemMechanicExclusionOptions(false, false, true)));
     }
 
@@ -241,10 +256,13 @@ public class ItemMechanicPredicatesTest {
         Item electricMemory = item(ItemIDs.electricMemory, "Electric Memory");
         Item flyingMemoryAbbrev = item(7002, "Flying Mem.");
         Item fireMemoryAbbrev = item(7003, "Fire Mem.");
+        Item electricMemoryAbbrev = item(7004, "Electr Mem.");
+        Item fightingMemoryAbbrev = item(7005, "Fight Mem.");
         Item redNectar = item(ItemIDs.redNectar, "Red Nectar");
         Item gracidea = item(ItemIDs.gracidea, "Gracidea");
         Item cfruDpeGracidea = item(CFRU_DPE_STANDARD_GRACIDEA, "Gracidea");
         Item revealGlass = item(ItemIDs.revealGlass, "Reveal Glass");
+        Item reinsUnity = item(ItemIDs.reinsofUnity, "Reins Unity");
 
         assertTrue(CfruDpeItemCategories.isArceusPlate(flamePlate));
         assertTrue(CfruDpeItemCategories.isArceusPlate(pixiePlate));
@@ -254,21 +272,30 @@ public class ItemMechanicPredicatesTest {
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(electricMemory));
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(flyingMemoryAbbrev));
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(fireMemoryAbbrev));
+        assertTrue(CfruDpeItemCategories.isSilvallyMemory(electricMemoryAbbrev));
+        assertTrue(CfruDpeItemCategories.isSilvallyMemory(fightingMemoryAbbrev));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(redNectar));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(gracidea));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(cfruDpeGracidea));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(revealGlass));
+        assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(reinsUnity));
 
         assertTrue(ItemMechanicPredicates.categoriesFor(flamePlate).contains(ItemMechanicCategory.ARCEUS_PLATE));
         assertTrue(ItemMechanicPredicates.categoriesFor(burnDrive).contains(ItemMechanicCategory.GENESECT_DRIVE));
         assertTrue(ItemMechanicPredicates.categoriesFor(bugMemory).contains(ItemMechanicCategory.SILVALLY_MEMORY));
         assertTrue(ItemMechanicPredicates.categoriesFor(flyingMemoryAbbrev)
                 .contains(ItemMechanicCategory.SILVALLY_MEMORY));
+        assertTrue(ItemMechanicPredicates.categoriesFor(electricMemoryAbbrev)
+                .contains(ItemMechanicCategory.SILVALLY_MEMORY));
+        assertTrue(ItemMechanicPredicates.categoriesFor(fightingMemoryAbbrev)
+                .contains(ItemMechanicCategory.SILVALLY_MEMORY));
         assertTrue(ItemMechanicPredicates.categoriesFor(redNectar)
                 .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
         assertTrue(ItemMechanicPredicates.categoriesFor(gracidea)
                 .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
         assertTrue(ItemMechanicPredicates.categoriesFor(cfruDpeGracidea)
+                .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
+        assertTrue(ItemMechanicPredicates.categoriesFor(reinsUnity)
                 .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
         assertTrue(ItemMechanicPredicates.isItemAllowed(flamePlate, ItemMechanicExclusionOptions.defaults()));
         assertTrue(ItemMechanicPredicates.isItemAllowed(burnDrive, ItemMechanicExclusionOptions.defaults()));
