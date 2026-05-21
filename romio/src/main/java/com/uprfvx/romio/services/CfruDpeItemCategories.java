@@ -135,6 +135,8 @@ public final class CfruDpeItemCategories {
             "darkiniumz",
             "fairiumz",
             "aloraichiumz",
+            "alorichiumz",
+            "araichuniumz",
             "pikaniumz",
             "pikashuniumz",
             "decidiumz",
