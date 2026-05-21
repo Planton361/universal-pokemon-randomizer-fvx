@@ -154,6 +154,26 @@ public final class CfruDpeItemPoolPolicy {
             "yellowaprikoko",
             "ylwaprikoko"
     );
+    private static final Set<Integer> CHARM_FLUTE_SYSTEM_IDS = Set.of(
+            ItemIDs.shinyCharm,
+            ItemIDs.ovalCharm,
+            ItemIDs.magmaStone,
+            ItemIDs.redFlute,
+            ItemIDs.blueFlute,
+            ItemIDs.blackFlute,
+            ItemIDs.whiteFlute,
+            ItemIDs.yellowFlute
+    );
+    private static final Set<String> CHARM_FLUTE_SYSTEM_NAMES = Set.of(
+            "shinycharm",
+            "ovalcharm",
+            "magmastone",
+            "redflute",
+            "blueflute",
+            "blackflute",
+            "whiteflute",
+            "yellowflute"
+    );
     private static final Set<Integer> REVIEW_GAP_NORMAL_POOL_BANNED_IDS = Set.of(
             ItemIDs.lightStone,
             CfruDpeItemCategories.standardIdForSourceId(0x1DB),
@@ -203,7 +223,7 @@ public final class CfruDpeItemPoolPolicy {
 
     public static boolean isBadWhenBanBadItems(Item item) {
         return isFormChangeItem(item) || isShardExchangeItem(item) || isHighValueValuableItem(item)
-                || isApricornItem(item);
+                || isApricornItem(item) || isCharmFluteSystemItem(item);
     }
 
     public static boolean isAllowedWhenBanBadItems(Item item) {
@@ -257,6 +277,14 @@ public final class CfruDpeItemPoolPolicy {
             return false;
         }
         return APRICORN_IDS.contains(item.getId()) || APRICORN_NAMES.contains(normalizedName(item));
+    }
+
+    public static boolean isCharmFluteSystemItem(Item item) {
+        if (item == null) {
+            return false;
+        }
+        return CHARM_FLUTE_SYSTEM_IDS.contains(item.getId())
+                || CHARM_FLUTE_SYSTEM_NAMES.contains(normalizedName(item));
     }
 
     public static boolean isReviewGapNormalPoolBannedItem(Item item) {

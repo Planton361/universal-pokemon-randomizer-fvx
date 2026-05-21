@@ -17,11 +17,14 @@ public class CfruDpeItemPoolPolicyTest {
         assertBadOnly(item(ItemIDs.flyingMemory, "Flying Mem."));
         assertBadOnly(item(9000, "Flying Memory"));
         assertBadOnly(item(9001, "Fire Mem."));
+        assertBadOnly(item(9002, "Electr Mem."));
+        assertBadOnly(item(9003, "Fight Mem."));
         assertBadOnly(item(ItemIDs.redNectar, "Red Nectar"));
         assertBadOnly(item(ItemIDs.gracidea, "Gracidea"));
         assertBadOnly(cfruDpeItem(0x1DF, "Gracidea"));
         assertBadOnly(item(ItemIDs.revealGlass, "Reveal Glass"));
         assertBadOnly(item(ItemIDs.dNASplicersFuse, "DNA Splicers"));
+        assertBadOnly(item(ItemIDs.reinsofUnity, "Reins Unity"));
     }
 
     @Test
@@ -101,6 +104,18 @@ public class CfruDpeItemPoolPolicyTest {
     }
 
     @Test
+    public void charmFluteAndMagmaSystemItemsAreBadOnlyWhenBanBadItemsIsEnabled() {
+        assertBadOnly(item(ItemIDs.shinyCharm, "Shiny Charm"));
+        assertBadOnly(item(ItemIDs.ovalCharm, "Oval Charm"));
+        assertBadOnly(item(ItemIDs.magmaStone, "Magma Stone"));
+        assertBadOnly(item(ItemIDs.redFlute, "Red Flute"));
+        assertBadOnly(item(ItemIDs.blueFlute, "Blue Flute"));
+        assertBadOnly(item(ItemIDs.blackFlute, "Black Flute"));
+        assertBadOnly(item(ItemIDs.whiteFlute, "White Flute"));
+        assertBadOnly(item(ItemIDs.yellowFlute, "Yellow Flute"));
+    }
+
+    @Test
     public void clearlyAllowedPolicyItemsAreNotNewlyBanned() {
         assertAllowed(item(ItemIDs.potion, "Potion"));
         assertAllowed(item(ItemIDs.superPotion, "Super Potion"));
@@ -120,6 +135,14 @@ public class CfruDpeItemPoolPolicyTest {
         assertAllowed(item(ItemIDs.fireGem, "Fire Gem"));
         assertAllowed(item(ItemIDs.wideLens, "Wide Lens"));
         assertAllowed(item(ItemIDs.throatSpray, "Throat Spray"));
+        assertAllowed(item(ItemIDs.absorbBulb, "Absorb Bulb"));
+        assertAllowed(item(9001, "Adrenal Orb"));
+        assertAllowed(item(ItemIDs.flameOrb, "Flame Orb"));
+        assertAllowed(item(ItemIDs.toxicOrb, "Toxic Orb"));
+        assertAllowed(item(ItemIDs.redCard, "Red Card"));
+        assertAllowed(item(ItemIDs.hardStone, "Hard Stone"));
+        assertAllowed(item(ItemIDs.everstone, "Everstone"));
+        assertAllowed(item(9000, "Blk Augurite"));
     }
 
     @Test

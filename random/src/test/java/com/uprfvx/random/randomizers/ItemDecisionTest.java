@@ -218,6 +218,31 @@ public class ItemDecisionTest {
     }
 
     @Test
+    public void batchFoundMechanicNameVariantsAreExcludedFromNormalPoolsByDefault() {
+        Item normal = item(10, "Normal", true, false);
+        Item charzarditeX = item(20, "CharzarditeX", true, false);
+        Item pikshuniumZ = item(21, "Pikshunium Z", true, false);
+        Item wishPiece = item(22, "Wish Piece", true, false);
+        Set<Item> allItems = linkedSet(normal, charzarditeX, pikshuniumZ, wishPiece);
+        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(charzarditeX, pikshuniumZ, wishPiece),
+                allItems, allItems);
+        romHandler.shops = List.of(specialShop(List.of(charzarditeX, pikshuniumZ, wishPiece)));
+        romHandler.pickupItems = List.of(new PickupItem(charzarditeX), new PickupItem(pikshuniumZ),
+                new PickupItem(wishPiece));
+        Settings settings = new Settings();
+        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
+
+        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeFieldItems();
+        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
+        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
+
+        assertEquals(List.of(normal, normal, normal), romHandler.writtenFieldItems);
+        assertEquals(List.of(normal, normal, normal), romHandler.writtenShops.get(0).getItems());
+        assertEquals(List.of(normal, normal, normal),
+                romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
+    }
+
+    @Test
     public void trainerSensibleHeldItemsFallbackKeepsMechanicExclusions() {
         Item normal = item(10, "Normal", true, false);
         Item mega = mechanicItem(20, "Mega", ItemMechanicCategory.MEGA_STONE);
@@ -347,15 +372,21 @@ public class ItemDecisionTest {
         Item gracidea = item(CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_GRACIDEA), "Gracidea", true, false);
         Item flyingMemory = item(9000, "Flying Mem.", true, false);
         Item fireMemory = item(9001, "Fire Mem.", true, false);
-        Set<Item> allowedItems = linkedSet(plate, drive, memory, flyingMemory, fireMemory, nectar, gracidea, normal);
+        Item electricMemory = item(9002, "Electr Mem.", true, false);
+        Item fightMemory = item(9003, "Fight Mem.", true, false);
+        Item reinsUnity = item(9004, "Reins Unity", true, false);
+        Set<Item> allowedItems = linkedSet(plate, drive, memory, flyingMemory, fireMemory, electricMemory,
+                fightMemory, nectar, gracidea, reinsUnity, normal);
         Set<Item> nonBadItems = nonBadPolicyItems(allowedItems);
         ItemTestRomHandler romHandler = ItemTestRomHandler.create(
-                List.of(plate, drive, memory, flyingMemory, fireMemory, nectar, gracidea), allowedItems, nonBadItems);
-        romHandler.shops = List.of(specialShop(List.of(plate, drive, memory, flyingMemory, fireMemory, nectar,
-                gracidea)));
+                List.of(plate, drive, memory, flyingMemory, fireMemory, electricMemory, fightMemory, nectar, gracidea,
+                        reinsUnity), allowedItems, nonBadItems);
+        romHandler.shops = List.of(specialShop(List.of(plate, drive, memory, flyingMemory, fireMemory, electricMemory,
+                fightMemory, nectar, gracidea, reinsUnity)));
         romHandler.pickupItems = List.of(new PickupItem(plate), new PickupItem(drive), new PickupItem(memory),
-                new PickupItem(flyingMemory), new PickupItem(fireMemory), new PickupItem(nectar),
-                new PickupItem(gracidea));
+                new PickupItem(flyingMemory), new PickupItem(fireMemory), new PickupItem(electricMemory),
+                new PickupItem(fightMemory), new PickupItem(nectar), new PickupItem(gracidea),
+                new PickupItem(reinsUnity));
         Settings settings = new Settings();
         settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
         settings.setBanBadRandomFieldItems(true);
@@ -366,10 +397,51 @@ public class ItemDecisionTest {
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
 
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal), romHandler.writtenFieldItems);
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenFieldItems);
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
                 romHandler.writtenShops.get(0).getItems());
-        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
+    }
+
+    @Test
+    public void banBadPolicyExcludesCharmFluteAndMagmaSystemItemsFromFieldShopPickupPools() {
+        Item normal = item(10, "Normal", true, false);
+        Item shinyCharm = item(ItemIDs.shinyCharm, "Shiny Charm", true, false);
+        Item ovalCharm = item(ItemIDs.ovalCharm, "Oval Charm", true, false);
+        Item magmaStone = item(ItemIDs.magmaStone, "Magma Stone", true, false);
+        Item redFlute = item(ItemIDs.redFlute, "Red Flute", true, false);
+        Item blueFlute = item(ItemIDs.blueFlute, "Blue Flute", true, false);
+        Item blackFlute = item(ItemIDs.blackFlute, "Black Flute", true, false);
+        Item whiteFlute = item(ItemIDs.whiteFlute, "White Flute", true, false);
+        Item yellowFlute = item(ItemIDs.yellowFlute, "Yellow Flute", true, false);
+        Set<Item> allowedItems = linkedSet(shinyCharm, ovalCharm, magmaStone, redFlute, blueFlute, blackFlute,
+                whiteFlute, yellowFlute, normal);
+        Set<Item> nonBadItems = nonBadPolicyItems(allowedItems);
+        ItemTestRomHandler romHandler = ItemTestRomHandler.create(
+                List.of(shinyCharm, ovalCharm, magmaStone, redFlute, blueFlute, blackFlute, whiteFlute, yellowFlute),
+                allowedItems, nonBadItems);
+        romHandler.shops = List.of(specialShop(List.of(shinyCharm, ovalCharm, magmaStone, redFlute, blueFlute,
+                blackFlute, whiteFlute, yellowFlute)));
+        romHandler.pickupItems = List.of(new PickupItem(shinyCharm), new PickupItem(ovalCharm),
+                new PickupItem(magmaStone), new PickupItem(redFlute), new PickupItem(blueFlute),
+                new PickupItem(blackFlute), new PickupItem(whiteFlute), new PickupItem(yellowFlute));
+        Settings settings = new Settings();
+        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
+        settings.setBanBadRandomFieldItems(true);
+        settings.setBanBadRandomShopItems(true);
+        settings.setBanBadRandomPickupItems(true);
+
+        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeFieldItems();
+        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
+        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
+
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenFieldItems);
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenShops.get(0).getItems());
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal),
                 romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
     }
 
