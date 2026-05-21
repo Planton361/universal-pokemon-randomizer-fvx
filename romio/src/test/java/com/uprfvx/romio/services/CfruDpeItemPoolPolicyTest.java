@@ -18,6 +18,8 @@ public class CfruDpeItemPoolPolicyTest {
         assertBadOnly(item(9000, "Flying Memory"));
         assertBadOnly(item(9001, "Fire Mem."));
         assertBadOnly(item(ItemIDs.redNectar, "Red Nectar"));
+        assertBadOnly(item(ItemIDs.gracidea, "Gracidea"));
+        assertBadOnly(cfruDpeItem(0x1DF, "Gracidea"));
         assertBadOnly(item(ItemIDs.revealGlass, "Reveal Glass"));
         assertBadOnly(item(ItemIDs.dNASplicersFuse, "DNA Splicers"));
     }
@@ -31,6 +33,28 @@ public class CfruDpeItemPoolPolicyTest {
         assertBanned(item(9000, "Plume Fossil"));
         assertBanned(item(9001, "Old Amber"));
         assertBanned(item(9002, "Fish Fossil"));
+    }
+
+    @Test
+    public void reviewGapSystemItemsAreBannedFromNormalItemPools() {
+        assertBanned(item(ItemIDs.lightStone, "Light Stone"));
+        assertBanned(cfruDpeItem(0x1DB, "Light Stone"));
+        assertBanned(item(ItemIDs.darkStone, "Dark Stone"));
+        assertBanned(cfruDpeItem(0x1DC, "Dark Stone"));
+        assertBanned(item(ItemIDs.sunFlute, "Sun Flute"));
+        assertBanned(cfruDpeItem(0x1DD, "Sun Flute"));
+        assertBanned(item(ItemIDs.moonFlute, "Moon Flute"));
+        assertBanned(cfruDpeItem(0x1DE, "Moon Flute"));
+        assertBanned(item(ItemIDs.rustedSword, "Rusted Sword"));
+        assertBanned(cfruDpeItem(0x1E5, "Rusted Sword"));
+        assertBanned(item(ItemIDs.rustedShield, "Rusted Shield"));
+        assertBanned(cfruDpeItem(0x1E6, "Rusted Shield"));
+        assertBanned(item(ItemIDs.oddKeystone, "Odd Keystone"));
+        assertBanned(cfruDpeItem(0x27E, "Odd Keystone"));
+        assertBanned(item(ItemIDs.bottleCap, "Bottle Cap"));
+        assertBanned(cfruDpeItem(0x27F, "Bottle Cap"));
+        assertBanned(item(ItemIDs.goldBottleCap, "Gold Bottle Cap"));
+        assertBanned(cfruDpeItem(0x280, "Gold Bottle Cap"));
     }
 
     @Test
@@ -94,6 +118,8 @@ public class CfruDpeItemPoolPolicyTest {
         assertAllowed(item(ItemIDs.leftovers, "Leftovers"));
         assertAllowed(item(ItemIDs.eviolite, "Eviolite"));
         assertAllowed(item(ItemIDs.fireGem, "Fire Gem"));
+        assertAllowed(item(ItemIDs.wideLens, "Wide Lens"));
+        assertAllowed(item(ItemIDs.throatSpray, "Throat Spray"));
     }
 
     @Test
@@ -142,5 +168,9 @@ public class CfruDpeItemPoolPolicyTest {
 
     private static Item item(int id, String name) {
         return new Item(id, name);
+    }
+
+    private static Item cfruDpeItem(int sourceId, String name) {
+        return item(CfruDpeItemCategories.standardIdForSourceId(sourceId), name);
     }
 }

@@ -26,6 +26,7 @@ public final class CfruDpeItemCategories {
     public static final int ITEM_DIANCITE = 0x243;
     public static final int ITEM_NORMALIUM_Z = 0x244;
     public static final int ITEM_TAPUNIUM_Z = 0x265;
+    public static final int ITEM_GRACIDEA = 0x1DF;
     public static final int ITEM_TM51 = 376;
     public static final int ITEM_TM120 = 0x1BD;
 
@@ -275,6 +276,8 @@ public final class CfruDpeItemCategories {
             ItemIDs.yellowNectar,
             ItemIDs.pinkNectar,
             ItemIDs.purpleNectar,
+            ItemIDs.gracidea,
+            standardIdForSourceId(ITEM_GRACIDEA),
             ItemIDs.dNASplicersFuse,
             ItemIDs.dNASplicersSeparate,
             ItemIDs.revealGlass,
@@ -297,6 +300,7 @@ public final class CfruDpeItemCategories {
             "yellownectar",
             "pinknectar",
             "purplenectar",
+            "gracidea",
             "dnasplicers",
             "dnasplicersfuse",
             "dnasplicersseparate",
