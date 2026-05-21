@@ -25,6 +25,8 @@ public class ItemMechanicPredicatesTest {
     private static final int CFRU_DPE_SNORLIUM_Z = 0x263;
     private static final int CFRU_DPE_TM51 = 376;
     private static final int CFRU_DPE_TM120 = 0x1BD;
+    private static final int CFRU_DPE_STANDARD_GRACIDEA =
+            CfruDpeItemCategories.standardIdForSourceId(CfruDpeItemCategories.ITEM_GRACIDEA);
     private static final int CFRU_DPE_STANDARD_ULTRANECROZIUM_Z =
             CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_ULTRANECROZIUM_Z);
     private static final int CFRU_DPE_STANDARD_VENUSAURITE =
@@ -240,6 +242,8 @@ public class ItemMechanicPredicatesTest {
         Item flyingMemoryAbbrev = item(7002, "Flying Mem.");
         Item fireMemoryAbbrev = item(7003, "Fire Mem.");
         Item redNectar = item(ItemIDs.redNectar, "Red Nectar");
+        Item gracidea = item(ItemIDs.gracidea, "Gracidea");
+        Item cfruDpeGracidea = item(CFRU_DPE_STANDARD_GRACIDEA, "Gracidea");
         Item revealGlass = item(ItemIDs.revealGlass, "Reveal Glass");
 
         assertTrue(CfruDpeItemCategories.isArceusPlate(flamePlate));
@@ -251,6 +255,8 @@ public class ItemMechanicPredicatesTest {
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(flyingMemoryAbbrev));
         assertTrue(CfruDpeItemCategories.isSilvallyMemory(fireMemoryAbbrev));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(redNectar));
+        assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(gracidea));
+        assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(cfruDpeGracidea));
         assertTrue(CfruDpeItemCategories.isNectarOrFormChangeItem(revealGlass));
 
         assertTrue(ItemMechanicPredicates.categoriesFor(flamePlate).contains(ItemMechanicCategory.ARCEUS_PLATE));
@@ -260,10 +266,16 @@ public class ItemMechanicPredicatesTest {
                 .contains(ItemMechanicCategory.SILVALLY_MEMORY));
         assertTrue(ItemMechanicPredicates.categoriesFor(redNectar)
                 .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
+        assertTrue(ItemMechanicPredicates.categoriesFor(gracidea)
+                .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
+        assertTrue(ItemMechanicPredicates.categoriesFor(cfruDpeGracidea)
+                .contains(ItemMechanicCategory.NECTAR_FORM_CHANGE));
         assertTrue(ItemMechanicPredicates.isItemAllowed(flamePlate, ItemMechanicExclusionOptions.defaults()));
         assertTrue(ItemMechanicPredicates.isItemAllowed(burnDrive, ItemMechanicExclusionOptions.defaults()));
         assertTrue(ItemMechanicPredicates.isItemAllowed(bugMemory, ItemMechanicExclusionOptions.defaults()));
         assertTrue(ItemMechanicPredicates.isItemAllowed(redNectar, ItemMechanicExclusionOptions.defaults()));
+        assertTrue(ItemMechanicPredicates.isItemAllowed(gracidea, ItemMechanicExclusionOptions.defaults()));
+        assertTrue(ItemMechanicPredicates.isItemAllowed(cfruDpeGracidea, ItemMechanicExclusionOptions.defaults()));
     }
 
     @Test

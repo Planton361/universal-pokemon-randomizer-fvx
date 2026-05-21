@@ -154,6 +154,37 @@ public final class CfruDpeItemPoolPolicy {
             "yellowaprikoko",
             "ylwaprikoko"
     );
+    private static final Set<Integer> REVIEW_GAP_NORMAL_POOL_BANNED_IDS = Set.of(
+            ItemIDs.lightStone,
+            CfruDpeItemCategories.standardIdForSourceId(0x1DB),
+            ItemIDs.darkStone,
+            CfruDpeItemCategories.standardIdForSourceId(0x1DC),
+            ItemIDs.sunFlute,
+            CfruDpeItemCategories.standardIdForSourceId(0x1DD),
+            ItemIDs.moonFlute,
+            CfruDpeItemCategories.standardIdForSourceId(0x1DE),
+            ItemIDs.rustedSword,
+            CfruDpeItemCategories.standardIdForSourceId(0x1E5),
+            ItemIDs.rustedShield,
+            CfruDpeItemCategories.standardIdForSourceId(0x1E6),
+            ItemIDs.oddKeystone,
+            CfruDpeItemCategories.standardIdForSourceId(0x27E),
+            ItemIDs.bottleCap,
+            CfruDpeItemCategories.standardIdForSourceId(0x27F),
+            ItemIDs.goldBottleCap,
+            CfruDpeItemCategories.standardIdForSourceId(0x280)
+    );
+    private static final Set<String> REVIEW_GAP_NORMAL_POOL_BANNED_NAMES = Set.of(
+            "lightstone",
+            "darkstone",
+            "sunflute",
+            "moonflute",
+            "rustedsword",
+            "rustedshield",
+            "oddkeystone",
+            "bottlecap",
+            "goldbottlecap"
+    );
     private static final Set<Integer> HELD_BATTLE_ITEM_IDS_ALLOWED_BY_POLICY = Set.of(
             ItemIDs.lightBall,
             ItemIDs.soulDew,
@@ -167,7 +198,7 @@ public final class CfruDpeItemPoolPolicy {
     }
 
     public static boolean isBannedFromNormalItemPools(Item item) {
-        return isFossilItem(item);
+        return isFossilItem(item) || isReviewGapNormalPoolBannedItem(item);
     }
 
     public static boolean isBadWhenBanBadItems(Item item) {
@@ -226,6 +257,14 @@ public final class CfruDpeItemPoolPolicy {
             return false;
         }
         return APRICORN_IDS.contains(item.getId()) || APRICORN_NAMES.contains(normalizedName(item));
+    }
+
+    public static boolean isReviewGapNormalPoolBannedItem(Item item) {
+        if (item == null) {
+            return false;
+        }
+        return REVIEW_GAP_NORMAL_POOL_BANNED_IDS.contains(item.getId())
+                || REVIEW_GAP_NORMAL_POOL_BANNED_NAMES.contains(normalizedName(item));
     }
 
     private static String normalizedName(Item item) {
