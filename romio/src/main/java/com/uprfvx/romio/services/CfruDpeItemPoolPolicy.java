@@ -112,6 +112,48 @@ public final class CfruDpeItemPoolPolicy {
             "relicstatue",
             "reliccrown"
     );
+    private static final Set<Integer> APRICORN_IDS = Set.of(
+            ItemIDs.blackApricorn,
+            ItemIDs.blueApricorn,
+            ItemIDs.greenApricorn,
+            ItemIDs.pinkApricorn,
+            ItemIDs.redApricorn,
+            ItemIDs.whiteApricorn,
+            ItemIDs.yellowApricorn,
+            CfruDpeItemCategories.standardIdForSourceId(0x266),
+            CfruDpeItemCategories.standardIdForSourceId(0x267),
+            CfruDpeItemCategories.standardIdForSourceId(0x268),
+            CfruDpeItemCategories.standardIdForSourceId(0x269),
+            CfruDpeItemCategories.standardIdForSourceId(0x26A),
+            CfruDpeItemCategories.standardIdForSourceId(0x26B),
+            CfruDpeItemCategories.standardIdForSourceId(0x26C)
+    );
+    private static final Set<String> APRICORN_NAMES = Set.of(
+            "blackapricorn",
+            "blkapricorn",
+            "blueapricorn",
+            "bluapricorn",
+            "greenapricorn",
+            "grnapricorn",
+            "pinkapricorn",
+            "redapricorn",
+            "whiteapricorn",
+            "whtapricorn",
+            "yellowapricorn",
+            "ylwapricorn",
+            "blackaprikoko",
+            "blkaprikoko",
+            "blueaprikoko",
+            "bluaprikoko",
+            "greenaprikoko",
+            "grnaprikoko",
+            "pinkaprikoko",
+            "redaprikoko",
+            "whiteaprikoko",
+            "whtaprikoko",
+            "yellowaprikoko",
+            "ylwaprikoko"
+    );
     private static final Set<Integer> HELD_BATTLE_ITEM_IDS_ALLOWED_BY_POLICY = Set.of(
             ItemIDs.lightBall,
             ItemIDs.soulDew,
@@ -129,7 +171,8 @@ public final class CfruDpeItemPoolPolicy {
     }
 
     public static boolean isBadWhenBanBadItems(Item item) {
-        return isFormChangeItem(item) || isShardExchangeItem(item) || isHighValueValuableItem(item);
+        return isFormChangeItem(item) || isShardExchangeItem(item) || isHighValueValuableItem(item)
+                || isApricornItem(item);
     }
 
     public static boolean isAllowedWhenBanBadItems(Item item) {
@@ -176,6 +219,13 @@ public final class CfruDpeItemPoolPolicy {
         }
         return HIGH_VALUE_VALUABLE_IDS.contains(item.getId())
                 || HIGH_VALUE_VALUABLE_NAMES.contains(normalizedName(item));
+    }
+
+    public static boolean isApricornItem(Item item) {
+        if (item == null) {
+            return false;
+        }
+        return APRICORN_IDS.contains(item.getId()) || APRICORN_NAMES.contains(normalizedName(item));
     }
 
     private static String normalizedName(Item item) {

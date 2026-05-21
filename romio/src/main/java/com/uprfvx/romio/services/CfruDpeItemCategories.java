@@ -233,22 +233,39 @@ public final class CfruDpeItemCategories {
     private static final Set<Integer> SILVALLY_MEMORY_IDS = setupSilvallyMemoryIds();
     private static final Set<String> SILVALLY_MEMORY_NAMES = Set.of(
             "fightingmemory",
+            "fightingmem",
             "flyingmemory",
+            "flyingmem",
             "poisonmemory",
+            "poisonmem",
             "groundmemory",
+            "groundmem",
             "rockmemory",
+            "rockmem",
             "bugmemory",
+            "bugmem",
             "ghostmemory",
+            "ghostmem",
             "steelmemory",
+            "steelmem",
             "firememory",
+            "firemem",
             "watermemory",
+            "watermem",
             "grassmemory",
+            "grassmem",
             "electricmemory",
+            "electricmem",
             "psychicmemory",
+            "psychicmem",
             "icememory",
+            "icemem",
             "dragonmemory",
+            "dragonmem",
             "darkmemory",
-            "fairymemory"
+            "darkmem",
+            "fairymemory",
+            "fairymem"
     );
 
     private static final Set<Integer> NECTAR_FORM_CHANGE_IDS = Set.of(

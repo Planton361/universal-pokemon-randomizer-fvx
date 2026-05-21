@@ -304,13 +304,15 @@ public class ItemDecisionTest {
         Item drive = item(ItemIDs.burnDrive, "Burn Drive", true, false);
         Item memory = item(ItemIDs.bugMemory, "Bug Memory", true, false);
         Item nectar = item(ItemIDs.redNectar, "Red Nectar", true, false);
-        Set<Item> allowedItems = linkedSet(plate, drive, memory, nectar, normal);
+        Item flyingMemory = item(9000, "Flying Mem.", true, false);
+        Item fireMemory = item(9001, "Fire Mem.", true, false);
+        Set<Item> allowedItems = linkedSet(plate, drive, memory, flyingMemory, fireMemory, nectar, normal);
         Set<Item> nonBadItems = nonBadPolicyItems(allowedItems);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(plate, drive, memory, nectar),
-                allowedItems, nonBadItems);
-        romHandler.shops = List.of(specialShop(List.of(plate, drive, memory, nectar)));
+        ItemTestRomHandler romHandler = ItemTestRomHandler.create(
+                List.of(plate, drive, memory, flyingMemory, fireMemory, nectar), allowedItems, nonBadItems);
+        romHandler.shops = List.of(specialShop(List.of(plate, drive, memory, flyingMemory, fireMemory, nectar)));
         romHandler.pickupItems = List.of(new PickupItem(plate), new PickupItem(drive), new PickupItem(memory),
-                new PickupItem(nectar));
+                new PickupItem(flyingMemory), new PickupItem(fireMemory), new PickupItem(nectar));
         Settings settings = new Settings();
         settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
         settings.setBanBadRandomFieldItems(true);
@@ -321,9 +323,9 @@ public class ItemDecisionTest {
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
 
-        assertEquals(List.of(normal, normal, normal, normal), romHandler.writtenFieldItems);
-        assertEquals(List.of(normal, normal, normal, normal), romHandler.writtenShops.get(0).getItems());
-        assertEquals(List.of(normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal), romHandler.writtenFieldItems);
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal), romHandler.writtenShops.get(0).getItems());
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal),
                 romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
     }
 
@@ -334,13 +336,21 @@ public class ItemDecisionTest {
         Item relicCrown = item(ItemIDs.relicCrown, "Relic Crown", true, false);
         Item relicStatue = item(ItemIDs.relicStatue, "Relic Statue", true, false);
         Item bigNugget = item(ItemIDs.bigNugget, "Big Nugget", true, false);
-        Set<Item> allowedItems = linkedSet(greenShard, relicCrown, relicStatue, bigNugget, normal);
+        Item redApricorn = item(ItemIDs.redApricorn, "Red Apricorn", true, false);
+        Item blueApricorn = item(9000, "Blu Apricorn", true, false);
+        Item greenApricorn = item(9001, "Grn Apricorn", true, false);
+        Item yellowApricorn = item(9002, "Ylw Apricorn", true, false);
+        Set<Item> allowedItems = linkedSet(greenShard, relicCrown, relicStatue, bigNugget, redApricorn,
+                blueApricorn, greenApricorn, yellowApricorn, normal);
         Set<Item> nonBadItems = nonBadPolicyItems(allowedItems);
         ItemTestRomHandler romHandler = ItemTestRomHandler.create(
-                List.of(greenShard, relicCrown, relicStatue, bigNugget), allowedItems, nonBadItems);
-        romHandler.shops = List.of(specialShop(List.of(greenShard, relicCrown, relicStatue, bigNugget)));
+                List.of(greenShard, relicCrown, relicStatue, bigNugget, redApricorn, blueApricorn, greenApricorn,
+                        yellowApricorn), allowedItems, nonBadItems);
+        romHandler.shops = List.of(specialShop(List.of(greenShard, relicCrown, relicStatue, bigNugget, redApricorn,
+                blueApricorn, greenApricorn, yellowApricorn)));
         romHandler.pickupItems = List.of(new PickupItem(greenShard), new PickupItem(relicCrown),
-                new PickupItem(relicStatue), new PickupItem(bigNugget));
+                new PickupItem(relicStatue), new PickupItem(bigNugget), new PickupItem(redApricorn),
+                new PickupItem(blueApricorn), new PickupItem(greenApricorn), new PickupItem(yellowApricorn));
         Settings settings = new Settings();
         settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
         settings.setBanBadRandomFieldItems(true);
@@ -351,9 +361,11 @@ public class ItemDecisionTest {
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
 
-        assertEquals(List.of(normal, normal, normal, normal), romHandler.writtenFieldItems);
-        assertEquals(List.of(normal, normal, normal, normal), romHandler.writtenShops.get(0).getItems());
-        assertEquals(List.of(normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenFieldItems);
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenShops.get(0).getItems());
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal),
                 romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
     }
 
