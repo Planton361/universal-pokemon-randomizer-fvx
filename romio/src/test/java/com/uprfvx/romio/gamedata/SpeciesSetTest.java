@@ -118,6 +118,37 @@ public class SpeciesSetTest {
     }
 
     @Test
+    public void getRandomSpeciesCountsNamedUnownPunctuationFormsAsOneFamilyTicket() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> unownForms = new ArrayList<>(unownNamedForms());
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(unownForms);
+        SequenceRandom random = new SequenceRandom(0);
+
+        Species pick = pokes.getRandomSpecies(random);
+
+        assertEquals(normal, pick);
+        assertEquals(2, random.boundAt(0));
+    }
+
+    @Test
+    public void getRandomSpeciesCanChooseAllowedUnownPunctuationFormsFromFamilyTicket() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> unownForms = new ArrayList<>(unownNamedForms());
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(unownForms);
+
+        Set<Species> picks = new HashSet<>();
+        for(int i = 0; i < unownForms.size(); i++) {
+            picks.add(pokes.getRandomSpecies(new SequenceRandom(1, i)));
+        }
+
+        assertTrue(picks.containsAll(unownForms));
+    }
+
+    @Test
     public void getRandomSimilarStrengthSpeciesCountsUnownFormsAsOneFamilyTicket() {
         Species normal = species(1, "Normal", 1);
         List<Species> unownForms = unownForms(28);
@@ -150,6 +181,19 @@ public class SpeciesSetTest {
         Species normal = species(1, "Normal", 1);
         Species unown = unownForm(0);
         SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, unown));
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(2, random.boundAt(0));
+        assertEquals(1, random.callCount());
+    }
+
+    @Test
+    public void getRandomSpeciesWithOneNamedUnownPunctuationFormUsesRegularSpeciesTickets() {
+        Species normal = species(1, "Normal", 1);
+        Species unownQuestion = species(1002, "Unown ?", 1002);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, unownQuestion));
         SequenceRandom random = new SequenceRandom(0);
 
         pokes.getRandomSpecies(random);
@@ -311,6 +355,15 @@ public class SpeciesSetTest {
         Species unown = species(SpeciesIDs.unown, "Unown-" + index, 1000 + index);
         unown.setFormeNumber(index);
         return unown;
+    }
+
+    private static List<Species> unownNamedForms() {
+        return Arrays.asList(
+                species(SpeciesIDs.unown, "Unown", 2000),
+                species(2001, "Unown B", 2001),
+                species(2002, "Unown C", 2002),
+                species(2003, "Unown !", 2003),
+                species(2004, "Unown ?", 2004));
     }
 
     private static class SequenceRandom extends Random {
