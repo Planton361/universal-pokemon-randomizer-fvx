@@ -175,6 +175,12 @@ public final class CfruDpeItemPoolPolicy {
             "yellowflute"
     );
     private static final Set<Integer> REVIEW_GAP_NORMAL_POOL_BANNED_IDS = Set.of(
+            ItemIDs.sacredAsh,
+            CfruDpeItemCategories.standardIdForSourceId(45),
+            ItemIDs.rainbowWing,
+            CfruDpeItemCategories.standardIdForSourceId(0x1D8),
+            ItemIDs.silverWing,
+            CfruDpeItemCategories.standardIdForSourceId(0x1D9),
             ItemIDs.lightStone,
             CfruDpeItemCategories.standardIdForSourceId(0x1DB),
             ItemIDs.darkStone,
@@ -192,9 +198,13 @@ public final class CfruDpeItemPoolPolicy {
             ItemIDs.bottleCap,
             CfruDpeItemCategories.standardIdForSourceId(0x27F),
             ItemIDs.goldBottleCap,
-            CfruDpeItemCategories.standardIdForSourceId(0x280)
+            CfruDpeItemCategories.standardIdForSourceId(0x280),
+            CfruDpeItemCategories.standardIdForSourceId(0x2E0)
     );
     private static final Set<String> REVIEW_GAP_NORMAL_POOL_BANNED_NAMES = Set.of(
+            "sacredash",
+            "rainbowwing",
+            "silverwing",
             "lightstone",
             "darkstone",
             "sunflute",
@@ -203,7 +213,9 @@ public final class CfruDpeItemPoolPolicy {
             "rustedshield",
             "oddkeystone",
             "bottlecap",
-            "goldbottlecap"
+            "goldbottlecap",
+            "gimmicoin",
+            "gimmighoulcoin"
     );
     private static final Set<Integer> HELD_BATTLE_ITEM_IDS_ALLOWED_BY_POLICY = Set.of(
             ItemIDs.lightBall,

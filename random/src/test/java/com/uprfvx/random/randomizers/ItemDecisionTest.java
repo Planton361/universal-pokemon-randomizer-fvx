@@ -40,8 +40,12 @@ public class ItemDecisionTest {
     private static final int CFRU_DPE_ALORAICHIUM_Z = 0x256;
     private static final int CFRU_DPE_SNORLIUM_Z = 0x263;
     private static final int CFRU_DPE_TM51 = 376;
+    private static final int CFRU_DPE_SACRED_ASH = 45;
+    private static final int CFRU_DPE_RAINBOW_WING = 0x1D8;
+    private static final int CFRU_DPE_SILVER_WING = 0x1D9;
     private static final int CFRU_DPE_LIGHT_STONE = 0x1DB;
     private static final int CFRU_DPE_GRACIDEA = 0x1DF;
+    private static final int CFRU_DPE_GIMMIGHOUL_COIN = 0x2E0;
     private static final int CFRU_DPE_STANDARD_ULTRANECROZIUM_Z =
             CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_ULTRANECROZIUM_Z);
     private static final int CFRU_DPE_STANDARD_BLASTOISINITE =
@@ -515,19 +519,34 @@ public class ItemDecisionTest {
     @Test
     public void reviewGapPolicyExcludesSystemItemsFromNormalFieldShopPickupPools() {
         Item normal = item(10, "Normal", true, false);
+        Item sacredAsh = item(CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_SACRED_ASH), "Sacred Ash",
+                false, true);
+        Item rainbowWing = item(CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_RAINBOW_WING), "Rainbow Wing",
+                false, true);
+        Item silverWing = item(CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_SILVER_WING), "Silver Wing",
+                false, true);
         Item lightStone = item(CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_LIGHT_STONE), "Light Stone",
                 false, true);
         Item darkStone = item(ItemIDs.darkStone, "Dark Stone", false, true);
         Item oddKeystone = item(ItemIDs.oddKeystone, "Odd Keystone", false, true);
         Item bottleCap = item(ItemIDs.bottleCap, "Bottle Cap", false, true);
         Item rustedSword = item(ItemIDs.rustedSword, "Rusted Sword", false, true);
+        Item gimmiCoin = item(CfruDpeItemCategories.standardIdForSourceId(CFRU_DPE_GIMMIGHOUL_COIN), "Gimmi Coin",
+                false, true);
+        Item gimmighoulCoin = item(9000, "Gimmighoul Coin", false, true);
         Set<Item> allowedItems = linkedSet(normal);
-        Set<Item> allItems = linkedSet(normal, lightStone, darkStone, oddKeystone, bottleCap, rustedSword);
+        Set<Item> allItems = linkedSet(normal, sacredAsh, rainbowWing, silverWing, lightStone, darkStone, oddKeystone,
+                bottleCap, rustedSword, gimmiCoin, gimmighoulCoin);
         ItemTestRomHandler romHandler = ItemTestRomHandler.create(
-                List.of(lightStone, darkStone, oddKeystone, bottleCap, rustedSword), allowedItems, allowedItems);
-        romHandler.shops = List.of(specialShop(List.of(lightStone, darkStone, oddKeystone, bottleCap, rustedSword)));
-        romHandler.pickupItems = List.of(new PickupItem(lightStone), new PickupItem(darkStone),
-                new PickupItem(oddKeystone), new PickupItem(bottleCap), new PickupItem(rustedSword));
+                List.of(sacredAsh, rainbowWing, silverWing, lightStone, darkStone, oddKeystone, bottleCap, rustedSword,
+                        gimmiCoin, gimmighoulCoin),
+                allowedItems, allowedItems);
+        romHandler.shops = List.of(specialShop(List.of(sacredAsh, rainbowWing, silverWing, lightStone, darkStone,
+                oddKeystone, bottleCap, rustedSword, gimmiCoin, gimmighoulCoin)));
+        romHandler.pickupItems = List.of(new PickupItem(sacredAsh), new PickupItem(rainbowWing),
+                new PickupItem(silverWing), new PickupItem(lightStone), new PickupItem(darkStone),
+                new PickupItem(oddKeystone), new PickupItem(bottleCap), new PickupItem(rustedSword),
+                new PickupItem(gimmiCoin), new PickupItem(gimmighoulCoin));
         Settings settings = new Settings();
         settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
 
@@ -536,9 +555,11 @@ public class ItemDecisionTest {
         new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
 
         assertTrue(allItems.stream().anyMatch(CfruDpeItemPoolPolicy::isReviewGapNormalPoolBannedItem));
-        assertEquals(List.of(normal, normal, normal, normal, normal), romHandler.writtenFieldItems);
-        assertEquals(List.of(normal, normal, normal, normal, normal), romHandler.writtenShops.get(0).getItems());
-        assertEquals(List.of(normal, normal, normal, normal, normal),
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenFieldItems);
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
+                romHandler.writtenShops.get(0).getItems());
+        assertEquals(List.of(normal, normal, normal, normal, normal, normal, normal, normal, normal, normal),
                 romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
     }
 
