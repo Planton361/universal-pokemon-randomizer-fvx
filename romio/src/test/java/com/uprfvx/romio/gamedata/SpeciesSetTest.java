@@ -1,5 +1,6 @@
 package com.uprfvx.romio.gamedata;
 
+import com.uprfvx.romio.constants.SpeciesIDs;
 import org.junit.jupiter.api.Test;
 
 import javax.print.attribute.UnmodifiableSetException;
@@ -83,6 +84,95 @@ public class SpeciesSetTest {
 
         System.out.println(Arrays.toString(count));
         assertTrue(count[b.getNumber()] > 0);
+    }
+
+    @Test
+    public void getRandomSpeciesCountsUnownFormsAsOneFamilyTicket() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> unownForms = unownForms(28);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(unownForms);
+        SequenceRandom random = new SequenceRandom(0);
+
+        Species pick = pokes.getRandomSpecies(random);
+
+        assertEquals(normal, pick);
+        assertEquals(2, random.boundAt(0));
+    }
+
+    @Test
+    public void getRandomSpeciesChoosesAllowedUnownFormFromFamilyTicket() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> unownForms = unownForms(28);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(unownForms);
+        SequenceRandom random = new SequenceRandom(1, 27);
+
+        Species pick = pokes.getRandomSpecies(random);
+
+        assertTrue(unownForms.contains(pick));
+        assertEquals(2, random.boundAt(0));
+        assertEquals(28, random.boundAt(1));
+    }
+
+    @Test
+    public void getRandomSimilarStrengthSpeciesCountsUnownFormsAsOneFamilyTicket() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> unownForms = unownForms(28);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(unownForms);
+        SequenceRandom random = new SequenceRandom(0);
+
+        Species pick = pokes.getRandomSimilarStrengthSpecies(0, random);
+
+        assertEquals(normal, pick);
+        assertEquals(2, random.boundAt(0));
+    }
+
+    @Test
+    public void getRandomSpeciesWithoutUnownUsesRegularSpeciesTickets() {
+        Species a = species(1, "A", 1);
+        Species b = species(2, "B", 2);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(a, b));
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(2, random.boundAt(0));
+        assertEquals(1, random.callCount());
+    }
+
+    @Test
+    public void getRandomSpeciesWithOneUnownFormUsesRegularSpeciesTickets() {
+        Species normal = species(1, "Normal", 1);
+        Species unown = unownForm(0);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, unown));
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(2, random.boundAt(0));
+        assertEquals(1, random.callCount());
+    }
+
+    @Test
+    public void getRandomSpeciesDoesNotGroupOtherFormFamilies() {
+        Species normal = species(1, "Normal", 1);
+        Species vivillon = species(666, "Vivillon", 666);
+        Species vivillonPattern = species(666, "Vivillon-Pattern", 1000);
+        vivillonPattern.setBaseForme(vivillon);
+        Species regional = species(52, "Meowth-Alola", 1100);
+        regional.addSpecialFormCategory(SpecialFormCategory.REGIONAL);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, vivillon, vivillonPattern, regional));
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(4, random.boundAt(0));
+        assertEquals(1, random.callCount());
     }
 
     @Test
@@ -199,6 +289,59 @@ public class SpeciesSetTest {
             for (Species species : speciesOfType) {
                 assertTrue(species.hasType(type, true));
             }
+        }
+    }
+
+    private static Species species(int number, String name, int speciesSetIdentityNumber) {
+        Species species = new Species(number);
+        species.setName(name);
+        species.setSpeciesSetIdentityNumber(speciesSetIdentityNumber);
+        return species;
+    }
+
+    private static List<Species> unownForms(int count) {
+        List<Species> unownForms = new ArrayList<>();
+        for(int i = 0; i < count; i++) {
+            unownForms.add(unownForm(i));
+        }
+        return unownForms;
+    }
+
+    private static Species unownForm(int index) {
+        Species unown = species(SpeciesIDs.unown, "Unown-" + index, 1000 + index);
+        unown.setFormeNumber(index);
+        return unown;
+    }
+
+    private static class SequenceRandom extends Random {
+        private final Queue<Integer> choices = new ArrayDeque<>();
+        private final List<Integer> bounds = new ArrayList<>();
+
+        SequenceRandom(int... choices) {
+            for(int choice : choices) {
+                this.choices.add(choice);
+            }
+        }
+
+        @Override
+        public int nextInt(int bound) {
+            bounds.add(bound);
+            if(choices.isEmpty()) {
+                return 0;
+            }
+            int choice = choices.remove();
+            if(choice < 0 || choice >= bound) {
+                throw new IllegalArgumentException("Choice " + choice + " outside bound " + bound);
+            }
+            return choice;
+        }
+
+        int boundAt(int index) {
+            return bounds.get(index);
+        }
+
+        int callCount() {
+            return bounds.size();
         }
     }
 }

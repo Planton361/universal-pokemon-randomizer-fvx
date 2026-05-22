@@ -1,5 +1,7 @@
 package com.uprfvx.romio.gamedata;
 
+import com.uprfvx.romio.constants.SpeciesIDs;
+
 import javax.print.attribute.UnmodifiableSetException;
 import java.util.*;
 import java.util.function.Function;
@@ -880,6 +882,14 @@ public class SpeciesSet extends HashSet<Species> {
             throw new IllegalStateException("Tried to choose a random member of an empty set!");
         }
 
+        Species unownFamilyPick = getRandomUnownFamilyTicketSpecies(random);
+        if(unownFamilyPick != null) {
+            if(removePicked) {
+                this.remove(unownFamilyPick);
+            }
+            return unownFamilyPick;
+        }
+
         //make sure cache state is good
         if(randomCache == null) {
             randomCache = new ArrayList<>(this);
@@ -903,6 +913,46 @@ public class SpeciesSet extends HashSet<Species> {
             return spec;
         }
 
+    }
+
+    private Species getRandomUnownFamilyTicketSpecies(Random random) {
+        List<Species> unownFamily = new ArrayList<>();
+        List<Species> singleSpeciesTickets = new ArrayList<>();
+        for(Species spec : this) {
+            if(isUnownFamily(spec)) {
+                unownFamily.add(spec);
+            } else {
+                singleSpeciesTickets.add(spec);
+            }
+        }
+
+        if(unownFamily.size() <= 1) {
+            return null;
+        }
+
+        // Intentional narrow family-ticket behavior: only Unown is grouped, leaving other form families unchanged.
+        int choice = random.nextInt(singleSpeciesTickets.size() + 1);
+        if(choice < singleSpeciesTickets.size()) {
+            return singleSpeciesTickets.get(choice);
+        }
+        return unownFamily.get(random.nextInt(unownFamily.size()));
+    }
+
+    private int randomSpeciesTicketCount() {
+        int unownCount = 0;
+        for(Species spec : this) {
+            if(isUnownFamily(spec)) {
+                unownCount++;
+            }
+        }
+        if(unownCount <= 1) {
+            return this.size();
+        }
+        return this.size() - unownCount + 1;
+    }
+
+    private static boolean isUnownFamily(Species species) {
+        return species != null && species.getBaseNumber() == SpeciesIDs.unown;
     }
 
     /**
@@ -980,11 +1030,11 @@ public class SpeciesSet extends HashSet<Species> {
             }
         }
 
-        int minimumPool = Math.min(SS_MINIMUM_POOL, availablePool.size() / SS_MINIMUM_POOL_FACTOR);
+        int minimumPool = Math.min(SS_MINIMUM_POOL, availablePool.randomSpeciesTicketCount() / SS_MINIMUM_POOL_FACTOR);
         if(minimumPool < 1) {
             minimumPool = 1;
         }
-        if (minimumPool >= availablePool.size()) {
+        if (minimumPool >= availablePool.randomSpeciesTicketCount()) {
             //must use the whole pool
             //(I think this only happens if there's exactly one Species to choose.)
             return availablePool.getRandomSpecies(random);
@@ -1001,7 +1051,7 @@ public class SpeciesSet extends HashSet<Species> {
         int minTarget = matchBST - matchBST / 10;
         int maxTarget = matchBST + matchBST / 10;
         SpeciesSet canPick = new SpeciesSet();
-        while (canPick.size() < minimumPool) {
+        while (canPick.randomSpeciesTicketCount() < minimumPool) {
             Iterator<Species> itor = availablePool.iterator();
             while (itor.hasNext()) {
                 Species spec = itor.next();
