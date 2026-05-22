@@ -142,7 +142,6 @@ public class ItemRandomizer extends Randomizer {
             throw new RandomizationException("Could not randomize non-TM field items, no eligible items.");
         }
         Set<Item> uniqueNoSellItems = uniqueItems ? filterAllowedMechanicItemSet(romHandler.getMegaStones()) : new HashSet<>();
-        ItemFamilyTicketSampler.TicketPool possibleTickets = ItemFamilyTicketSampler.ticketPool(possible);
 
         int neededNonTMCount = nonTMs.size();
         nonTMs.clear();
@@ -150,16 +149,14 @@ public class ItemRandomizer extends Randomizer {
         // Completely different algorithms whether items are "evenly distributed", or entirely random
         // Though both of them are simple enough to be best left uncommented. Just read them.
         if (evenItems) {
-            Stack<ItemFamilyTicketSampler.Ticket> remaining = new Stack<>();
+            Stack<Item> remaining = new Stack<>();
+            Collections.shuffle(remaining, random);
             for (int i = 0; i < neededNonTMCount; i++) {
                 if (remaining.isEmpty()) {
-                    possibleTickets = ItemFamilyTicketSampler.ticketPool(possible);
-                    if (possibleTickets.isEmpty()) {
-                        throw new RandomizationException("Could not randomize non-TM field items, no eligible items.");
-                    }
-                    possibleTickets.refillShuffled(remaining, random);
+                    remaining.addAll(possible);
+                    Collections.shuffle(remaining, random);
                 }
-                Item chosen = remaining.pop().resolve(random);
+                Item chosen = remaining.pop();
                 nonTMs.add(chosen);
                 if (uniqueNoSellItems.contains(chosen)) {
                     possible.remove(chosen);
@@ -168,11 +165,7 @@ public class ItemRandomizer extends Randomizer {
 
         } else {
             for (int i = 0; i < neededNonTMCount; i++) {
-                possibleTickets = ItemFamilyTicketSampler.ticketPool(possible);
-                if (possibleTickets.isEmpty()) {
-                    throw new RandomizationException("Could not randomize non-TM field items, no eligible items.");
-                }
-                Item chosen = possibleTickets.pick(random);
+                Item chosen = possible.get(random.nextInt(possible.size()));
                 nonTMs.add(chosen);
                 if (uniqueNoSellItems.contains(chosen)) {
                     possible.remove(chosen);
@@ -267,17 +260,15 @@ public class ItemRandomizer extends Randomizer {
         if (possible.isEmpty() && shopItemCount > 0) {
             throw new RandomizationException("Could not randomize shop items, no eligible filler items.");
         }
-        ItemFamilyTicketSampler.TicketPool possibleTickets = ItemFamilyTicketSampler.ticketPool(possible);
-        if (possibleTickets.isEmpty() && shopItemCount > 0) {
-            throw new RandomizationException("Could not randomize shop items, no eligible filler items.");
-        }
 
-        Stack<ItemFamilyTicketSampler.Ticket> remaining = new Stack<>();
+        Stack<Item> remaining = new Stack<>();
+        Collections.shuffle(remaining, random);
         for (int i = 0; i < shopItemCount; i++) {
             if (remaining.isEmpty()) {
-                possibleTickets.refillShuffled(remaining, random);
+                remaining.addAll(possible);
+                Collections.shuffle(remaining, random);
             }
-            newItems.add(remaining.pop().resolve(random));
+            newItems.add(remaining.pop());
         }
         return newItems;
     }
@@ -353,11 +344,10 @@ public class ItemRandomizer extends Randomizer {
         if (possibleItems.isEmpty()) {
             throw new IllegalStateException("No eligible pickup items are available for randomization.");
         }
-        ItemFamilyTicketSampler.TicketPool possibleTickets = ItemFamilyTicketSampler.ticketPool(possibleItems);
         List<PickupItem> currentItems = romHandler.getPickupItems();
         List<PickupItem> newItems = new ArrayList<>();
         for (PickupItem currentItem : currentItems) {
-            Item picked = possibleTickets.pick(random);
+            Item picked = possibleItems.get(random.nextInt(possibleItems.size()));
 
             PickupItem pickupItem = new PickupItem(picked);
             for (int j = 0; j < PickupItem.PROBABILITY_SLOTS; j++) {
