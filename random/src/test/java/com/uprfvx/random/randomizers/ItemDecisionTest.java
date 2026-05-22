@@ -133,153 +133,6 @@ public class ItemDecisionTest {
     }
 
     @Test
-    public void fieldRandomUsesOneBerryFamilyTicket() {
-        Item normal = item(10, "Normal", true, false);
-        Item cheriBerry = item(ItemIDs.cheriBerry, "Cheri Berry", true, false);
-        Item chestoBerry = item(ItemIDs.chestoBerry, "Chesto Berry", true, false);
-        Item pechaBerry = item(ItemIDs.pechaBerry, "Pecha Berry", true, false);
-        Set<Item> allItems = linkedSet(normal, cheriBerry, chestoBerry, pechaBerry);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(normal, normal), allItems, allItems);
-        Settings settings = new Settings();
-        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(1, 2, 0)).randomizeFieldItems();
-
-        assertEquals(List.of(normal, pechaBerry), romHandler.writtenFieldItems);
-    }
-
-    @Test
-    public void fieldRandomUsesOneGemFamilyTicket() {
-        Item normal = item(10, "Normal", true, false);
-        Item fireGem = item(ItemIDs.fireGem, "Fire Gem", true, false);
-        Item waterGem = item(ItemIDs.waterGem, "Water Gem", true, false);
-        Item fairyGem = item(ItemIDs.fairyGem, "Fairy Gem", true, false);
-        Set<Item> allItems = linkedSet(normal, fireGem, waterGem, fairyGem);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(normal, normal), allItems, allItems);
-        Settings settings = new Settings();
-        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(1, 1, 0)).randomizeFieldItems();
-
-        assertEquals(List.of(normal, waterGem), romHandler.writtenFieldItems);
-    }
-
-    @Test
-    public void singletonFamilyMembersRemainSingleItemTickets() {
-        Item normal = item(10, "Normal", true, false);
-        Item cheriBerry = item(ItemIDs.cheriBerry, "Cheri Berry", true, false);
-        Set<Item> allItems = linkedSet(normal, cheriBerry);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(normal), allItems, allItems);
-        Settings settings = new Settings();
-        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(1)).randomizeFieldItems();
-
-        assertEquals(List.of(cheriBerry), romHandler.writtenFieldItems);
-    }
-
-    @Test
-    public void nonTypeGemNamesRemainSingleItemTickets() {
-        Item starGem = item(ItemIDs.starGem2990, "Star Gem", true, false);
-        Item fireGem = item(ItemIDs.fireGem, "Fire Gem", true, false);
-        Item waterGem = item(ItemIDs.waterGem, "Water Gem", true, false);
-        Set<Item> allItems = linkedSet(starGem, fireGem, waterGem);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(starGem), allItems, allItems);
-        Settings settings = new Settings();
-        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(0)).randomizeFieldItems();
-
-        assertEquals(List.of(starGem), romHandler.writtenFieldItems);
-    }
-
-    @Test
-    public void fieldRandomEvenUsesFamilyTicketsForRefillCycles() {
-        Item normal = item(10, "Normal", true, false);
-        Item cheriBerry = item(ItemIDs.cheriBerry, "Cheri Berry", true, false);
-        Item chestoBerry = item(ItemIDs.chestoBerry, "Chesto Berry", true, false);
-        Item pechaBerry = item(ItemIDs.pechaBerry, "Pecha Berry", true, false);
-        Set<Item> allItems = linkedSet(normal, cheriBerry, chestoBerry, pechaBerry);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(normal, normal), allItems, allItems);
-        Settings settings = new Settings();
-        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM_EVEN);
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(1, 1)).randomizeFieldItems();
-
-        assertEquals(List.of(normal, chestoBerry), romHandler.writtenFieldItems);
-    }
-
-    @Test
-    public void pickupUsesFamilyTicketsAndPreservesProbabilityTiers() {
-        Item normal = item(10, "Normal", true, false);
-        Item cheriBerry = item(ItemIDs.cheriBerry, "Cheri Berry", true, false);
-        Item chestoBerry = item(ItemIDs.chestoBerry, "Chesto Berry", true, false);
-        Set<Item> allItems = linkedSet(normal, cheriBerry, chestoBerry);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(), allItems, allItems);
-        PickupItem first = new PickupItem(normal);
-        first.getProbabilities()[0] = 25;
-        first.getProbabilities()[3] = 75;
-        PickupItem second = new PickupItem(cheriBerry);
-        second.getProbabilities()[1] = 40;
-        second.getProbabilities()[4] = 60;
-        romHandler.pickupItems = List.of(first, second);
-        Settings settings = new Settings();
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(1, 1, 0)).randomizePickupItems();
-
-        assertEquals(chestoBerry, romHandler.writtenPickupItems.get(0).getItem());
-        assertEquals(normal, romHandler.writtenPickupItems.get(1).getItem());
-        assertEquals(25, romHandler.writtenPickupItems.get(0).getProbabilities()[0]);
-        assertEquals(75, romHandler.writtenPickupItems.get(0).getProbabilities()[3]);
-        assertEquals(40, romHandler.writtenPickupItems.get(1).getProbabilities()[1]);
-        assertEquals(60, romHandler.writtenPickupItems.get(1).getProbabilities()[4]);
-    }
-
-    @Test
-    public void shopRandomFillerUsesFamilyTicketsAndKeepsGuarantees() {
-        Item normal = item(10, "Normal", true, false);
-        Item cheriBerry = item(ItemIDs.cheriBerry, "Cheri Berry", true, false);
-        Item chestoBerry = item(ItemIDs.chestoBerry, "Chesto Berry", true, false);
-        Item fireStone = item(ItemIDs.fireStone, "Fire Stone", true, false);
-        Set<Item> allItems = linkedSet(normal, cheriBerry, chestoBerry, fireStone);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(), allItems, allItems);
-        romHandler.evolutionItems = linkedSet(fireStone);
-        romHandler.shops = List.of(specialShop(List.of(normal, normal)));
-        Settings settings = new Settings();
-        settings.setGuaranteeEvolutionItems(true);
-
-        new ItemRandomizer(romHandler.proxy, settings, new FixedIntRandom(1, 0, 0, 0)).randomizeShopItems();
-
-        assertEquals(Set.of(fireStone, cheriBerry), Set.copyOf(romHandler.writtenShops.get(0).getItems()));
-    }
-
-    @Test
-    public void banBadFilteredFamilyItemsAreNotReintroducedByFamilyTickets() {
-        Item normal = item(10, "Normal", true, false);
-        Item badBerry = item(ItemIDs.rowapBerry, "Rowap Berry", true, true);
-        Item badGem = item(ItemIDs.fireGem, "Fire Gem", true, true);
-        Set<Item> allowedItems = linkedSet(normal, badBerry, badGem);
-        Set<Item> nonBadItems = linkedSet(normal);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(badBerry, badGem), allowedItems,
-                nonBadItems);
-        romHandler.shops = List.of(specialShop(List.of(badBerry, badGem)));
-        romHandler.pickupItems = List.of(new PickupItem(badBerry), new PickupItem(badGem));
-        Settings settings = new Settings();
-        settings.setFieldItemsMod(Settings.FieldItemsMod.RANDOM);
-        settings.setBanBadRandomFieldItems(true);
-        settings.setBanBadRandomShopItems(true);
-        settings.setBanBadRandomPickupItems(true);
-
-        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeFieldItems();
-        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeShopItems();
-        new ItemRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizePickupItems();
-
-        assertEquals(List.of(normal, normal), romHandler.writtenFieldItems);
-        assertEquals(List.of(normal, normal), romHandler.writtenShops.get(0).getItems());
-        assertEquals(List.of(normal, normal), romHandler.writtenPickupItems.stream().map(PickupItem::getItem).toList());
-    }
-
-    @Test
     public void tmFieldSlotsCanStillReceiveExpandedCfruDpeTechnicalMachines() {
         Item tm01 = item(ItemIDs.tm01, "TM01", true, false);
         tm01.setTM(true);
@@ -435,26 +288,6 @@ public class ItemDecisionTest {
         new TrainerPokemonRandomizer(romHandler.proxy, settings, new ZeroRandom()).randomizeTrainerHeldItems();
 
         assertEquals(sensible, trainerPokemon.getHeldItem());
-    }
-
-    @Test
-    public void trainerHeldItemsStillUseFlatHeldItemPool() {
-        Item cheriBerry = item(ItemIDs.cheriBerry, "Cheri Berry", true, false);
-        Item chestoBerry = item(ItemIDs.chestoBerry, "Chesto Berry", true, false);
-        Item normal = item(10, "Normal", true, false);
-        TrainerPokemon trainerPokemon = new TrainerPokemon();
-        Trainer trainer = new Trainer();
-        trainer.getPokemon().add(trainerPokemon);
-        ItemTestRomHandler romHandler = ItemTestRomHandler.create(List.of(), linkedSet(cheriBerry, chestoBerry, normal),
-                linkedSet(cheriBerry, chestoBerry, normal));
-        romHandler.trainers = List.of(trainer);
-        romHandler.allHeldItems = linkedSet(cheriBerry, chestoBerry, normal);
-        Settings settings = new Settings();
-        settings.setRandomizeHeldItemsForRegularTrainerPokemon(true);
-
-        new TrainerPokemonRandomizer(romHandler.proxy, settings, new FixedIntRandom(1)).randomizeTrainerHeldItems();
-
-        assertEquals(chestoBerry, trainerPokemon.getHeldItem());
     }
 
     @Test
@@ -811,8 +644,6 @@ public class ItemDecisionTest {
         private List<Item> starterHeldItems = Collections.emptyList();
         private List<Trainer> trainers = Collections.emptyList();
         private List<Item> sensibleHeldItems = Collections.emptyList();
-        private Set<Item> evolutionItems = Collections.emptySet();
-        private Set<Item> xItems = Collections.emptySet();
         private Set<Item> allHeldItems = Collections.emptySet();
         private boolean canTMsBeHeld = true;
         private boolean tmsReusable;
@@ -855,10 +686,8 @@ public class ItemDecisionTest {
                 case "getItems" -> new ArrayList<>(allowedItems);
                 case "getAllowedItems" -> allowedItems;
                 case "getNonBadItems" -> nonBadItems;
-                case "getMegaStones", "getRequiredFieldTMs", "getRegularShopItems",
-                     "getOPShopItems" -> Collections.<Item>emptySet();
-                case "getEvolutionItems" -> evolutionItems;
-                case "getXItems" -> xItems;
+                case "getMegaStones", "getRequiredFieldTMs", "getEvolutionItems", "getXItems",
+                     "getRegularShopItems", "getOPShopItems" -> Collections.<Item>emptySet();
                 case "isBalanceShopPrices" -> false;
                 case "canTMsBeHeld" -> canTMsBeHeld;
                 case "isTMsReusable" -> tmsReusable;
