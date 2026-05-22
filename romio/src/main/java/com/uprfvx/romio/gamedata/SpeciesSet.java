@@ -952,7 +952,26 @@ public class SpeciesSet extends HashSet<Species> {
     }
 
     private static boolean isUnownFamily(Species species) {
-        return species != null && species.getBaseNumber() == SpeciesIDs.unown;
+        if(species == null) {
+            return false;
+        }
+        if(species.getBaseNumber() == SpeciesIDs.unown) {
+            return true;
+        }
+
+        String fullName = species.getFullName();
+        if(fullName == null) {
+            return false;
+        }
+
+        // Source IDs/base species are preferred. This fallback only catches Unown entries whose loader did not
+        // preserve that family relationship, including punctuation forms such as "Unown !" and "Unown ?".
+        String normalizedName = fullName.trim().toLowerCase(Locale.ROOT);
+        return normalizedName.equals("unown")
+                || normalizedName.startsWith("unown ")
+                || normalizedName.startsWith("unown-")
+                || normalizedName.startsWith("unown!")
+                || normalizedName.startsWith("unown?");
     }
 
     /**
