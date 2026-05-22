@@ -40,6 +40,12 @@ public class CfruDpeItemPoolPolicyTest {
 
     @Test
     public void reviewGapSystemItemsAreBannedFromNormalItemPools() {
+        assertBanned(item(ItemIDs.sacredAsh, "Sacred Ash"));
+        assertBanned(cfruDpeItem(45, "Sacred Ash"));
+        assertBanned(item(ItemIDs.rainbowWing, "Rainbow Wing"));
+        assertBanned(cfruDpeItem(0x1D8, "Rainbow Wing"));
+        assertBanned(item(ItemIDs.silverWing, "Silver Wing"));
+        assertBanned(cfruDpeItem(0x1D9, "Silver Wing"));
         assertBanned(item(ItemIDs.lightStone, "Light Stone"));
         assertBanned(cfruDpeItem(0x1DB, "Light Stone"));
         assertBanned(item(ItemIDs.darkStone, "Dark Stone"));
@@ -58,6 +64,8 @@ public class CfruDpeItemPoolPolicyTest {
         assertBanned(cfruDpeItem(0x27F, "Bottle Cap"));
         assertBanned(item(ItemIDs.goldBottleCap, "Gold Bottle Cap"));
         assertBanned(cfruDpeItem(0x280, "Gold Bottle Cap"));
+        assertBanned(cfruDpeItem(0x2E0, "Gimmi Coin"));
+        assertBanned(item(9000, "Gimmighoul Coin"));
     }
 
     @Test
