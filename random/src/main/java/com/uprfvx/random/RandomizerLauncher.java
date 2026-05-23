@@ -1,6 +1,7 @@
 package com.uprfvx.random;
 
 import com.uprfvx.random.cli.CliRandomizer;
+import com.uprfvx.random.cli.LoadedManifestExporter;
 import com.uprfvx.random.cli.SettingsProfileGenerator;
 import com.uprfvx.random.gui.RandomizerGUI;
 import com.uprfvx.romio.RootPath;
@@ -22,6 +23,9 @@ public final class RandomizerLauncher {
         if (firstCliArg.equals("cli")) {
             String[] commandArgs = Arrays.copyOfRange(args, 1, args.length);
             System.exit(CliRandomizer.invoke(commandArgs));
+        } else if (firstCliArg.equals("loaded-manifest")) {
+            String[] commandArgs = Arrays.copyOfRange(args, 1, args.length);
+            System.exit(LoadedManifestExporter.invoke(commandArgs));
         } else if (firstCliArg.equals("settings-profile")) {
             String[] commandArgs = Arrays.copyOfRange(args, 1, args.length);
             System.exit(SettingsProfileGenerator.invoke(commandArgs));
