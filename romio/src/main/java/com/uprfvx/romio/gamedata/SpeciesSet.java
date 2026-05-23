@@ -882,12 +882,12 @@ public class SpeciesSet extends HashSet<Species> {
             throw new IllegalStateException("Tried to choose a random member of an empty set!");
         }
 
-        Species unownFamilyPick = getRandomUnownFamilyTicketSpecies(random);
-        if(unownFamilyPick != null) {
+        Species selectedFamilyPick = getRandomSelectedFamilyTicketSpecies(random);
+        if(selectedFamilyPick != null) {
             if(removePicked) {
-                this.remove(unownFamilyPick);
+                this.remove(selectedFamilyPick);
             }
-            return unownFamilyPick;
+            return selectedFamilyPick;
         }
 
         //make sure cache state is good
@@ -915,63 +915,147 @@ public class SpeciesSet extends HashSet<Species> {
 
     }
 
-    private Species getRandomUnownFamilyTicketSpecies(Random random) {
-        List<Species> unownFamily = new ArrayList<>();
+    private Species getRandomSelectedFamilyTicketSpecies(Random random) {
+        Map<SelectedFormFamily, List<Species>> groupedFamilyTickets = new EnumMap<>(SelectedFormFamily.class);
         List<Species> singleSpeciesTickets = new ArrayList<>();
         for(Species spec : this) {
-            if(isUnownFamily(spec)) {
-                unownFamily.add(spec);
-            } else {
+            SelectedFormFamily family = getSelectedFormFamily(spec);
+            if(family == null) {
                 singleSpeciesTickets.add(spec);
+            } else {
+                groupedFamilyTickets.computeIfAbsent(family, key -> new ArrayList<>()).add(spec);
             }
         }
 
-        if(unownFamily.size() <= 1) {
+        List<List<Species>> familyTickets = new ArrayList<>();
+        for(List<Species> family : groupedFamilyTickets.values()) {
+            if(family.size() <= 1) {
+                singleSpeciesTickets.addAll(family);
+            } else {
+                familyTickets.add(family);
+            }
+        }
+
+        if(familyTickets.isEmpty()) {
             return null;
         }
 
-        // Intentional narrow family-ticket behavior: only Unown is grouped, leaving other form families unchanged.
-        int choice = random.nextInt(singleSpeciesTickets.size() + 1);
+        // Intentional narrow behavior: only this explicit allowlist is grouped, not all formes/base species.
+        int choice = random.nextInt(singleSpeciesTickets.size() + familyTickets.size());
         if(choice < singleSpeciesTickets.size()) {
             return singleSpeciesTickets.get(choice);
         }
-        return unownFamily.get(random.nextInt(unownFamily.size()));
+        List<Species> family = familyTickets.get(choice - singleSpeciesTickets.size());
+        return family.get(random.nextInt(family.size()));
     }
 
     private int randomSpeciesTicketCount() {
-        int unownCount = 0;
+        Map<SelectedFormFamily, Integer> groupedFamilyCounts = new EnumMap<>(SelectedFormFamily.class);
         for(Species spec : this) {
-            if(isUnownFamily(spec)) {
-                unownCount++;
+            SelectedFormFamily family = getSelectedFormFamily(spec);
+            if(family != null) {
+                groupedFamilyCounts.merge(family, 1, Integer::sum);
             }
         }
-        if(unownCount <= 1) {
-            return this.size();
+        int groupedExtraTickets = 0;
+        for(Integer familyCount : groupedFamilyCounts.values()) {
+            if(familyCount > 1) {
+                groupedExtraTickets += familyCount - 1;
+            }
         }
-        return this.size() - unownCount + 1;
+        return this.size() - groupedExtraTickets;
     }
 
-    private static boolean isUnownFamily(Species species) {
+    private static SelectedFormFamily getSelectedFormFamily(Species species) {
         if(species == null) {
-            return false;
+            return null;
         }
-        if(species.getBaseNumber() == SpeciesIDs.unown) {
-            return true;
+        if(species.isMegaForm() || species.isGigantamaxForm()
+                || species.isRegionalForm() || species.isRegionalBranchEvolution()) {
+            return null;
         }
 
-        String fullName = species.getFullName();
+        String normalizedName = normalizeFamilyName(species.getFullName());
+        if(normalizedName != null && isMechanicFormName(normalizedName)) {
+            return null;
+        }
+
+        SelectedFormFamily family = SelectedFormFamily.fromBaseNumber(species.getBaseNumber());
+        if(family != null) {
+            return family;
+        }
+
+        if(normalizedName == null) {
+            return null;
+        }
+        return SelectedFormFamily.fromNormalizedName(normalizedName);
+    }
+
+    private static String normalizeFamilyName(String fullName) {
         if(fullName == null) {
-            return false;
+            return null;
+        }
+        String normalizedName = fullName.trim().toLowerCase(Locale.ROOT);
+        return normalizedName.isEmpty() ? null : normalizedName;
+    }
+
+    private static boolean isMechanicFormName(String normalizedName) {
+        return normalizedName.contains(" mega")
+                || normalizedName.contains("-mega")
+                || normalizedName.contains(" gigantamax")
+                || normalizedName.contains("-gigantamax")
+                || normalizedName.contains(" gmax")
+                || normalizedName.contains("-gmax")
+                || normalizedName.contains(" giga")
+                || normalizedName.contains("-giga");
+    }
+
+    private enum SelectedFormFamily {
+        UNOWN(SpeciesIDs.unown, "unown", true),
+        VIVILLON(SpeciesIDs.vivillon, "vivillon", false),
+        ALCREMIE(SpeciesIDs.alcremie, "alcremie", false),
+        MINIOR(SpeciesIDs.minior, "minior", false),
+        ROTOM(SpeciesIDs.rotom, "rotom", false),
+        ARCEUS(SpeciesIDs.arceus, "arceus", false),
+        SILVALLY(SpeciesIDs.silvally, "silvally", false),
+        DEOXYS(SpeciesIDs.deoxys, "deoxys", false);
+
+        private final int baseNumber;
+        private final String normalizedName;
+        private final boolean allowsPunctuationSuffix;
+
+        SelectedFormFamily(int baseNumber, String normalizedName, boolean allowsPunctuationSuffix) {
+            this.baseNumber = baseNumber;
+            this.normalizedName = normalizedName;
+            this.allowsPunctuationSuffix = allowsPunctuationSuffix;
         }
 
-        // Source IDs/base species are preferred. This fallback only catches Unown entries whose loader did not
-        // preserve that family relationship, including punctuation forms such as "Unown !" and "Unown ?".
-        String normalizedName = fullName.trim().toLowerCase(Locale.ROOT);
-        return normalizedName.equals("unown")
-                || normalizedName.startsWith("unown ")
-                || normalizedName.startsWith("unown-")
-                || normalizedName.startsWith("unown!")
-                || normalizedName.startsWith("unown?");
+        private static SelectedFormFamily fromBaseNumber(int baseNumber) {
+            for(SelectedFormFamily family : values()) {
+                if(family.baseNumber == baseNumber) {
+                    return family;
+                }
+            }
+            return null;
+        }
+
+        private static SelectedFormFamily fromNormalizedName(String normalizedName) {
+            for(SelectedFormFamily family : values()) {
+                if(family.matchesName(normalizedName)) {
+                    return family;
+                }
+            }
+            return null;
+        }
+
+        private boolean matchesName(String normalizedName) {
+            return normalizedName.equals(this.normalizedName)
+                    || normalizedName.startsWith(this.normalizedName + " ")
+                    || normalizedName.startsWith(this.normalizedName + "-")
+                    || (allowsPunctuationSuffix
+                            && (normalizedName.startsWith(this.normalizedName + "!")
+                            || normalizedName.startsWith(this.normalizedName + "?")));
+        }
     }
 
     /**
