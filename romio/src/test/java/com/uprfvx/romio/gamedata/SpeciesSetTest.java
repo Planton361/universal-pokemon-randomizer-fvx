@@ -149,12 +149,97 @@ public class SpeciesSetTest {
     }
 
     @Test
+    public void getRandomSpeciesCountsVivillonFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.vivillon, "Vivillon");
+    }
+
+    @Test
+    public void getRandomSpeciesCountsAlcremieFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.alcremie, "Alcremie");
+    }
+
+    @Test
+    public void getRandomSpeciesCountsRotomFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.rotom, "Rotom");
+    }
+
+    @Test
+    public void getRandomSpeciesCountsArceusFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.arceus, "Arceus");
+    }
+
+    @Test
+    public void getRandomSpeciesCountsSilvallyFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.silvally, "Silvally");
+    }
+
+    @Test
+    public void getRandomSpeciesCountsDeoxysFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.deoxys, "Deoxys");
+    }
+
+    @Test
+    public void getRandomSpeciesCountsMiniorFormsAsOneFamilyTicket() {
+        assertSelectedFamilyFormsCountAsOneTicket(SpeciesIDs.minior, "Minior");
+    }
+
+    @Test
+    public void getRandomSpeciesUsesNarrowNameFallbackForSelectedFamilies() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> rotomForms = Arrays.asList(
+                species(9001, "Rotom Heat", 9001),
+                species(9002, "Rotom-Wash", 9002));
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(rotomForms);
+        SequenceRandom random = new SequenceRandom(0);
+
+        Species pick = pokes.getRandomSpecies(random);
+
+        assertEquals(normal, pick);
+        assertEquals(2, random.boundAt(0));
+    }
+
+    @Test
+    public void getRandomSpeciesFamilyTicketChoosesOnlyFilteredPoolForms() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> allowedVivillonForms = selectedFamilyForms(SpeciesIDs.vivillon, "Vivillon", 2, 3000);
+        Species omittedVivillonForm = selectedFamilyForm(SpeciesIDs.vivillon, "Vivillon", 9, 3009);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(allowedVivillonForms);
+
+        Set<Species> picks = new HashSet<>();
+        for(int i = 0; i < allowedVivillonForms.size(); i++) {
+            picks.add(pokes.getRandomSpecies(new SequenceRandom(1, i)));
+        }
+
+        assertTrue(picks.containsAll(allowedVivillonForms));
+        assertFalse(picks.contains(omittedVivillonForm));
+    }
+
+    @Test
     public void getRandomSimilarStrengthSpeciesCountsUnownFormsAsOneFamilyTicket() {
         Species normal = species(1, "Normal", 1);
         List<Species> unownForms = unownForms(28);
         SpeciesSet pokes = new SpeciesSet();
         pokes.add(normal);
         pokes.addAll(unownForms);
+        SequenceRandom random = new SequenceRandom(0);
+
+        Species pick = pokes.getRandomSimilarStrengthSpecies(0, random);
+
+        assertEquals(normal, pick);
+        assertEquals(2, random.boundAt(0));
+    }
+
+    @Test
+    public void getRandomSimilarStrengthSpeciesCountsSelectedFormsAsOneFamilyTicket() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> vivillonForms = selectedFamilyForms(SpeciesIDs.vivillon, "Vivillon", 20, 3000);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(vivillonForms);
         SequenceRandom random = new SequenceRandom(0);
 
         Species pick = pokes.getRandomSimilarStrengthSpecies(0, random);
@@ -203,20 +288,59 @@ public class SpeciesSetTest {
     }
 
     @Test
-    public void getRandomSpeciesDoesNotGroupOtherFormFamilies() {
+    public void getRandomSpeciesWithOneSelectedFamilyFormUsesRegularSpeciesTickets() {
         Species normal = species(1, "Normal", 1);
-        Species vivillon = species(666, "Vivillon", 666);
-        Species vivillonPattern = species(666, "Vivillon-Pattern", 1000);
-        vivillonPattern.setBaseForme(vivillon);
-        Species regional = species(52, "Meowth-Alola", 1100);
-        regional.addSpecialFormCategory(SpecialFormCategory.REGIONAL);
-        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, vivillon, vivillonPattern, regional));
+        Species vivillon = selectedFamilyForm(SpeciesIDs.vivillon, "Vivillon", 0, 3000);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, vivillon));
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(2, random.boundAt(0));
+        assertEquals(1, random.callCount());
+    }
+
+    @Test
+    public void getRandomSpeciesKeepsRegionalFormsAsSingleTickets() {
+        Species normal = species(1, "Normal", 1);
+        Species meowth = species(52, "Meowth", 52);
+        Species alolanMeowth = species(52, "Meowth-Alola", 1100);
+        alolanMeowth.setBaseForme(meowth);
+        alolanMeowth.addSpecialFormCategory(SpecialFormCategory.REGIONAL);
+        Species galarianMeowth = species(52, "Meowth-Galar", 1101);
+        galarianMeowth.setBaseForme(meowth);
+        galarianMeowth.addSpecialFormCategory(SpecialFormCategory.REGIONAL);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, meowth, alolanMeowth, galarianMeowth));
         SequenceRandom random = new SequenceRandom(0);
 
         pokes.getRandomSpecies(random);
 
         assertEquals(4, random.boundAt(0));
         assertEquals(1, random.callCount());
+    }
+
+    @Test
+    public void getRandomSpeciesKeepsExcludedLegendaryFusionFamiliesAsSingleTickets() {
+        assertFamilyRemainsFlat(SpeciesIDs.giratina, "Giratina");
+        assertFamilyRemainsFlat(SpeciesIDs.kyurem, "Kyurem");
+        assertFamilyRemainsFlat(SpeciesIDs.necrozma, "Necrozma");
+        assertFamilyRemainsFlat(SpeciesIDs.calyrex, "Calyrex");
+    }
+
+    @Test
+    public void getRandomSpeciesKeepsAlcremieGigantamaxAsSingleTicketOutsideFamily() {
+        Species normal = species(1, "Normal", 1);
+        List<Species> alcremieForms = selectedFamilyForms(SpeciesIDs.alcremie, "Alcremie", 2, 3000);
+        Species alcremieGmax = selectedFamilyForm(SpeciesIDs.alcremie, "Alcremie-Giga", 9, 3009);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(alcremieForms);
+        pokes.add(alcremieGmax);
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(3, random.boundAt(0));
     }
 
     @Test
@@ -343,6 +467,48 @@ public class SpeciesSetTest {
         return species;
     }
 
+    private static void assertSelectedFamilyFormsCountAsOneTicket(int baseNumber, String familyName) {
+        Species normal = species(1, "Normal", 1);
+        List<Species> forms = selectedFamilyForms(baseNumber, familyName, 3, 3000 + baseNumber);
+        SpeciesSet pokes = new SpeciesSet();
+        pokes.add(normal);
+        pokes.addAll(forms);
+        SequenceRandom random = new SequenceRandom(0);
+
+        Species pick = pokes.getRandomSpecies(random);
+
+        assertEquals(normal, pick);
+        assertEquals(2, random.boundAt(0));
+    }
+
+    private static void assertFamilyRemainsFlat(int baseNumber, String familyName) {
+        Species normal = species(1, "Normal", 1);
+        Species base = species(baseNumber, familyName, 4000 + baseNumber);
+        Species form = species(baseNumber, familyName + "-Form", 5000 + baseNumber);
+        form.setBaseForme(base);
+        SpeciesSet pokes = new SpeciesSet(Arrays.asList(normal, base, form));
+        SequenceRandom random = new SequenceRandom(0);
+
+        pokes.getRandomSpecies(random);
+
+        assertEquals(3, random.boundAt(0));
+        assertEquals(1, random.callCount());
+    }
+
+    private static List<Species> selectedFamilyForms(int baseNumber, String familyName, int count, int identityStart) {
+        List<Species> forms = new ArrayList<>();
+        for(int i = 0; i < count; i++) {
+            forms.add(selectedFamilyForm(baseNumber, familyName, i, identityStart + i));
+        }
+        return forms;
+    }
+
+    private static Species selectedFamilyForm(int baseNumber, String familyName, int index, int speciesSetIdentityNumber) {
+        Species form = species(baseNumber, familyName + "-" + index, speciesSetIdentityNumber);
+        form.setFormeNumber(index);
+        return form;
+    }
+
     private static List<Species> unownForms(int count) {
         List<Species> unownForms = new ArrayList<>();
         for(int i = 0; i < count; i++) {
@@ -352,7 +518,7 @@ public class SpeciesSetTest {
     }
 
     private static Species unownForm(int index) {
-        Species unown = species(SpeciesIDs.unown, "Unown-" + index, 1000 + index);
+        Species unown = species(SpeciesIDs.unown, "Unown-" + index, 10000 + index);
         unown.setFormeNumber(index);
         return unown;
     }
