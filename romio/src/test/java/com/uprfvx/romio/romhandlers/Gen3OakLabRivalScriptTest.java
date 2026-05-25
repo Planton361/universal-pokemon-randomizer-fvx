@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -386,6 +387,91 @@ public class Gen3OakLabRivalScriptTest {
     }
 
     @Test
+    public void rawTrainerDiagnosticsDecodeCustomMovesAndDetectLeadingNone() {
+        Species[] species = speciesTable(25);
+        byte[] rom = new byte[256];
+        int trainerDataOffset = 32;
+        int trainerEntrySize = 40;
+        int trainerId = 1;
+        int trainerOffset = trainerDataOffset + trainerId * trainerEntrySize;
+        int partyOffset = 160;
+        rom[trainerOffset] = 1;
+        rom[trainerOffset + (trainerEntrySize - 8)] = 1;
+        writePointer(rom, trainerOffset + (trainerEntrySize - 4), partyOffset);
+        writeWord(rom, partyOffset + 2, 9);
+        writeWord(rom, partyOffset + 4, 25);
+        writeWord(rom, partyOffset + 6, 0);
+        writeWord(rom, partyOffset + 8, 33);
+        writeWord(rom, partyOffset + 10, 45);
+        writeWord(rom, partyOffset + 12, 28);
+
+        List<Gen3RomHandler.FrlgRawTrainerPartyDiagnostics> rows =
+                Gen3RomHandler.readFrlgRawTrainerPartyDiagnostics(rom, trainerDataOffset, trainerEntrySize,
+                        List.of(trainerId), species);
+
+        Gen3RomHandler.FrlgRawTrainerPokemonDiagnostics pokemon = rows.get(0).party().get(0);
+        assertEquals(List.of(0, 33, 45, 28), pokemon.rawMoves());
+        assertTrue(Gen3RomHandler.rawTrainerPokemonHasLeadingNoneMoveForDiagnostics(pokemon));
+    }
+
+    @Test
+    public void runtimeTrainerPostRandomizationAuditWarnsRawLeadingNoneMoves() {
+        Species[] species = speciesTable(25, 26);
+        List<Gen3RomHandler.FrlgTrainerBattleRuntimeSource> baseSources = List.of(
+                runtimeSource(64, 0, 531, 1200, 1800, 1, 25));
+        List<Gen3RomHandler.FrlgRawTrainerPartyDiagnostics> baseRawParties = List.of(
+                rawParty(531, 1200, 1800, 1, 25, 7, species));
+        List<Gen3RomHandler.FrlgTrainerBattleRuntimeSource> outputSources = List.of(
+                runtimeSource(64, 0, 531, 1200, 1800, 1, 26));
+        List<Gen3RomHandler.FrlgRawTrainerPartyDiagnostics> outputRawParties = List.of(
+                rawPartyWithMoves(531, 1200, 1800, 26, 7, species, List.of(0, 33, 45, 28)));
+        Trainer outputLoadedTrainer = trainer(531, species[26], 7);
+        outputLoadedTrainer.getPokemon().get(0).setMoves(new int[] {0, 33, 45, 28});
+
+        Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditReport report =
+                Gen3RomHandler.buildFrlgTrainerRuntimeSourcePostRandomizationAudit(
+                        baseSources, baseRawParties, outputSources, outputRawParties,
+                        List.of(outputLoadedTrainer), species);
+
+        Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditRow row = report.rows().get(0);
+        assertTrue(row.outputRawParty().contains("moves=[0, 33, 45, 28]"));
+        assertTrue(row.warnings().stream()
+                .anyMatch(warning -> warning.contains("WARN output raw custom moves have leading MOVE_NONE")));
+    }
+
+    @Test
+    public void runtimeTrainerPostRandomizationAuditWarnsRoute22StarterMismatch() {
+        Species[] species = speciesTable(25, 26, 27, 28, 29);
+        List<Gen3RomHandler.FrlgTrainerBattleRuntimeSource> baseSources = List.of(
+                runtimeSource(64, 0, 0x146, 1200, 1800, 1, 25),
+                runtimeSource(96, 0, 0x149, 1240, 1840, 2, 26));
+        List<Gen3RomHandler.FrlgRawTrainerPartyDiagnostics> baseRawParties = List.of(
+                rawParty(0x146, 1200, 1800, 1, 25, 5, species),
+                rawPartyWithSpecies(0x149, 1240, 1840, 2, 9, species, 26, 27));
+        List<Gen3RomHandler.FrlgTrainerBattleRuntimeSource> outputSources = List.of(
+                runtimeSource(64, 0, 0x146, 1200, 1800, 1, 28),
+                runtimeSource(96, 0, 0x149, 1240, 1840, 2, 29));
+        List<Gen3RomHandler.FrlgRawTrainerPartyDiagnostics> outputRawParties = List.of(
+                rawParty(0x146, 1200, 1800, 1, 28, 5, species),
+                rawPartyWithSpecies(0x149, 1240, 1840, 2, 9, species, 29, 27));
+        Trainer openingRival = trainer(0x146, species[28], 5);
+        Trainer route22Rival = trainer(0x149, species[29], 9);
+        route22Rival.getPokemon().add(trainerPokemon(species[27], 9));
+
+        Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditReport report =
+                Gen3RomHandler.buildFrlgTrainerRuntimeSourcePostRandomizationAudit(
+                        baseSources, baseRawParties, outputSources, outputRawParties,
+                        List.of(openingRival, route22Rival), species);
+
+        Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditRow route22Row = report.rows().stream()
+                .filter(row -> row.trainerId() == 0x149)
+                .findFirst()
+                .orElseThrow();
+        assertTrue(route22Row.warnings().stream()
+                .anyMatch(warning -> warning.contains("WARN route22 protected starter differs")));
+    }
+
+    @Test
     public void runtimeTrainerPostRandomizationAuditIgnoresInvalidBaseCandidates() {
         Species[] species = speciesTable(25, 26);
         List<Gen3RomHandler.FrlgTrainerBattleRuntimeSource> baseSources = List.of(
@@ -605,7 +691,35 @@ public class Gen3OakLabRivalScriptTest {
         String decodedSpecies = species[firstRawSpeciesId].getFullName();
         return new Gen3RomHandler.FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, 1, 7, 0, partySize,
                 partyPointer, true, List.of(new Gen3RomHandler.FrlgRawTrainerPokemonDiagnostics(0, partyPointer, level,
-                firstRawSpeciesId, decodedSpecies)));
+                firstRawSpeciesId, decodedSpecies, List.of())));
+    }
+
+    private static Gen3RomHandler.FrlgRawTrainerPartyDiagnostics rawPartyWithMoves(int trainerId, int trainerOffset,
+                                                                                   int partyPointer,
+                                                                                   int rawSpeciesId, int level,
+                                                                                   Species[] species,
+                                                                                   List<Integer> moves) {
+        String decodedSpecies = species[rawSpeciesId].getFullName();
+        return new Gen3RomHandler.FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, 1, 7, 1, 1,
+                partyPointer, true, List.of(new Gen3RomHandler.FrlgRawTrainerPokemonDiagnostics(0, partyPointer,
+                level, rawSpeciesId, decodedSpecies, moves)));
+    }
+
+    private static Gen3RomHandler.FrlgRawTrainerPartyDiagnostics rawPartyWithSpecies(int trainerId,
+                                                                                     int trainerOffset,
+                                                                                     int partyPointer,
+                                                                                     int partySize,
+                                                                                     int level,
+                                                                                     Species[] species,
+                                                                                     int... rawSpeciesIds) {
+        List<Gen3RomHandler.FrlgRawTrainerPokemonDiagnostics> party = new ArrayList<>();
+        for (int i = 0; i < rawSpeciesIds.length; i++) {
+            int rawSpeciesId = rawSpeciesIds[i];
+            party.add(new Gen3RomHandler.FrlgRawTrainerPokemonDiagnostics(i, partyPointer + i * 8, level,
+                    rawSpeciesId, species[rawSpeciesId].getFullName(), List.of()));
+        }
+        return new Gen3RomHandler.FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, 1, 7, 0, partySize,
+                partyPointer, true, party);
     }
 
     private static Gen3RomHandler.FrlgRawTrainerPartyDiagnostics unreadableRawParty(int trainerId, int trainerOffset,
@@ -619,11 +733,15 @@ public class Gen3OakLabRivalScriptTest {
         trainer.setIndex(trainerId);
         trainer.setTrainerclass(1);
         trainer.setTrainerPic(7);
+        trainer.getPokemon().add(trainerPokemon(species, level));
+        return trainer;
+    }
+
+    private static TrainerPokemon trainerPokemon(Species species, int level) {
         TrainerPokemon pokemon = new TrainerPokemon();
         pokemon.setSpecies(species);
         pokemon.setLevel(level);
-        trainer.getPokemon().add(pokemon);
-        return trainer;
+        return pokemon;
     }
 
     private static List<Trainer> loadedTrainers(int loadedTrainerCount) {
