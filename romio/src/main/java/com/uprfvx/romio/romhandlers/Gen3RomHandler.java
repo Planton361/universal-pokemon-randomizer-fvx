@@ -4467,11 +4467,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return "trainer=" + trainerId
                 + " slot=" + (slotIndex < 0 ? "<header>" : slotIndex)
                 + " layout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
+                + " expectedLayout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
+                + " bytesPerSlot=" + trainerPokemonStride(partyFlags)
                 + " partyFlags=" + (partyFlags < 0 ? "<unknown>" : partyFlags)
                 + " partyCount=" + (partyCount < 0 ? "<unknown>" : partyCount)
                 + " trainerOffset=" + offsetClassForDiagnostics(trainerOffset, romEntry.getIntValue("TrainerEntrySize"))
                 + " partyPointer=" + offsetClassForDiagnostics(partyPointer, trainerPokemonStride(partyFlags))
-                + " slotOffset=" + offsetClassForDiagnostics(slotOffset, trainerPokemonStride(partyFlags));
+                + " slotOffset=" + offsetClassForDiagnostics(slotOffset, trainerPokemonStride(partyFlags))
+                + trainerSlotRawValuesDetail(partyFlags, slotOffset);
     }
 
     private static String trainerPokemonLayoutForDiagnostics(int partyFlags) {
@@ -4503,6 +4506,86 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             return "out-of-rom";
         }
         return "in-rom";
+    }
+
+    private String trainerSlotRawValuesDetail(int partyFlags, int slotOffset) {
+        int stride = trainerPokemonStride(partyFlags);
+        if (partyFlags < 0 || slotOffset < 0 || !offsetInRom(slotOffset, stride)) {
+            return " rawSpecies=<unavailable>"
+                    + " speciesStatus=<unavailable>"
+                    + " rawItem=<unavailable>"
+                    + " itemStatus=<unavailable>"
+                    + " rawMoves=<unavailable>"
+                    + " moveStatus=<unavailable>";
+        }
+
+        int rawSpecies = safeReadWord(slotOffset + 4);
+        String rawSpeciesValue = rawSpecies < 0 ? "<missing>" : Integer.toString(rawSpecies);
+        StringBuilder detail = new StringBuilder();
+        detail.append(" rawSpecies=").append(rawSpeciesValue)
+                .append(" speciesStatus=").append(speciesIndexStatusForDiagnostics(rawSpecies));
+
+        if (partyFlags == 2 || partyFlags == 3) {
+            int rawItem = safeReadWord(slotOffset + 6);
+            String rawItemValue = rawItem < 0 ? "<missing>" : Integer.toString(rawItem);
+            detail.append(" rawItem=").append(rawItemValue)
+                    .append(" itemStatus=").append(itemIndexStatusForDiagnostics(rawItem));
+        } else {
+            detail.append(" rawItem=<not-present> itemStatus=<not-present>");
+        }
+
+        int moveOffset = switch (partyFlags) {
+            case 1 -> slotOffset + 6;
+            case 3 -> slotOffset + 8;
+            default -> -1;
+        };
+        if (moveOffset < 0) {
+            detail.append(" rawMoves=<not-present> moveStatus=<not-present>");
+        } else {
+            int[] rawMoves = new int[4];
+            String[] moveStatuses = new String[4];
+            for (int move = 0; move < 4; move++) {
+                rawMoves[move] = safeReadWord(moveOffset + move * 2);
+                moveStatuses[move] = moveIndexStatusForDiagnostics(rawMoves[move]);
+            }
+            detail.append(" rawMoves=").append(Arrays.toString(rawMoves))
+                    .append(" moveStatus=").append(Arrays.toString(moveStatuses));
+        }
+        return detail.toString();
+    }
+
+    private String speciesIndexStatusForDiagnostics(int rawSpecies) {
+        if (rawSpecies < 0) {
+            return "<missing>";
+        }
+        if (pokesInternal == null || rawSpecies >= pokesInternal.length) {
+            return "out-of-bounds";
+        }
+        return pokesInternal[rawSpecies] == null ? "null-slot" : "in-bounds";
+    }
+
+    private String itemIndexStatusForDiagnostics(int rawItem) {
+        if (rawItem < 0) {
+            return "<missing>";
+        }
+        int itemID = Gen3Constants.itemIDToStandard(rawItem);
+        if (items == null || itemID < 0 || itemID >= items.size()) {
+            return "out-of-bounds";
+        }
+        return items.get(itemID) == null ? "null-slot" : "in-bounds";
+    }
+
+    private String moveIndexStatusForDiagnostics(int rawMove) {
+        if (rawMove < 0) {
+            return "<missing>";
+        }
+        if (rawMove == 0) {
+            return "none";
+        }
+        if (moves == null || rawMove >= moves.length) {
+            return "out-of-bounds";
+        }
+        return moves[rawMove] == null ? "null-slot" : "in-bounds";
     }
 
     private void loadFrlgRuntimeTrainerSourceRows(int baseOffset, int entryLen, List<String> tcnames) {
