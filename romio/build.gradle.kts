@@ -6,7 +6,22 @@ dependencies {
     implementation(project(":utils"))
 }
 
+val trainerRuntimeSourceAuditProperties = listOf(
+    "uprfvx.trainerRuntimeSourceBaseRom",
+    "uprfvx.trainerRuntimeSourceRandomizedRom",
+)
+
+fun Test.forwardTrainerRuntimeSourceAuditProperties() {
+    trainerRuntimeSourceAuditProperties.forEach { propertyName ->
+        System.getProperty(propertyName)?.let { propertyValue ->
+            systemProperty(propertyName, propertyValue)
+        }
+    }
+}
+
 tasks.named<Test>("test") {
+    forwardTrainerRuntimeSourceAuditProperties()
+
     filter {
         excludeTestsMatching("*RomHandler*Test")
     }
@@ -19,6 +34,7 @@ tasks.register<Test>("testROMs") {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     systemProperty("romsPath", rootProject.file("roms").absolutePath)
+    forwardTrainerRuntimeSourceAuditProperties()
 
     shouldRunAfter("test")
 
