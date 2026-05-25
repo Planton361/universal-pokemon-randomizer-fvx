@@ -314,6 +314,28 @@ public class TrainerSpecialRulesTest {
     }
 
     @Test
+    public void route22StyleRivalKeepsWeakStageStarterAtLowLevel() {
+        Species playerStarter = species(101, "PlayerStarter");
+        Species rivalStarter = species(102, "RivalStarter");
+        Species friendStarter = species(103, "FriendStarter");
+        Species rivalEvolution = species(202, "RivalEvolution");
+        linkEvolution(rivalStarter, rivalEvolution, 16);
+        Species filler = species(301, "Filler");
+        Trainer route22Rival = trainer(0x14B, "RIVAL2-0", pokemon(filler, 9), pokemon(filler, 9));
+        TrainerTestRomHandler handler = TrainerTestRomHandler.create(
+                List.of(playerStarter, rivalStarter, friendStarter, rivalEvolution, filler),
+                List.of(route22Rival),
+                List.of(playerStarter, rivalStarter, friendStarter),
+                Collections.emptyList());
+
+        TrainerPokemonRandomizer randomizer = new TrainerPokemonRandomizer(handler.proxy, new Settings(), new Random(5));
+        randomizer.makeRivalCarryStarter();
+
+        assertSame(rivalStarter, route22Rival.getPokemon().get(1).getSpecies());
+        assertNotSame(rivalEvolution, route22Rival.getPokemon().get(1).getSpecies());
+    }
+
+    @Test
     public void runtimeSourceRivalRowsCarryCounterStarterWhenTaggedFromKnownRuntimeSource() {
         Species playerStarter = species(101, "PlayerStarter");
         Species rivalStarter = species(102, "RivalStarter");

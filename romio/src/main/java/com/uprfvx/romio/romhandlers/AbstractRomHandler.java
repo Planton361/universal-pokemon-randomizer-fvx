@@ -33,6 +33,7 @@ import com.uprfvx.romio.RomFunctions;
 import com.uprfvx.romio.constants.AbilityIDs;
 import com.uprfvx.romio.constants.GlobalConstants;
 import com.uprfvx.romio.constants.ItemIDs;
+import com.uprfvx.romio.constants.MoveIDs;
 import com.uprfvx.romio.gamedata.*;
 import com.uprfvx.romio.graphics.packs.CustomPlayerGraphics;
 import com.uprfvx.romio.romhandlers.romentries.RomEntry;
@@ -423,6 +424,9 @@ public abstract class AbstractRomHandler implements RomHandler {
             if (ml.level > level) {
                 // we're done
                 break;
+            }
+            if (ml.move == MoveIDs.none) {
+                continue;
             }
 
             boolean alreadyKnownMove = false;
