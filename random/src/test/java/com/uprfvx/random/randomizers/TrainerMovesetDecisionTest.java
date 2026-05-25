@@ -50,6 +50,25 @@ public class TrainerMovesetDecisionTest {
     }
 
     @Test
+    public void emptyBetterMovesetPoolDoesNotActivateStalePidgeyMoves() {
+        Species randomizedSpecies = species(10, "RandomizedSpecies");
+        TrainerPokemon trainerPokemon = pokemon(randomizedSpecies, 9, 0, 33, 45, 28);
+        trainerPokemon.setResetMoves(true);
+        Trainer trainer = trainer(trainerPokemon);
+        TrainerMovesetTestRomHandler handler = TrainerMovesetTestRomHandler.create(
+                List.of(trainer),
+                List.of(move(33, "Tackle"), move(45, "Growl"), move(28, "Sand Attack")),
+                Collections.emptyMap());
+
+        new TrainerMovesetRandomizer(handler.proxy, betterRegularMovesets(), new Random(1))
+                .randomizeTrainerMovesets();
+
+        assertTrue(trainerPokemon.isResetMoves());
+        assertArrayEquals(new int[] {0, 33, 45, 28}, trainerPokemon.getMoves());
+        assertFalse(trainer.pokemonHaveCustomMoves());
+    }
+
+    @Test
     public void nonEmptyBetterMovesetPoolWritesMovesAndClearsResetMoves() {
         Species randomizedSpecies = species(10, "RandomizedSpecies");
         TrainerPokemon trainerPokemon = pokemon(randomizedSpecies, 6, 33, 81, 78, 0);
@@ -89,6 +108,23 @@ public class TrainerMovesetDecisionTest {
 
         assertFalse(trainerPokemon.isResetMoves());
         assertArrayEquals(new int[] {1, 2, 3, 0}, trainerPokemon.getMoves());
+    }
+
+    @Test
+    public void betterMovesetsOffDoesNotRewriteTrainerMoves() {
+        Species randomizedSpecies = species(10, "RandomizedSpecies");
+        TrainerPokemon trainerPokemon = pokemon(randomizedSpecies, 6, 0, 33, 45, 28);
+        trainerPokemon.setResetMoves(true);
+        TrainerMovesetTestRomHandler handler = TrainerMovesetTestRomHandler.create(
+                List.of(trainer(trainerPokemon)),
+                List.of(move(33, "Tackle"), move(45, "Growl"), move(28, "Sand Attack")),
+                Collections.emptyMap());
+
+        new TrainerMovesetRandomizer(handler.proxy, new Settings(), new Random(1))
+                .randomizeTrainerMovesets();
+
+        assertTrue(trainerPokemon.isResetMoves());
+        assertArrayEquals(new int[] {0, 33, 45, 28}, trainerPokemon.getMoves());
     }
 
     private static Settings betterRegularMovesets() {

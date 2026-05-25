@@ -5,6 +5,7 @@ import com.uprfvx.romio.gamedata.Item;
 import com.uprfvx.romio.gamedata.Move;
 import com.uprfvx.romio.gamedata.MoveLearnt;
 import com.uprfvx.romio.gamedata.Species;
+import com.uprfvx.romio.gamedata.Trainer;
 import com.uprfvx.romio.gamedata.TrainerPokemon;
 import com.uprfvx.romio.gamedata.Type;
 import org.junit.jupiter.api.Test;
@@ -82,6 +83,33 @@ public class Gen3SensibleHeldItemsTest {
         int[] moveset = Gen3RomHandler.normalizeTrainerMoveSlots(new int[] {0, 59, 44, 427});
 
         assertArrayEquals(new int[] {59, 44, 427, 0}, moveset);
+    }
+
+    @Test
+    public void finalTrainerMoveStateNormalizationCompactsOriginalPidgeyMoves() {
+        TrainerPokemon pokemon = new TrainerPokemon();
+        pokemon.setMoves(new int[] {0, 33, 45, 28});
+        Trainer trainer = new Trainer();
+        trainer.setPokemon(new ArrayList<>(List.of(pokemon)));
+
+        Gen3RomHandler.normalizeTrainerCustomMoveStateBeforeWrite(trainer);
+
+        assertFalse(pokemon.isResetMoves());
+        assertArrayEquals(new int[] {33, 45, 28, 0}, pokemon.getMoves());
+        assertTrue(trainer.pokemonHaveCustomMoves());
+    }
+
+    @Test
+    public void finalTrainerMoveStateNormalizationRestoresResetWhenNoCustomMovesRemain() {
+        TrainerPokemon pokemon = new TrainerPokemon();
+        pokemon.setMoves(new int[] {0, 0, 0, 0});
+        Trainer trainer = new Trainer();
+        trainer.setPokemon(new ArrayList<>(List.of(pokemon)));
+
+        Gen3RomHandler.normalizeTrainerCustomMoveStateBeforeWrite(trainer);
+
+        assertTrue(pokemon.isResetMoves());
+        assertFalse(trainer.pokemonHaveCustomMoves());
     }
 
     private static Gen3RomHandler romHandlerWithItems() throws ReflectiveOperationException {

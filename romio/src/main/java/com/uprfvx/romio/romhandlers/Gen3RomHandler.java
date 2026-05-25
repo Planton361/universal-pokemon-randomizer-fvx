@@ -4370,6 +4370,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
 	private byte[] trainerPokemonToBytes(Trainer trainer) {
+        normalizeTrainerCustomMoveStateBeforeWrite(trainer);
 		int dataSize = trainer.getPokemon().size() * (trainer.pokemonHaveCustomMoves() ? 16 : 8);
 		byte[] pokemonData = new byte[dataSize];
 
@@ -4431,6 +4432,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 		return pokemonData;
 	}
 
+    static void normalizeTrainerCustomMoveStateBeforeWrite(Trainer trainer) {
+        for (TrainerPokemon tp : trainer.getPokemon()) {
+            if (tp.isResetMoves()) {
+                continue;
+            }
+            int[] moves = normalizeTrainerMoveSlots(tp.getMoves());
+            if (trainerMoveSlotsHaveMoves(moves)) {
+                tp.setMoves(moves);
+            } else {
+                tp.setResetMoves(true);
+            }
+        }
+    }
+
     static int[] normalizeTrainerMoveSlots(int[] moves) {
         int[] normalizedMoves = new int[4];
         if (moves == null) {
@@ -4484,6 +4499,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         // The randomizer surrounds this data with a Trainer object so it can be randomized.
 		int mossdeepStevenOffset = romEntry.getIntValue("MossdeepStevenTeamOffset");
 		Trainer mossdeepSteven = trainers.getLast();
+        normalizeTrainerCustomMoveStateBeforeWrite(mossdeepSteven);
+        Map<Integer, List<MoveLearnt>> movesets = this.getMovesLearnt();
 
         // The below code *could* be implemented using trainerPokemonToBytes(mossdeepSteven), but then extra
         // precautions would need to be taken so the mossdeepSteven Trainer's properties aren't changed.
@@ -4495,8 +4512,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 			writeWord(currentOffset, getTrainerPokemonInternalSpeciesId(tp.getSpecies()));
 			writeByte(currentOffset + 2, (byte) tp.getIVs());
 			writeByte(currentOffset + 3, (byte) tp.getLevel());
+            int[] moves = tp.isResetMoves()
+                    ? normalizeTrainerMoveSlots(getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel()))
+                    : normalizeTrainerMoveSlots(tp.getMoves());
 			for (int move = 0; move < 4; move++) {
-				writeWord(currentOffset + 12 + (move * 2), tp.getMoves()[move]);
+				writeWord(currentOffset + 12 + (move * 2), moves[move]);
 			}
 		}
 	}
