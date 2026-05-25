@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 public class Gen3OakLabRivalRuntimeSourceRomTest {
@@ -88,9 +89,7 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
             appendState(report, "after in-memory setStarters", romHandler);
         }
 
-        Path reportPath = reportPath();
-        Files.createDirectories(reportPath.getParent());
-        Files.write(reportPath, report);
+        writeReportOrFail(reportPath(), report);
     }
 
     @Test
@@ -121,8 +120,8 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
         appendTrainerRuntimeSourcePostRandomizationAudit(report, audit);
 
         Path reportPath = reportPath(POST_RANDOMIZATION_REPORT_FILE_NAME);
-        Files.createDirectories(reportPath.getParent());
-        Files.write(reportPath, report);
+        writeReportOrFail(reportPath, report);
+        printPostRandomizationAuditSummary(reportPath, audit);
     }
 
     private static void appendState(List<String> report, String label, Gen3RomHandler romHandler) {
@@ -406,6 +405,42 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
             for (String warning : row.warnings()) {
                 report.add("  " + warning + " trainerId=" + row.trainerId());
             }
+        }
+    }
+
+    private static void writeReportOrFail(Path reportPath, List<String> report) {
+        try {
+            Files.createDirectories(reportPath.getParent());
+            Files.write(reportPath, report);
+            if (!Files.isRegularFile(reportPath) || Files.size(reportPath) == 0) {
+                fail("Expected diagnostic report to be written at " + reportPath);
+            }
+            System.out.println("[UPRFVX-DIAG] reportPath=" + reportPath);
+        } catch (IOException e) {
+            fail("Failed to write diagnostic report at " + reportPath + ": " + e.getClass().getSimpleName());
+        }
+    }
+
+    private static void printPostRandomizationAuditSummary(Path reportPath,
+            Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditReport audit) {
+        Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditSummary summary = audit.summary();
+        System.out.println("[UPRFVX-DIAG] trainerRuntimeSourcePostRandomizationAudit reportPath=" + reportPath
+                + " totalRuntimeSources=" + summary.totalRuntimeSources()
+                + " validRuntimeTrainerCount=" + summary.validRuntimeTrainerCount()
+                + " changedFromBaseCount=" + summary.changedFromBaseCount()
+                + " unchangedFromBaseCount=" + summary.unchangedFromBaseCount()
+                + " outputValidRuntimeNotLoadedCount=" + summary.outputValidRuntimeNotLoadedCount()
+                + " outputLoadedRuntimeMismatchCount=" + summary.outputLoadedRuntimeMismatchCount()
+                + " invalidIgnoredCount=" + summary.invalidIgnoredCount());
+        int warningCount = 0;
+        for (Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditRow row : audit.rows()) {
+            for (String warning : row.warnings()) {
+                warningCount++;
+                System.out.println("[UPRFVX-DIAG] warning trainerId=" + row.trainerId() + " " + warning);
+            }
+        }
+        if (warningCount == 0) {
+            System.out.println("[UPRFVX-DIAG] warnings=none");
         }
     }
 
