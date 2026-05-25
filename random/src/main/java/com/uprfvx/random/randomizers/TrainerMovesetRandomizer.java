@@ -3,6 +3,7 @@ package com.uprfvx.random.randomizers;
 import com.uprfvx.random.Settings;
 import com.uprfvx.romio.constants.AbilityIDs;
 import com.uprfvx.romio.constants.GlobalConstants;
+import com.uprfvx.romio.constants.MoveIDs;
 import com.uprfvx.romio.gamedata.*;
 import com.uprfvx.romio.romhandlers.RomHandler;
 
@@ -262,13 +263,17 @@ public class TrainerMovesetRandomizer extends Randomizer {
     }
 
     private void setTrainerPokemonMoves(TrainerPokemon tp, List<Move> selectedMoves) {
-        if (selectedMoves.isEmpty()) {
+        List<Move> usableMoves = selectedMoves.stream()
+                .filter(this::isUsableTrainerMove)
+                .distinct()
+                .collect(Collectors.toList());
+        if (usableMoves.isEmpty()) {
             return;
         }
-        int movesPicked = selectedMoves.size();
+        int movesPicked = Math.min(usableMoves.size(), 4);
         for (int i = 0; i < 4; i++) {
             if (i < movesPicked) {
-                tp.getMoves()[i] = selectedMoves.get(i).number;
+                tp.getMoves()[i] = usableMoves.get(i).number;
             } else {
                 tp.getMoves()[i] = 0;
             }
@@ -659,7 +664,14 @@ public class TrainerMovesetRandomizer extends Randomizer {
             }
         }
 
-        return moveSelectionPoolAtLevel.stream().distinct().collect(Collectors.toList());
+        return moveSelectionPoolAtLevel.stream()
+                .filter(this::isUsableTrainerMove)
+                .distinct()
+                .collect(Collectors.toList());
+    }
+
+    private boolean isUsableTrainerMove(Move move) {
+        return move != null && move.number != MoveIDs.none;
     }
 
     private <T> List<T> getMovesetForSpecies(Species species, Map<Integer, List<T>> movesets) {
