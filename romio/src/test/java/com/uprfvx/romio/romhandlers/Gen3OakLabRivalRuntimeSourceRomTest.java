@@ -590,22 +590,21 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
         RomHandler.Factory factory = new Gen3RomHandler.Factory();
         try {
             if (!factory.isLoadable(romPath)) {
-                return fail("Configured " + role + " ROM could not be loaded: not loadable as Gen3 ROM");
+                return fail(configuredRomLoadFailure(role, "detection", "not loadable as Gen3 ROM"));
             }
         } catch (RuntimeException e) {
-            return fail("Configured " + role + " ROM could not be loaded: "
-                    + e.getClass().getSimpleName());
+            return fail(configuredRomLoadFailure(role, "detection", e.getClass().getSimpleName()));
         }
         Gen3RomHandler romHandler = (Gen3RomHandler) factory.create();
-        try {
-            if (!romHandler.loadRom(romPath)) {
-                return fail("Configured " + role + " ROM could not be loaded: loadRom returned false");
-            }
-        } catch (RuntimeException e) {
-            return fail("Configured " + role + " ROM could not be loaded: "
-                    + e.getClass().getSimpleName());
+        Gen3RomHandler.Gen3RomLoadDiagnostics diagnostics = romHandler.loadRomForDiagnostics(romPath);
+        if (!diagnostics.loaded()) {
+            return fail(configuredRomLoadFailure(role, diagnostics.phase(), diagnostics.exceptionClass()));
         }
         return romHandler;
+    }
+
+    private static String configuredRomLoadFailure(String role, String phase, String cause) {
+        return "Configured " + role + " ROM could not be loaded during " + phase + ": " + cause;
     }
 
     private static String configuredRomPath() {

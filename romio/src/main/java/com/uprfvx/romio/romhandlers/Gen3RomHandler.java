@@ -282,6 +282,66 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         loadAbilityNames();
     }
 
+    public Gen3RomLoadDiagnostics loadRomForDiagnostics(String filename) {
+        Gen3RomLoadDiagnostics diagnostics = runGen3LoadDiagnosticPhase("detection",
+                () -> loadRomFile(filename));
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("setup", this::midLoadingSetUp);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("item table load", this::loadItems);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("pokemon data load", this::loadSpeciesStats);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("evolution load", this::loadEvolutions);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("move table load", this::loadMoves);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("pokemon palette load", this::loadPokemonPalettes);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("trainer load", this::loadTrainers);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        diagnostics = runGen3LoadDiagnosticPhase("ability table load", this::loadAbilityNames);
+        if (!diagnostics.loaded()) {
+            return diagnostics;
+        }
+        return runGen3LoadDiagnosticPhase("evolution-level estimate", this::estimateEvolutionLevels);
+    }
+
+    private static Gen3RomLoadDiagnostics runGen3LoadDiagnosticPhase(String phase, Runnable phaseLoader) {
+        try {
+            phaseLoader.run();
+            return Gen3RomLoadDiagnostics.loaded(phase);
+        } catch (RuntimeException e) {
+            return Gen3RomLoadDiagnostics.failed(phase, e);
+        }
+    }
+
+    public record Gen3RomLoadDiagnostics(boolean loaded, String phase, String exceptionClass) {
+        static Gen3RomLoadDiagnostics loaded(String phase) {
+            return new Gen3RomLoadDiagnostics(true, phase, null);
+        }
+
+        static Gen3RomLoadDiagnostics failed(String phase, RuntimeException exception) {
+            return new Gen3RomLoadDiagnostics(false, phase, exception.getClass().getSimpleName());
+        }
+    }
+
     @Override
     protected void initRomEntry() {
         for (Gen3RomEntry re : roms) {
