@@ -87,6 +87,43 @@ public class Gen3OakLabRivalScriptTest {
     }
 
     @Test
+    public void cfruDpeHeldItemCustomMovesUseExpandedRawDiagnosticOffsets() {
+        byte[] rom = new byte[2048];
+        int trainerDataOffset = 128;
+        int trainerEntrySize = 40;
+        int trainerId = 26;
+        int trainerOffset = trainerDataOffset + trainerId * trainerEntrySize;
+        int partyOffset = 1800;
+        rom[trainerOffset] = 3;
+        rom[trainerOffset + (trainerEntrySize - 8)] = 1;
+        writePointer(rom, trainerOffset + (trainerEntrySize - 4), partyOffset);
+        writeWord(rom, partyOffset + 2, 12);
+        writeWord(rom, partyOffset + 4, 321);
+        writeWord(rom, partyOffset + Gen3RomHandler.GEN3_TRAINER_MON_ITEM_OFFSET, 99);
+        writeWord(rom, partyOffset + Gen3RomHandler.GEN3_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET, 11);
+        writeWord(rom, partyOffset + Gen3RomHandler.GEN3_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 2, 22);
+        writeWord(rom, partyOffset + Gen3RomHandler.GEN3_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 4, 33);
+        writeWord(rom, partyOffset + Gen3RomHandler.GEN3_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 6, 44);
+        writeWord(rom, partyOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET, 55);
+        writeWord(rom, partyOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET, 343);
+        writeWord(rom, partyOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 2, 643);
+        writeWord(rom, partyOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 4, 116);
+        writeWord(rom, partyOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 6, 68);
+
+        List<Gen3RomHandler.FrlgRawTrainerPartyDiagnostics> diagnostics =
+                Gen3RomHandler.readFrlgRawTrainerPartyDiagnostics(rom, trainerDataOffset, trainerEntrySize,
+                        List.of(trainerId), speciesTable(321), true);
+
+        Gen3RomHandler.FrlgRawTrainerPokemonDiagnostics pokemon = diagnostics.get(0).party().get(0);
+        assertEquals(List.of(343, 643, 116, 68), pokemon.rawMoves());
+        assertTrue(pokemon.layoutComparison().contains("classic=TrainerPokemonLayoutDiagnostics[rowSize=16"));
+        assertTrue(pokemon.layoutComparison().contains("moves=[11, 22, 33, 44]"));
+        assertTrue(pokemon.layoutComparison().contains("cfruExpanded=TrainerPokemonLayoutDiagnostics[rowSize=32"));
+        assertTrue(pokemon.layoutComparison().contains("moves=[343, 643, 116, 68]"));
+        assertTrue(pokemon.layoutComparison().contains("decodeDiverges=true"));
+    }
+
+    @Test
     public void oakLabStarterScriptContainsSeparatePlayerAndRivalStarterSpecies() {
         byte[] rom = new byte[1024];
         writeWord(rom, 64, 1001);

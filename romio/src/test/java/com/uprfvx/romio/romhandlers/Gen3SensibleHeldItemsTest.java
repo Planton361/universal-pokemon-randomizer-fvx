@@ -1,6 +1,7 @@
 package com.uprfvx.romio.romhandlers;
 
 import com.uprfvx.romio.constants.ItemIDs;
+import com.uprfvx.romio.constants.Gen3Constants;
 import com.uprfvx.romio.gamedata.Item;
 import com.uprfvx.romio.gamedata.Move;
 import com.uprfvx.romio.gamedata.MoveLearnt;
@@ -11,12 +12,14 @@ import com.uprfvx.romio.gamedata.Type;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -112,12 +115,59 @@ public class Gen3SensibleHeldItemsTest {
         assertFalse(trainer.pokemonHaveCustomMoves());
     }
 
+    @Test
+    public void cfruDpeHeldItemCustomMoveTrainerWriterUsesExpandedLayout() throws Exception {
+        Gen3RomHandler romHandler = new Gen3RomHandler();
+        setField(romHandler, "useCfruDpeGen9SpeciesCount", true);
+        int[] pokedexToInternal = new int[400];
+        for (int i = 0; i < pokedexToInternal.length; i++) {
+            pokedexToInternal[i] = i;
+        }
+        setField(romHandler, "pokedexToInternal", pokedexToInternal);
+
+        TrainerPokemon pokemon = new TrainerPokemon();
+        Species species = new Species(25);
+        species.setName("Pikachu");
+        pokemon.setSpecies(species);
+        pokemon.setLevel(9);
+        pokemon.setIVs(31);
+        pokemon.setAbilitySlot(2);
+        pokemon.setNature((byte) 5);
+        pokemon.setHeldItem(new Item(ItemIDs.potion, "Potion"));
+        pokemon.setMoves(new int[] {343, 643, 116, 68});
+        Trainer trainer = new Trainer();
+        trainer.setPokemon(new ArrayList<>(List.of(pokemon)));
+
+        Method trainerPokemonToBytes = Gen3RomHandler.class.getDeclaredMethod("trainerPokemonToBytes", Trainer.class);
+        trainerPokemonToBytes.setAccessible(true);
+        byte[] bytes = (byte[]) trainerPokemonToBytes.invoke(romHandler, trainer);
+
+        assertEquals(Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_SIZE, bytes.length);
+        assertEquals(2, bytes[6] & 0xFF);
+        assertEquals(5, bytes[7] & 0xFF);
+        assertEquals(31, bytes[8] & 0xFF);
+        assertEquals(Gen3Constants.itemIDToInternal(ItemIDs.potion),
+                readWord(bytes, Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET));
+        assertEquals(343, readWord(bytes, Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET));
+        assertEquals(643, readWord(bytes, Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 2));
+        assertEquals(116, readWord(bytes, Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 4));
+        assertEquals(68, readWord(bytes, Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET + 6));
+    }
+
     private static Gen3RomHandler romHandlerWithItems() throws ReflectiveOperationException {
         Gen3RomHandler romHandler = new Gen3RomHandler();
-        Field itemsField = Gen3RomHandler.class.getDeclaredField("items");
-        itemsField.setAccessible(true);
-        itemsField.set(romHandler, itemsById(512));
+        setField(romHandler, "items", itemsById(512));
         return romHandler;
+    }
+
+    private static void setField(Object target, String fieldName, Object value) throws ReflectiveOperationException {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
+    private static int readWord(byte[] data, int offset) {
+        return (data[offset] & 0xFF) | ((data[offset + 1] & 0xFF) << 8);
     }
 
     private static List<Item> itemsById(int size) {
