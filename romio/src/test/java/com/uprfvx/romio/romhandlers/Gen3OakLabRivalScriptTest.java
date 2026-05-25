@@ -3,10 +3,14 @@ package com.uprfvx.romio.romhandlers;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.gamedata.Trainer;
 import com.uprfvx.romio.gamedata.TrainerPokemon;
+import com.uprfvx.romio.constants.ItemIDs;
+import com.uprfvx.romio.gamedata.Item;
+import com.uprfvx.romio.romhandlers.romentries.Gen3RomEntry;
 
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -667,6 +672,50 @@ public class Gen3OakLabRivalScriptTest {
     }
 
     @Test
+    public void runtimeTrainerSourceSaveMergesOverlappingOldPartyRangesBeforeFreeing() throws Exception {
+        RuntimeSourceSaveTestGen3RomHandler romHandler = new RuntimeSourceSaveTestGen3RomHandler();
+        Gen3RomEntry romEntry = new Gen3RomEntry(Gen3RomEntry.READER.readEntriesFromFile("gen3_offsets.ini").get(0));
+        int trainerDataOffset = 0x100;
+        int trainerEntrySize = 40;
+        int firstTrainerId = 531;
+        int secondTrainerId = 532;
+        int firstOldPartyOffset = 0x7000;
+        int secondOldPartyOffset = firstOldPartyOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_SIZE;
+        romEntry.putIntValue("TrainerData", trainerDataOffset);
+        romEntry.putIntValue("TrainerEntrySize", trainerEntrySize);
+        byte[] rom = new byte[0x9000];
+        Species[] species = speciesTable(100, 101, 102, 103);
+        writeCfruHeldItemCustomTrainerDataRow(rom, trainerDataOffset, trainerEntrySize, firstTrainerId,
+                firstOldPartyOffset, 2, 100, 101);
+        writeCfruHeldItemCustomTrainerDataRow(rom, trainerDataOffset, trainerEntrySize, secondTrainerId,
+                secondOldPartyOffset, 2, 102, 103);
+        setField(romHandler, "romEntry", romEntry);
+        setField(romHandler, "rom", rom);
+        setField(romHandler, "pokesInternal", species);
+        setField(romHandler, "useCfruDpeGen9SpeciesCount", true);
+        setField(romHandler, "pokedexToInternal", identityMap(200));
+        romHandler.initTables();
+        romHandler.addTrainer(trainerWithItemAndCustomMoves(firstTrainerId, species[100], 14));
+        romHandler.addTrainer(trainerWithItemAndCustomMoves(secondTrainerId, species[102], 15));
+        runtimeTrainerSourceIds(romHandler).add(firstTrainerId);
+        runtimeTrainerSourceIds(romHandler).add(secondTrainerId);
+
+        assertTrue(Gen3RomHandler.mergeFrlgRuntimeTrainerSourceOldPartyRanges(List.of(
+                new Gen3RomHandler.FrlgRuntimeTrainerSourceOldPartyRange(firstTrainerId, firstOldPartyOffset, 64),
+                new Gen3RomHandler.FrlgRuntimeTrainerSourceOldPartyRange(secondTrainerId, secondOldPartyOffset, 64)))
+                .stream()
+                .anyMatch(range -> range.start() == firstOldPartyOffset && range.length() == 96));
+        assertDoesNotThrow(() -> romHandler.saveFrlgRuntimeTrainerSourceRows(trainerDataOffset, 256,
+                trainerEntrySize, 12));
+
+        int firstNewPartyOffset = readPointerFromTestRom(rom,
+                trainerDataOffset + firstTrainerId * trainerEntrySize + trainerEntrySize - 4);
+        int secondNewPartyOffset = readPointerFromTestRom(rom,
+                trainerDataOffset + secondTrainerId * trainerEntrySize + trainerEntrySize - 4);
+        assertEquals(32, Math.abs(secondNewPartyOffset - firstNewPartyOffset));
+    }
+
+    @Test
     public void referenceOakLabSourceUsesRivalStarterScriptVariableBeforeBattle() throws IOException {
         Path oakLabScriptPath = referenceSourcePath("data/maps/PalletTown_ProfessorOaksLab/scripts.inc");
         assumeTrue(Files.isRegularFile(oakLabScriptPath), "pret FireRed reference source is not available");
@@ -802,9 +851,21 @@ public class Gen3OakLabRivalScriptTest {
     private static Trainer trainer(int trainerId, Species species, int level) {
         Trainer trainer = new Trainer();
         trainer.setIndex(trainerId);
+        trainer.setName("Test" + trainerId);
         trainer.setTrainerclass(1);
         trainer.setTrainerPic(7);
         trainer.getPokemon().add(trainerPokemon(species, level));
+        return trainer;
+    }
+
+    private static Trainer trainerWithItemAndCustomMoves(int trainerId, Species species, int level) {
+        Trainer trainer = trainer(trainerId, species, level);
+        TrainerPokemon pokemon = trainer.getPokemon().get(0);
+        pokemon.setHeldItem(new Item(ItemIDs.potion, "Potion"));
+        pokemon.setMoves(new int[] {343, 116, 68, 33});
+        pokemon.setIVs(31);
+        pokemon.setAbilitySlot(2);
+        pokemon.setNature((byte) 5);
         return trainer;
     }
 
@@ -825,6 +886,14 @@ public class Gen3OakLabRivalScriptTest {
         return trainers;
     }
 
+    private static int[] identityMap(int size) {
+        int[] identity = new int[size];
+        for (int i = 0; i < identity.length; i++) {
+            identity[i] = i;
+        }
+        return identity;
+    }
+
     private static Species[] speciesTable(int... rawSpeciesIds) {
         int maxSpeciesId = 0;
         for (int rawSpeciesId : rawSpeciesIds) {
@@ -838,6 +907,52 @@ public class Gen3OakLabRivalScriptTest {
             species[rawSpeciesId] = entry;
         }
         return species;
+    }
+
+    private static void writeCfruHeldItemCustomTrainerDataRow(byte[] rom, int trainerDataOffset, int trainerEntrySize,
+                                                              int trainerId, int partyOffset, int partySize,
+                                                              int... rawSpeciesIds) {
+        int trainerOffset = trainerDataOffset + trainerId * trainerEntrySize;
+        rom[trainerOffset] = 3;
+        rom[trainerOffset + (trainerEntrySize - 8)] = (byte) partySize;
+        writePointer(rom, trainerOffset + (trainerEntrySize - 4), partyOffset);
+        for (int i = 0; i < rawSpeciesIds.length; i++) {
+            int pokemonOffset = partyOffset + i * Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_SIZE;
+            writeWord(rom, pokemonOffset + 2, 10 + i);
+            writeWord(rom, pokemonOffset + 4, rawSpeciesIds[i]);
+            writeWord(rom, pokemonOffset + Gen3RomHandler.CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET,
+                    ItemIDs.potion);
+        }
+    }
+
+    private static int readPointerFromTestRom(byte[] rom, int offset) {
+        int pointer = (rom[offset] & 0xFF)
+                | ((rom[offset + 1] & 0xFF) << 8)
+                | ((rom[offset + 2] & 0xFF) << 16)
+                | ((rom[offset + 3] & 0xFF) << 24);
+        return pointer - 0x8000000;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Integer> runtimeTrainerSourceIds(Gen3RomHandler romHandler) throws ReflectiveOperationException {
+        Field field = Gen3RomHandler.class.getDeclaredField("frlgRuntimeTrainerSourceIds");
+        field.setAccessible(true);
+        return (Set<Integer>) field.get(romHandler);
+    }
+
+    private static void setField(Object target, String fieldName, Object value) throws ReflectiveOperationException {
+        Class<?> current = target.getClass();
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(fieldName);
+                field.setAccessible(true);
+                field.set(target, value);
+                return;
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(fieldName);
     }
 
     private static Path referenceSourcePath(String relativePath) {
@@ -864,6 +979,16 @@ public class Gen3OakLabRivalScriptTest {
             }
         }
         return candidates.get(0);
+    }
+
+    private static class RuntimeSourceSaveTestGen3RomHandler extends Gen3RomHandler {
+        void addTrainer(Trainer trainer) {
+            trainers.add(trainer);
+        }
+
+        void initTables() {
+            initTextTables();
+        }
     }
 
     private static class ThrowingDiagnosticRomHandler extends Gen3RomHandler {
