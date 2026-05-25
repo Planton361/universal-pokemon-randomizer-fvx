@@ -832,50 +832,83 @@ public class Gen3Constants {
         // Rival Battles
 
         // Initial Rival
-        tag(trs, 0x148, "RIVAL1-0");
-        tag(trs, 0x146, "RIVAL1-1");
-        tag(trs, 0x147, "RIVAL1-2");
+        tagFrlgRival(trs, 0x148, "RIVAL1-0");
+        tagFrlgRival(trs, 0x146, "RIVAL1-1");
+        tagFrlgRival(trs, 0x147, "RIVAL1-2");
 
         // Route 22 (weak)
-        tag(trs, 0x14B, "RIVAL2-0");
-        tag(trs, 0x149, "RIVAL2-1");
-        tag(trs, 0x14A, "RIVAL2-2");
+        tagFrlgRival(trs, 0x14B, "RIVAL2-0");
+        tagFrlgRival(trs, 0x149, "RIVAL2-1");
+        tagFrlgRival(trs, 0x14A, "RIVAL2-2");
 
         // Cerulean
-        tag(trs, 0x14E, "RIVAL3-0");
-        tag(trs, 0x14C, "RIVAL3-1");
-        tag(trs, 0x14D, "RIVAL3-2");
+        tagFrlgRival(trs, 0x14E, "RIVAL3-0");
+        tagFrlgRival(trs, 0x14C, "RIVAL3-1");
+        tagFrlgRival(trs, 0x14D, "RIVAL3-2");
 
         // SS Anne
-        tag(trs, 0x1AC, "RIVAL4-0");
-        tag(trs, 0x1AA, "RIVAL4-1");
-        tag(trs, 0x1AB, "RIVAL4-2");
+        tagFrlgRival(trs, 0x1AC, "RIVAL4-0");
+        tagFrlgRival(trs, 0x1AA, "RIVAL4-1");
+        tagFrlgRival(trs, 0x1AB, "RIVAL4-2");
 
         // Pokemon Tower
-        tag(trs, 0x1AF, "RIVAL5-0");
-        tag(trs, 0x1AD, "RIVAL5-1");
-        tag(trs, 0x1AE, "RIVAL5-2");
+        tagFrlgRival(trs, 0x1AF, "RIVAL5-0");
+        tagFrlgRival(trs, 0x1AD, "RIVAL5-1");
+        tagFrlgRival(trs, 0x1AE, "RIVAL5-2");
 
         // Silph Co
-        tag(trs, 0x1B2, "RIVAL6-0");
-        tag(trs, 0x1B0, "RIVAL6-1");
-        tag(trs, 0x1B1, "RIVAL6-2");
+        tagFrlgRival(trs, 0x1B2, "RIVAL6-0");
+        tagFrlgRival(trs, 0x1B0, "RIVAL6-1");
+        tagFrlgRival(trs, 0x1B1, "RIVAL6-2");
 
         // Route 22 (strong)
-        tag(trs, 0x1B5, "RIVAL7-0");
-        tag(trs, 0x1B3, "RIVAL7-1");
-        tag(trs, 0x1B4, "RIVAL7-2");
+        tagFrlgRival(trs, 0x1B5, "RIVAL7-0");
+        tagFrlgRival(trs, 0x1B3, "RIVAL7-1");
+        tagFrlgRival(trs, 0x1B4, "RIVAL7-2");
 
         // E4 Round 1
-        tag(trs, 0x1B8, "RIVAL8-0");
-        tag(trs, 0x1B6, "RIVAL8-1");
-        tag(trs, 0x1B7, "RIVAL8-2");
+        tagFrlgRival(trs, 0x1B8, "RIVAL8-0");
+        tagFrlgRival(trs, 0x1B6, "RIVAL8-1");
+        tagFrlgRival(trs, 0x1B7, "RIVAL8-2");
 
         // E4 Round 2
-        tag(trs, 0x2E5, "RIVAL9-0");
-        tag(trs, 0x2E3, "RIVAL9-1");
-        tag(trs, 0x2E4, "RIVAL9-2");
+        tagFrlgRival(trs, 0x2E5, "RIVAL9-0");
+        tagFrlgRival(trs, 0x2E3, "RIVAL9-1");
+        tagFrlgRival(trs, 0x2E4, "RIVAL9-2");
 
+    }
+
+    private static void tagFrlgRival(List<Trainer> trainers, int trainerNum, String tag) {
+        int index = trainerNum - 1;
+        if (index < 0 || index >= trainers.size()) {
+            return;
+        }
+
+        applyFrlgRivalTagMetadata(trainers.get(index), tag);
+    }
+
+    public static void applyFrlgRivalTagMetadata(Trainer trainer, String tag) {
+        trainer.setTag(tag);
+        int forceStarterPosition = frlgRivalForceStarterPosition(tag);
+        if (forceStarterPosition >= 0) {
+            trainer.setForceStarterPosition(forceStarterPosition);
+        }
+    }
+
+    private static int frlgRivalForceStarterPosition(String tag) {
+        if (tag == null) {
+            return -1;
+        }
+        if (tag.startsWith("RIVAL1-")) {
+            return 0;
+        }
+        if (tag.startsWith("RIVAL2-")) {
+            return 1;
+        }
+        if (tag.startsWith("RIVAL7-")) {
+            return 5;
+        }
+        return -1;
     }
 
     private static void tag(List<Trainer> trainers, int trainerNum, String tag) {
