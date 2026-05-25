@@ -2305,6 +2305,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     static boolean isValidFrlgRuntimeTrainerDataRow(byte[] rom, int baseOffset, int entryLen, int trainerId) {
+        return isValidFrlgRuntimeTrainerDataRow(rom, baseOffset, entryLen, trainerId, false);
+    }
+
+    static boolean isValidFrlgRuntimeTrainerDataRow(byte[] rom, int baseOffset, int entryLen, int trainerId,
+                                                    boolean cfruDpeMode) {
         int trainerOffset = baseOffset + trainerId * entryLen;
         if (rom == null || baseOffset < 0 || entryLen <= 8
                 || trainerOffset < 0 || trainerOffset + entryLen > rom.length) {
@@ -2313,7 +2318,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         int partyFlags = rom[trainerOffset] & 0xFF;
         int partySize = rom[trainerOffset + (entryLen - 8)] & 0xFF;
         int partyPointer = readPointerFromRom(rom, trainerOffset + (entryLen - 4));
-        int stride = (partyFlags & 1) == 1 ? 16 : 8;
+        int stride = trainerPokemonStride(partyFlags, cfruDpeMode);
         return partySize > 0 && partySize <= 6
                 && partyPointer != -1
                 && partyPointer >= 0
@@ -2322,9 +2327,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     static boolean isStrictFrlgRuntimeTrainerDataRow(byte[] rom, int baseOffset, int entryLen, int trainerId,
                                                      Species[] speciesByInternalId) {
-        return isValidFrlgRuntimeTrainerDataRow(rom, baseOffset, entryLen, trainerId)
+        return isStrictFrlgRuntimeTrainerDataRow(rom, baseOffset, entryLen, trainerId, speciesByInternalId, false);
+    }
+
+    static boolean isStrictFrlgRuntimeTrainerDataRow(byte[] rom, int baseOffset, int entryLen, int trainerId,
+                                                     Species[] speciesByInternalId, boolean cfruDpeMode) {
+        return isValidFrlgRuntimeTrainerDataRow(rom, baseOffset, entryLen, trainerId, cfruDpeMode)
                 && isRawPartySpeciesPlausible(readFrlgRawTrainerPartyDiagnostics(rom, baseOffset, entryLen,
-                List.of(trainerId), speciesByInternalId).get(0), speciesByInternalId);
+                List.of(trainerId), speciesByInternalId, cfruDpeMode).get(0), speciesByInternalId);
     }
 
     private void writeStarterText(List<Species> starters) {
@@ -3665,6 +3675,16 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     record FrlgRuntimeTrainerSyncTarget(int trainerId, String tag) {
     }
 
+    private record FrlgRuntimeTrainerSourceRowWrite(int trainerId, Trainer trainer, int trainerOffset,
+                                                    int oldPartyOffset, int oldPartyLength) {
+    }
+
+    record FrlgRuntimeTrainerSourceOldPartyRange(int trainerId, int start, int length) {
+        int endExclusive() {
+            return start + length;
+        }
+    }
+
     enum FrlgTrainerRuntimeSourceAuditMode {
         ALL,
         UNLOADED_VALID_PARTIES,
@@ -4917,6 +4937,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         new DataRewriter<Trainer>().rewriteData(pokemonPointerOffset, tr, this::trainerPokemonToBytes,
                 (oldDataOffset) -> readTrainerPokemonDataLength(trOffset));
 
+        writeTrainerDataRowMetadata(tr, trOffset, entryLen, nameLen);
+    }
+
+    private void writeTrainerDataRowWithoutFreeingOldParty(Trainer tr, int trOffset, int entryLen, int nameLen) {
+        int pokemonPointerOffset = trOffset + (entryLen - 4);
+        byte[] pokemonData = trainerPokemonToBytes(tr);
+        int newPokemonDataOffset = findAndUnfreeSpace(pokemonData.length);
+        writePointer(pokemonPointerOffset, newPokemonDataOffset);
+        writeBytes(newPokemonDataOffset, pokemonData);
+
+        writeTrainerDataRowMetadata(tr, trOffset, entryLen, nameLen);
+    }
+
+    private void writeTrainerDataRowMetadata(Trainer tr, int trOffset, int entryLen, int nameLen) {
         writeByte(trOffset, (byte) tr.getPoketype());
         writeTrainerClassSpriteFields(tr, trOffset);
         writeFixedLengthString(tr.getName(), trOffset + GEN3_TRAINER_NAME_OFFSET, nameLen);
@@ -4950,6 +4984,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     void saveFrlgRuntimeTrainerSourceRows(int baseOffset, int loadedTrainerCount, int entryLen, int nameLen) {
+        List<FrlgRuntimeTrainerSourceRowWrite> rowsToWrite = new ArrayList<>();
         for (int trainerId : frlgRuntimeTrainerSourceIdsToSave(loadedTrainerCount)) {
             Trainer tr = findTrainerByIndex(trainerId);
             if (tr == null) {
@@ -4960,11 +4995,53 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 writeTrainerClassSpriteFields(tr, trainerOffset);
                 continue;
             }
-            if (!isStrictFrlgRuntimeTrainerDataRow(rom, baseOffset, entryLen, trainerId, pokesInternal)) {
+            if (!isStrictFrlgRuntimeTrainerDataRow(rom, baseOffset, entryLen, trainerId, pokesInternal,
+                    useCfruDpeGen9SpeciesCount)) {
                 continue;
             }
-            writeTrainerDataRow(tr, trainerOffset, entryLen, nameLen);
+            rowsToWrite.add(new FrlgRuntimeTrainerSourceRowWrite(trainerId, tr, trainerOffset,
+                    readPointer(trainerOffset + (entryLen - 4)), readTrainerPokemonDataLength(trainerOffset)));
         }
+
+        freeFrlgRuntimeTrainerSourceOldPartyRanges(rowsToWrite);
+        for (FrlgRuntimeTrainerSourceRowWrite row : rowsToWrite) {
+            writeTrainerDataRowWithoutFreeingOldParty(row.trainer(), row.trainerOffset(), entryLen, nameLen);
+        }
+    }
+
+    private void freeFrlgRuntimeTrainerSourceOldPartyRanges(List<FrlgRuntimeTrainerSourceRowWrite> rowsToWrite) {
+        for (FrlgRuntimeTrainerSourceOldPartyRange range : mergeFrlgRuntimeTrainerSourceOldPartyRanges(rowsToWrite
+                .stream()
+                .map(row -> new FrlgRuntimeTrainerSourceOldPartyRange(row.trainerId(), row.oldPartyOffset(),
+                        row.oldPartyLength()))
+                .toList())) {
+            freeSpace(range.start(), range.length());
+        }
+    }
+
+    static List<FrlgRuntimeTrainerSourceOldPartyRange> mergeFrlgRuntimeTrainerSourceOldPartyRanges(
+            List<FrlgRuntimeTrainerSourceOldPartyRange> ranges) {
+        List<FrlgRuntimeTrainerSourceOldPartyRange> sortedRanges = ranges.stream()
+                .filter(range -> range.start() >= 0 && range.length() > 0)
+                .sorted(Comparator.comparingInt(FrlgRuntimeTrainerSourceOldPartyRange::start))
+                .toList();
+        List<FrlgRuntimeTrainerSourceOldPartyRange> mergedRanges = new ArrayList<>();
+        for (FrlgRuntimeTrainerSourceOldPartyRange range : sortedRanges) {
+            if (mergedRanges.isEmpty()) {
+                mergedRanges.add(range);
+                continue;
+            }
+            FrlgRuntimeTrainerSourceOldPartyRange previous = mergedRanges.get(mergedRanges.size() - 1);
+            if (range.start() <= previous.endExclusive()) {
+                int mergedEnd = Math.max(previous.endExclusive(), range.endExclusive());
+                mergedRanges.set(mergedRanges.size() - 1,
+                        new FrlgRuntimeTrainerSourceOldPartyRange(previous.trainerId(), previous.start(),
+                                mergedEnd - previous.start()));
+            } else {
+                mergedRanges.add(range);
+            }
+        }
+        return mergedRanges;
     }
 
     Set<Integer> frlgRuntimeTrainerSourceIdsToSave(int loadedTrainerCount) {
