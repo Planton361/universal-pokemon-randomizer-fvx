@@ -1,6 +1,7 @@
 package com.uprfvx.random.randomizers;
 
 import com.uprfvx.random.Settings;
+import com.uprfvx.romio.constants.Gen3Constants;
 import com.uprfvx.romio.gamedata.Evolution;
 import com.uprfvx.romio.gamedata.EvolutionType;
 import com.uprfvx.romio.gamedata.MegaEvolution;
@@ -314,6 +315,61 @@ public class TrainerSpecialRulesTest {
     }
 
     @Test
+    public void frlgRoute22RivalTagMetadataProtectsStarterSlot() {
+        Species playerStarter = species(101, "PlayerStarter");
+        Species rivalStarter = species(102, "RivalStarter");
+        Species friendStarter = species(103, "FriendStarter");
+        Species filler = species(301, "Filler");
+        Species replacement = species(302, "Replacement");
+        List<Trainer> trainers = trainersThrough(0x14B, filler);
+        Trainer route22Rival = trainers.get(0x14B - 1);
+        route22Rival.setPokemon(new ArrayList<>(List.of(pokemon(filler, 20), pokemon(filler, 9))));
+        Gen3Constants.trainerTagsFRLG(trainers);
+        padForcedStarterSlots(trainers, filler);
+        TrainerTestRomHandler handler = TrainerTestRomHandler.create(
+                List.of(playerStarter, rivalStarter, friendStarter, filler, replacement),
+                trainers,
+                List.of(playerStarter, rivalStarter, friendStarter),
+                Collections.emptyList());
+        Settings settings = new Settings();
+        settings.setTrainersMod(Settings.TrainersMod.RANDOM);
+        settings.setRivalCarriesStarterThroughout(true);
+        TrainerPokemonRandomizer randomizer = new TrainerPokemonRandomizer(handler.proxy, settings, new Random(17));
+
+        randomizer.makeRivalCarryStarter();
+        randomizer.randomizeTrainerPokes();
+        randomizer.makeRivalCarryStarter();
+
+        assertEquals("RIVAL2-0", route22Rival.getTag());
+        assertEquals(1, route22Rival.getForceStarterPosition());
+        assertSame(rivalStarter, route22Rival.getPokemon().get(1).getSpecies());
+        assertNotSame(rivalStarter, route22Rival.getPokemon().get(0).getSpecies());
+        assertTrue(route22Rival.getPokemon().get(0).isResetMoves());
+    }
+
+    @Test
+    public void frlgRuntimeRoute22RivalMetadataProtectsStarterSlot() {
+        Species playerStarter = species(101, "PlayerStarter");
+        Species rivalStarter = species(102, "RivalStarter");
+        Species friendStarter = species(103, "FriendStarter");
+        Species filler = species(301, "Filler");
+        Trainer runtimeRoute22Rival = trainer(0x14B, null, pokemon(filler, 20), pokemon(filler, 9));
+        Gen3Constants.applyFrlgRivalTagMetadata(runtimeRoute22Rival, "RIVAL2-0");
+        TrainerTestRomHandler handler = TrainerTestRomHandler.create(
+                List.of(playerStarter, rivalStarter, friendStarter, filler),
+                List.of(runtimeRoute22Rival),
+                List.of(playerStarter, rivalStarter, friendStarter),
+                Collections.emptyList());
+
+        TrainerPokemonRandomizer randomizer = new TrainerPokemonRandomizer(handler.proxy, new Settings(), new Random(5));
+        randomizer.makeRivalCarryStarter();
+
+        assertEquals(1, runtimeRoute22Rival.getForceStarterPosition());
+        assertSame(rivalStarter, runtimeRoute22Rival.getPokemon().get(1).getSpecies());
+        assertNotSame(rivalStarter, runtimeRoute22Rival.getPokemon().get(0).getSpecies());
+    }
+
+    @Test
     public void route22StyleRivalKeepsWeakStageStarterAtLowLevel() {
         Species playerStarter = species(101, "PlayerStarter");
         Species rivalStarter = species(102, "RivalStarter");
@@ -425,6 +481,22 @@ public class TrainerSpecialRulesTest {
         trainerPokemon.setLevel(level);
         trainerPokemon.setAbilitySlot(1);
         return trainerPokemon;
+    }
+
+    private static List<Trainer> trainersThrough(int highestTrainerIndex, Species filler) {
+        List<Trainer> trainers = new ArrayList<>();
+        for (int trainerIndex = 1; trainerIndex <= highestTrainerIndex; trainerIndex++) {
+            trainers.add(trainer(trainerIndex, null, pokemon(filler, 5)));
+        }
+        return trainers;
+    }
+
+    private static void padForcedStarterSlots(List<Trainer> trainers, Species filler) {
+        for (Trainer trainer : trainers) {
+            while (trainer.getForceStarterPosition() >= trainer.getPokemon().size()) {
+                trainer.getPokemon().add(pokemon(filler, 5));
+            }
+        }
     }
 
     private static List<Species> speciesRange(int count) {

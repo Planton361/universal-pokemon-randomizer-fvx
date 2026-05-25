@@ -4179,7 +4179,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 continue;
             }
             Trainer tr = readTrainerDataRow(target.trainerId(), trOffset, entryLen, tcnames);
-            tr.setTag(target.tag());
+            Gen3Constants.applyFrlgRivalTagMetadata(tr, target.tag());
             trainers.add(tr);
             frlgRuntimeTrainerSourceIds.add(target.trainerId());
         }
