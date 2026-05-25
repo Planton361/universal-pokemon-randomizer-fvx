@@ -67,7 +67,7 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
         assumeTrue(romPath != null && !romPath.isBlank(),
                 "Set -D" + ROM_PATH_PROPERTY + "=<private-rom> to run the Oak Lab Rival source report.");
 
-        Gen3RomHandler romHandler = loadGen3Rom(romPath);
+        Gen3RomHandler romHandler = loadGen3Rom("single", romPath);
         List<String> report = new ArrayList<>();
         report.add("Oak Lab Rival runtime source report");
         report.add("ROM path: <redacted>");
@@ -102,8 +102,8 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
                         + TRAINER_RUNTIME_SOURCE_RANDOMIZED_ROM_PROPERTY + "=<private-output-rom> to run the "
                         + "trainer runtime source post-randomization audit.");
 
-        Gen3RomHandler baseRomHandler = loadGen3Rom(baseRomPath);
-        Gen3RomHandler randomizedRomHandler = loadGen3Rom(randomizedRomPath);
+        Gen3RomHandler baseRomHandler = loadGen3Rom("base", baseRomPath);
+        Gen3RomHandler randomizedRomHandler = loadGen3Rom("randomized", randomizedRomPath);
         Gen3RomHandler.FrlgTrainerRuntimeSourcePostRandomizationAuditReport audit =
                 baseRomHandler.getFrlgTrainerRuntimeSourcePostRandomizationAuditForDiagnostics(randomizedRomHandler);
 
@@ -586,12 +586,25 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
         throw new IllegalArgumentException("Configured starter species was not loaded: " + name);
     }
 
-    private static Gen3RomHandler loadGen3Rom(String romPath) {
+    private static Gen3RomHandler loadGen3Rom(String role, String romPath) {
         RomHandler.Factory factory = new Gen3RomHandler.Factory();
-        assertTrue(factory.isLoadable(romPath), "Configured ROM is not loadable as a Gen3 ROM.");
+        try {
+            if (!factory.isLoadable(romPath)) {
+                return fail(configuredRomLoadFailure(role, "detection", "not loadable as Gen3 ROM"));
+            }
+        } catch (RuntimeException e) {
+            return fail(configuredRomLoadFailure(role, "detection", e.getClass().getSimpleName()));
+        }
         Gen3RomHandler romHandler = (Gen3RomHandler) factory.create();
-        assertTrue(romHandler.loadRom(romPath), "Configured Gen3 ROM could not be loaded.");
+        Gen3RomHandler.Gen3RomLoadDiagnostics diagnostics = romHandler.loadRomForDiagnostics(romPath);
+        if (!diagnostics.loaded()) {
+            return fail(configuredRomLoadFailure(role, diagnostics.phase(), diagnostics.exceptionClass()));
+        }
         return romHandler;
+    }
+
+    private static String configuredRomLoadFailure(String role, String phase, String cause) {
+        return "Configured " + role + " ROM could not be loaded during " + phase + ": " + cause;
     }
 
     private static String configuredRomPath() {

@@ -53,6 +53,17 @@ public class Gen3OakLabRivalScriptTest {
     }
 
     @Test
+    public void gen3RomLoadDiagnosticsReportsFailingPhaseWithoutRomPath() {
+        ThrowingDiagnosticRomHandler romHandler = new ThrowingDiagnosticRomHandler("trainer load");
+
+        Gen3RomHandler.Gen3RomLoadDiagnostics diagnostics = romHandler.loadRomForDiagnostics("<redacted>");
+
+        assertFalse(diagnostics.loaded());
+        assertEquals("trainer load", diagnostics.phase());
+        assertEquals("ArrayIndexOutOfBoundsException", diagnostics.exceptionClass());
+    }
+
+    @Test
     public void oakLabStarterScriptContainsSeparatePlayerAndRivalStarterSpecies() {
         byte[] rom = new byte[1024];
         writeWord(rom, 64, 1001);
@@ -793,5 +804,64 @@ public class Gen3OakLabRivalScriptTest {
             }
         }
         return candidates.get(0);
+    }
+
+    private static class ThrowingDiagnosticRomHandler extends Gen3RomHandler {
+        private final String failingPhase;
+
+        ThrowingDiagnosticRomHandler(String failingPhase) {
+            this.failingPhase = failingPhase;
+        }
+
+        @Override
+        protected void loadRomFile(String filename) {
+            throwIfPhase("detection");
+        }
+
+        @Override
+        public void midLoadingSetUp() {
+            throwIfPhase("setup");
+        }
+
+        @Override
+        public void loadItems() {
+            throwIfPhase("item table load");
+        }
+
+        @Override
+        public void loadSpeciesStats() {
+            throwIfPhase("pokemon data load");
+        }
+
+        @Override
+        public void loadEvolutions() {
+            throwIfPhase("evolution load");
+        }
+
+        @Override
+        public void loadMoves() {
+            throwIfPhase("move table load");
+        }
+
+        @Override
+        public void loadPokemonPalettes() {
+            throwIfPhase("pokemon palette load");
+        }
+
+        @Override
+        public void loadTrainers() {
+            throwIfPhase("trainer load");
+        }
+
+        @Override
+        protected void estimateEvolutionLevels() {
+            throwIfPhase("evolution-level estimate");
+        }
+
+        private void throwIfPhase(String phase) {
+            if (phase.equals(failingPhase)) {
+                throw new ArrayIndexOutOfBoundsException();
+            }
+        }
     }
 }
