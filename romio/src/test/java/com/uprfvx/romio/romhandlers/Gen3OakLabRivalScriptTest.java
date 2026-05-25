@@ -67,7 +67,8 @@ public class Gen3OakLabRivalScriptTest {
     public void gen3RomLoadDiagnosticsReportsTrainerLoadBoundsDetail() {
         ThrowingDiagnosticRomHandler romHandler = new ThrowingDiagnosticRomHandler("trainer load",
                 "trainer=329 slot=1 layout=held-item-custom-moves expectedLayout=held-item-custom-moves "
-                        + "bytesPerSlot=16 partyFlags=3 partyCount=2 trainerOffset=in-rom partyPointer=out-of-rom "
+                        + "bytesPerSlot=16 cfruDpeMode=false loadedSpeciesCount=412 loadedMoveCount=642 "
+                        + "partyFlags=3 partyCount=2 trainerOffset=in-rom partyPointer=out-of-rom "
                         + "slotOffset=out-of-rom rawSpecies=9999 speciesStatus=out-of-bounds rawItem=13 "
                         + "itemStatus=in-bounds rawMoves=[1, 2, 0, 9999] "
                         + "moveStatus=[in-bounds, in-bounds, none, out-of-bounds]");
@@ -78,7 +79,8 @@ public class Gen3OakLabRivalScriptTest {
         assertEquals("trainer load", diagnostics.phase());
         assertEquals("ArrayIndexOutOfBoundsException", diagnostics.exceptionClass());
         assertEquals("trainer=329 slot=1 layout=held-item-custom-moves expectedLayout=held-item-custom-moves "
-                + "bytesPerSlot=16 partyFlags=3 partyCount=2 trainerOffset=in-rom partyPointer=out-of-rom "
+                + "bytesPerSlot=16 cfruDpeMode=false loadedSpeciesCount=412 loadedMoveCount=642 "
+                + "partyFlags=3 partyCount=2 trainerOffset=in-rom partyPointer=out-of-rom "
                 + "slotOffset=out-of-rom rawSpecies=9999 speciesStatus=out-of-bounds rawItem=13 "
                 + "itemStatus=in-bounds rawMoves=[1, 2, 0, 9999] "
                 + "moveStatus=[in-bounds, in-bounds, none, out-of-bounds]", diagnostics.detail());

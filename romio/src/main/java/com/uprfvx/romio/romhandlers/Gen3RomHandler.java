@@ -4469,12 +4469,23 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 + " layout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
                 + " expectedLayout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
                 + " bytesPerSlot=" + trainerPokemonStride(partyFlags)
+                + " cfruDpeMode=" + useCfruDpeGen9SpeciesCount
+                + " loadedSpeciesCount=" + loadedSpeciesCountForDiagnostics()
+                + " loadedMoveCount=" + loadedMoveCountForDiagnostics()
                 + " partyFlags=" + (partyFlags < 0 ? "<unknown>" : partyFlags)
                 + " partyCount=" + (partyCount < 0 ? "<unknown>" : partyCount)
                 + " trainerOffset=" + offsetClassForDiagnostics(trainerOffset, romEntry.getIntValue("TrainerEntrySize"))
                 + " partyPointer=" + offsetClassForDiagnostics(partyPointer, trainerPokemonStride(partyFlags))
                 + " slotOffset=" + offsetClassForDiagnostics(slotOffset, trainerPokemonStride(partyFlags))
                 + trainerSlotRawValuesDetail(partyFlags, slotOffset);
+    }
+
+    private String loadedSpeciesCountForDiagnostics() {
+        return pokesInternal == null ? "<unavailable>" : Integer.toString(Math.max(0, pokesInternal.length - 1));
+    }
+
+    private String loadedMoveCountForDiagnostics() {
+        return moves == null ? "<unavailable>" : Integer.toString(Math.max(0, moves.length - 1));
     }
 
     private static String trainerPokemonLayoutForDiagnostics(int partyFlags) {
