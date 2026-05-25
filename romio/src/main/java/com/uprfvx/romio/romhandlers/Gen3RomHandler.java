@@ -4397,15 +4397,22 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 					if (movesets == null) {
 						movesets = this.getMovesLearnt();
 					}
-					int[] pokeMoves = getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel());
-					for (int m = 0; m < 4; m++) {
-						writeWord(pokemonData, tpIndex * 16 + movesStart + m * 2, pokeMoves[m]);
-					}
+					int[] pokeMoves = normalizeTrainerMoveSlots(
+                            getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel()));
+                    writeTrainerMoveSlots(pokemonData, tpIndex * 16 + movesStart, pokeMoves);
 				} else {
-					writeWord(pokemonData, tpIndex * 16 + movesStart, tp.getMoves()[0]);
-					writeWord(pokemonData, tpIndex * 16 + movesStart + 2, tp.getMoves()[1]);
-					writeWord(pokemonData, tpIndex * 16 + movesStart + 4, tp.getMoves()[2]);
-					writeWord(pokemonData, tpIndex * 16 + movesStart + 6, tp.getMoves()[3]);
+                    int[] pokeMoves = normalizeTrainerMoveSlots(tp.getMoves());
+                    if (!trainerMoveSlotsHaveMoves(pokeMoves)) {
+                        tp.setResetMoves(true);
+                        if (movesets == null) {
+                            movesets = this.getMovesLearnt();
+                        }
+                        pokeMoves = normalizeTrainerMoveSlots(
+                                getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel()));
+                    } else {
+                        tp.setMoves(pokeMoves);
+                    }
+                    writeTrainerMoveSlots(pokemonData, tpIndex * 16 + movesStart, pokeMoves);
 				}
 			}
 		} else {
@@ -4423,6 +4430,42 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
 		return pokemonData;
 	}
+
+    static int[] normalizeTrainerMoveSlots(int[] moves) {
+        int[] normalizedMoves = new int[4];
+        if (moves == null) {
+            return normalizedMoves;
+        }
+        int writeIndex = 0;
+        for (int move : moves) {
+            if (move == MoveIDs.none) {
+                continue;
+            }
+            normalizedMoves[writeIndex++] = move;
+            if (writeIndex == normalizedMoves.length) {
+                break;
+            }
+        }
+        return normalizedMoves;
+    }
+
+    private static boolean trainerMoveSlotsHaveMoves(int[] moves) {
+        if (moves == null) {
+            return false;
+        }
+        for (int move : moves) {
+            if (move != MoveIDs.none) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void writeTrainerMoveSlots(byte[] pokemonData, int offset, int[] moves) {
+        for (int m = 0; m < 4; m++) {
+            writeWord(pokemonData, offset + m * 2, moves[m]);
+        }
+    }
 
 	private int readTrainerPokemonDataLength(int trainerOffset) {
 		int entryLen = romEntry.getIntValue("TrainerEntrySize");

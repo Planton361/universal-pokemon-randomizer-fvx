@@ -3,6 +3,7 @@ package com.uprfvx.romio.romhandlers;
 import com.uprfvx.romio.constants.ItemIDs;
 import com.uprfvx.romio.gamedata.Item;
 import com.uprfvx.romio.gamedata.Move;
+import com.uprfvx.romio.gamedata.MoveLearnt;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.gamedata.TrainerPokemon;
 import com.uprfvx.romio.gamedata.Type;
@@ -61,6 +62,26 @@ public class Gen3SensibleHeldItemsTest {
         int[] moveset = assertDoesNotThrow(() -> romHandler.getMovesAtLevel(9999, null, 50));
 
         assertArrayEquals(new int[] {0, 0, 0, 0}, moveset);
+    }
+
+    @Test
+    public void movesAtLevelSkipsNoneMovePlaceholders() {
+        Gen3RomHandler romHandler = new Gen3RomHandler();
+
+        int[] moveset = romHandler.getMovesAtLevel(25, Map.of(25, List.of(
+                new MoveLearnt(0, 1),
+                new MoveLearnt(59, 20),
+                new MoveLearnt(44, 30),
+                new MoveLearnt(427, 40))), 47);
+
+        assertArrayEquals(new int[] {59, 44, 427, 0}, moveset);
+    }
+
+    @Test
+    public void trainerMoveSlotNormalizationCompactsLeadingNoneMove() {
+        int[] moveset = Gen3RomHandler.normalizeTrainerMoveSlots(new int[] {0, 59, 44, 427});
+
+        assertArrayEquals(new int[] {59, 44, 427, 0}, moveset);
     }
 
     private static Gen3RomHandler romHandlerWithItems() throws ReflectiveOperationException {
