@@ -370,6 +370,67 @@ public class TrainerSpecialRulesTest {
     }
 
     @Test
+    public void frlgRoute22WeakRivalCarriesFinalOakLabStarterSlot() {
+        Species playerStarter = species(101, "PlayerStarter");
+        Species finalOakLabStarter = species(102, "FinalOakLabStarter");
+        Species friendStarter = species(103, "FriendStarter");
+        Species randomNonstarter = species(301, "RandomNonstarter");
+        Species staleRoute22Starter = species(302, "StaleRoute22Starter");
+        Trainer oakLabRival = trainer(0x146, null, pokemon(finalOakLabStarter, 5));
+        Trainer route22Rival = trainer(0x149, null,
+                pokemon(randomNonstarter, 9), pokemon(staleRoute22Starter, 9));
+        Gen3Constants.applyFrlgRivalTagMetadata(oakLabRival, "RIVAL1-1");
+        Gen3Constants.applyFrlgRivalTagMetadata(route22Rival, "RIVAL2-1");
+        TrainerTestRomHandler handler = TrainerTestRomHandler.create(
+                List.of(playerStarter, finalOakLabStarter, friendStarter, randomNonstarter, staleRoute22Starter),
+                List.of(oakLabRival, route22Rival),
+                List.of(playerStarter, finalOakLabStarter, friendStarter),
+                Collections.emptyList());
+
+        TrainerPokemonRandomizer randomizer = new TrainerPokemonRandomizer(handler.proxy, new Settings(), new Random(5));
+        randomizer.syncFrlgRoute22RivalStarterFromOpening(handler.trainers);
+
+        assertEquals(0, oakLabRival.getForceStarterPosition());
+        assertEquals(1, route22Rival.getForceStarterPosition());
+        assertSame(finalOakLabStarter, route22Rival.getPokemon().get(1).getSpecies());
+        assertSame(randomNonstarter, route22Rival.getPokemon().get(0).getSpecies());
+        assertTrue(route22Rival.getPokemon().get(1).isResetMoves());
+    }
+
+    @Test
+    public void frlgRoute22StrongRivalCarriesFinalOakLabStarterSlot() {
+        Species playerStarter = species(101, "PlayerStarter");
+        Species finalOakLabStarter = species(102, "FinalOakLabStarter");
+        Species friendStarter = species(103, "FriendStarter");
+        Species randomNonstarter = species(301, "RandomNonstarter");
+        Species staleRoute22Starter = species(302, "StaleRoute22Starter");
+        Trainer oakLabRival = trainer(0x146, null, pokemon(finalOakLabStarter, 5));
+        Trainer route22Rival = trainer(0x1B3, null,
+                pokemon(randomNonstarter, 47),
+                pokemon(randomNonstarter, 45),
+                pokemon(randomNonstarter, 45),
+                pokemon(randomNonstarter, 45),
+                pokemon(randomNonstarter, 47),
+                pokemon(staleRoute22Starter, 53));
+        Gen3Constants.applyFrlgRivalTagMetadata(oakLabRival, "RIVAL1-1");
+        Gen3Constants.applyFrlgRivalTagMetadata(route22Rival, "RIVAL7-1");
+        TrainerTestRomHandler handler = TrainerTestRomHandler.create(
+                List.of(playerStarter, finalOakLabStarter, friendStarter, randomNonstarter, staleRoute22Starter),
+                List.of(oakLabRival, route22Rival),
+                List.of(playerStarter, finalOakLabStarter, friendStarter),
+                Collections.emptyList());
+
+        TrainerPokemonRandomizer randomizer = new TrainerPokemonRandomizer(handler.proxy, new Settings(), new Random(5));
+        randomizer.syncFrlgRoute22RivalStarterFromOpening(handler.trainers);
+
+        assertEquals(0, oakLabRival.getForceStarterPosition());
+        assertEquals(5, route22Rival.getForceStarterPosition());
+        assertSame(finalOakLabStarter, route22Rival.getPokemon().get(5).getSpecies());
+        assertSame(randomNonstarter, route22Rival.getPokemon().get(0).getSpecies());
+        assertTrue(route22Rival.getPokemon().get(5).isResetMoves());
+    }
+
+    @Test
     public void route22StyleRivalKeepsWeakStageStarterAtLowLevel() {
         Species playerStarter = species(101, "PlayerStarter");
         Species rivalStarter = species(102, "RivalStarter");

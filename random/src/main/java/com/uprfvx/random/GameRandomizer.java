@@ -597,6 +597,9 @@ public class GameRandomizer {
                 && (startersChanged || trainerPokemonRandomized);
         if (openingRivalCounterStarterNeedsReapply) {
             trainerPokeRandomizer.makeFirstRivalCarryStarter();
+            if (rivalCarriesStarterThroughout) {
+                trainerPokeRandomizer.makeFrlgRoute22RivalCarryOpeningStarter();
+            }
         }
     }
 

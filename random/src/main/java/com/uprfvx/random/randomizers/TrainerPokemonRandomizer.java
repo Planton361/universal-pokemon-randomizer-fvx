@@ -738,6 +738,19 @@ public class TrainerPokemonRandomizer extends Randomizer {
 
     }
 
+    private TrainerPokemon findStarterPokemonWithTag(List<Trainer> currentTrainers, String tag) {
+        for (Trainer trainer : currentTrainers) {
+            if (trainer.getTag() != null && trainer.getTag().equals(tag)) {
+                int forceStarterPosition = trainer.getForceStarterPosition();
+                if (forceStarterPosition >= 0 && forceStarterPosition < trainer.getPokemon().size()) {
+                    return trainer.getPokemon().get(forceStarterPosition);
+                }
+                return trainer.getPokemon().isEmpty() ? null : trainer.getPokemon().get(0);
+            }
+        }
+        return null;
+    }
+
     private void changeStarterForTrainer(Trainer trainer, NavigableMap<Integer, Species> startersByLevel,
                                          int abilitySlot) {
         TrainerPokemon bestPoke = trainer.getPokemon().get(0);
@@ -843,6 +856,37 @@ public class TrainerPokemonRandomizer extends Randomizer {
             syncFrlgOpeningRivalTrainerIds(currentTrainers, romHandler.getStarters());
         }
         changesMade = true;
+    }
+
+    public void makeFrlgRoute22RivalCarryOpeningStarter() {
+        if (!isFireRedLeafGreenRom()) {
+            return;
+        }
+
+        syncFrlgRoute22RivalStarterFromOpening(romHandler.getTrainers());
+        changesMade = true;
+    }
+
+    void syncFrlgRoute22RivalStarterFromOpening(List<Trainer> currentTrainers) {
+        for (int variant = 0; variant < 3; variant++) {
+            TrainerPokemon openingStarter = findStarterPokemonWithTag(currentTrainers, "RIVAL1-" + variant);
+            if (openingStarter == null || openingStarter.getSpecies() == null) {
+                continue;
+            }
+
+            Species starter = openingStarter.getSpecies();
+            NavigableMap<Integer, Species> startersByLevel = getEvolutionsByLevel(starter, 1, 100);
+            int abilitySlot = openingStarter.getAbilitySlot();
+            if (abilitySlot <= 0 || abilitySlot == 3) {
+                abilitySlot = getRandomAbilitySlot(starter);
+                while (abilitySlot == 3) {
+                    abilitySlot = getRandomAbilitySlot(starter);
+                }
+            }
+
+            changeStarterWithTag(currentTrainers, "RIVAL2-" + variant, startersByLevel, abilitySlot);
+            changeStarterWithTag(currentTrainers, "RIVAL7-" + variant, startersByLevel, abilitySlot);
+        }
     }
 
     private boolean isFireRedLeafGreenRom() {
