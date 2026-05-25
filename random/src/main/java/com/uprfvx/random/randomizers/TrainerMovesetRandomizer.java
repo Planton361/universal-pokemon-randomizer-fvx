@@ -42,13 +42,16 @@ public class TrainerMovesetRandomizer extends Randomizer {
         for (Trainer t : trainers) {
 
             for (TrainerPokemon tp : t.getPokemon()) {
-                tp.setResetMoves(false);
-
                 List<Move> movesAtLevel = getMoveSelectionPoolAtLevel(tp, isCyclicEvolutions);
 
                 movesAtLevel = trimMoveList(tp, movesAtLevel, isOnlyMultiBattles);
 
                 if (movesAtLevel.isEmpty()) {
+                    continue;
+                }
+
+                if (movesAtLevel.size() <= 4) {
+                    setTrainerPokemonMoves(tp, movesAtLevel);
                     continue;
                 }
 
@@ -107,13 +110,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
 
                 if (movesLeft <= 4) {
 
-                    for (int i = 0; i < 4; i++) {
-                        if (i < movesLeft) {
-                            tp.getMoves()[i] = distinctMoveList.get(i).number;
-                        } else {
-                            tp.getMoves()[i] = 0;
-                        }
-                    }
+                    setTrainerPokemonMoves(tp, distinctMoveList);
                     continue;
                 }
 
@@ -124,13 +121,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
 
                 if (movesLeft <= 4) {
 
-                    for (int i = 0; i < 4; i++) {
-                        if (i < movesLeft) {
-                            tp.getMoves()[i] = distinctMoveList.get(i).number;
-                        } else {
-                            tp.getMoves()[i] = 0;
-                        }
-                    }
+                    setTrainerPokemonMoves(tp, distinctMoveList);
                     continue;
                 }
 
@@ -261,21 +252,28 @@ public class TrainerMovesetRandomizer extends Randomizer {
                     }
                 }
 
-                int movesPicked = pickedMoves.size();
-
-                for (int i = 0; i < 4; i++) {
-                    if (i < movesPicked) {
-                        tp.getMoves()[i] = pickedMoves.get(i).number;
-                    } else {
-                        tp.getMoves()[i] = 0;
-                    }
-                }
+                setTrainerPokemonMoves(tp, pickedMoves);
             }
         }
         if (skippedMissingMovesets > 0) {
             System.out.println("[CFRU-DPE-TRAINER-MOVESETS] skippedMissingMovesets=" + skippedMissingMovesets);
         }
         changesMade = true;
+    }
+
+    private void setTrainerPokemonMoves(TrainerPokemon tp, List<Move> selectedMoves) {
+        if (selectedMoves.isEmpty()) {
+            return;
+        }
+        int movesPicked = selectedMoves.size();
+        for (int i = 0; i < 4; i++) {
+            if (i < movesPicked) {
+                tp.getMoves()[i] = selectedMoves.get(i).number;
+            } else {
+                tp.getMoves()[i] = 0;
+            }
+        }
+        tp.setResetMoves(false);
     }
 
     private List<Move> updateMovesConsideringAbilitySynergies(TrainerPokemon tp, Species pk, List<Move> movesAtLevel, double hardAbilityMoveBias, double softAbilityMoveBias) {
@@ -373,14 +371,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
         int movesLeft = movesAtLevel.size();
 
         if (movesLeft <= 4) {
-            for (int i = 0; i < 4; i++) {
-                if (i < movesLeft) {
-                    tp.getMoves()[i] = movesAtLevel.get(i).number;
-                } else {
-                    tp.getMoves()[i] = 0;
-                }
-            }
-            return new ArrayList<>();
+            return movesAtLevel;
         }
 
         movesAtLevel = movesAtLevel
@@ -392,14 +383,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
         movesLeft = movesAtLevel.size();
 
         if (movesLeft <= 4) {
-            for (int i = 0; i < 4; i++) {
-                if (i < movesLeft) {
-                    tp.getMoves()[i] = movesAtLevel.get(i).number;
-                } else {
-                    tp.getMoves()[i] = 0;
-                }
-            }
-            return new ArrayList<>();
+            return movesAtLevel;
         }
 
         List<Move> obsoletedMoves = getObsoleteMoves(movesAtLevel);
@@ -411,14 +395,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
         movesLeft = movesAtLevel.size();
 
         if (movesLeft <= 4) {
-            for (int i = 0; i < 4; i++) {
-                if (i < movesLeft) {
-                    tp.getMoves()[i] = movesAtLevel.get(i).number;
-                } else {
-                    tp.getMoves()[i] = 0;
-                }
-            }
-            return new ArrayList<>();
+            return movesAtLevel;
         }
 
         List<Move> requiresOtherMove = movesAtLevel
@@ -434,14 +411,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
         movesLeft = movesAtLevel.size();
 
         if (movesLeft <= 4) {
-            for (int i = 0; i < 4; i++) {
-                if (i < movesLeft) {
-                    tp.getMoves()[i] = movesAtLevel.get(i).number;
-                } else {
-                    tp.getMoves()[i] = 0;
-                }
-            }
-            return new ArrayList<>();
+            return movesAtLevel;
         }
 
         // Remove hard ability anti-synergy moves
@@ -460,14 +430,7 @@ public class TrainerMovesetRandomizer extends Randomizer {
         movesLeft = movesAtLevel.size();
 
         if (movesLeft <= 4) {
-            for (int i = 0; i < 4; i++) {
-                if (i < movesLeft) {
-                    tp.getMoves()[i] = movesAtLevel.get(i).number;
-                } else {
-                    tp.getMoves()[i] = 0;
-                }
-            }
-            return new ArrayList<>();
+            return movesAtLevel;
         }
         return movesAtLevel;
     }

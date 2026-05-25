@@ -26,6 +26,9 @@ public final class RandomizerLauncher {
         } else if (firstCliArg.equals("loaded-manifest")) {
             String[] commandArgs = Arrays.copyOfRange(args, 1, args.length);
             System.exit(LoadedManifestExporter.invoke(commandArgs));
+        } else if (firstCliArg.equals("eligible-manifest")) {
+            String[] commandArgs = Arrays.copyOfRange(args, 1, args.length);
+            System.exit(LoadedManifestExporter.invokeEligible(commandArgs));
         } else if (firstCliArg.equals("settings-profile")) {
             String[] commandArgs = Arrays.copyOfRange(args, 1, args.length);
             System.exit(SettingsProfileGenerator.invoke(commandArgs));
