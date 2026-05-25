@@ -598,12 +598,21 @@ public class Gen3OakLabRivalRuntimeSourceRomTest {
         Gen3RomHandler romHandler = (Gen3RomHandler) factory.create();
         Gen3RomHandler.Gen3RomLoadDiagnostics diagnostics = romHandler.loadRomForDiagnostics(romPath);
         if (!diagnostics.loaded()) {
-            return fail(configuredRomLoadFailure(role, diagnostics.phase(), diagnostics.exceptionClass()));
+            return fail(configuredRomLoadFailure(role, diagnostics.phase(), diagnostics.exceptionClass(),
+                    diagnostics.detail()));
         }
         return romHandler;
     }
 
     private static String configuredRomLoadFailure(String role, String phase, String cause) {
+        return configuredRomLoadFailure(role, phase, cause, null);
+    }
+
+    private static String configuredRomLoadFailure(String role, String phase, String cause, String detail) {
+        if (detail != null && !detail.isBlank()) {
+            return "Configured " + role + " ROM could not be loaded during " + phase + " at "
+                    + detail + " reason=" + cause;
+        }
         return "Configured " + role + " ROM could not be loaded during " + phase + ": " + cause;
     }
 
