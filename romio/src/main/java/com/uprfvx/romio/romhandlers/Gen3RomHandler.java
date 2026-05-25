@@ -226,6 +226,19 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     // DPE/CFRU internal constants; FVX SpeciesIDs has no entries for these non-Pokedex slots.
     private static final int CFRU_DPE_SPECIES_NONE_INTERNAL_ID = 0;
     private static final int CFRU_DPE_SPECIES_EGG_INTERNAL_ID = 0x19C;
+    static final int GEN3_TRAINER_MON_BASIC_SIZE = 8;
+    static final int GEN3_TRAINER_MON_CUSTOM_MOVES_SIZE = 16;
+    static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_SIZE = 32;
+    static final int GEN3_TRAINER_MON_NO_ITEM_CUSTOM_MOVES_OFFSET = 6;
+    static final int GEN3_TRAINER_MON_ITEM_OFFSET = 6;
+    static final int GEN3_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET = 8;
+    static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET = 20;
+    static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET = 22;
+    private static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ABILITY_OFFSET = 6;
+    private static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_NATURE_OFFSET = 7;
+    private static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_IV_SPREAD_OFFSET = 8;
+    private static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET = 14;
+    private static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_TERA_TYPE_OFFSET = 30;
 
     private record RawTypeEffectivenessEntry(byte attacker, byte defender, byte effectiveness) {}
     private static final Map<String, Integer> SPECIES_ID_BY_NORMALIZED_NAME = speciesIdsByNormalizedName();
@@ -2477,7 +2490,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             int partySize = rom[trainerOffset + (entryLen - 8)] & 0xFF;
             int partyPointer = readPointer(trainerOffset + (entryLen - 4), true);
             List<FrlgRawTrainerPokemonDiagnostics> party = new ArrayList<>();
-            int stride = (partyFlags & 1) == 1 ? 16 : 8;
+            int stride = trainerPokemonStride(partyFlags, useCfruDpeGen9SpeciesCount);
             boolean partyPointerValid = partyPointer != -1 && partyPointer >= 0
                     && partySize > 0 && partySize <= 6
                     && partyPointer + partySize * stride <= rom.length;
@@ -2488,7 +2501,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     int rawSpecies = readLittleEndianWord(rom, pokemonOffset + 4);
                     party.add(new FrlgRawTrainerPokemonDiagnostics(i, pokemonOffset, level, rawSpecies,
                             getFrlgOakLabSpeciesNameForDiagnostics(rawSpecies),
-                            readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags)));
+                            readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags,
+                                    useCfruDpeGen9SpeciesCount),
+                            trainerPokemonLayoutComparisonForDiagnostics(rom, pokemonOffset, partyFlags)));
                 }
             }
             diagnostics.add(new FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, trainerClass, trainerPic,
@@ -2614,7 +2629,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         int partyPointer = readPointerFromRom(rom, trainerOffset + (trainerEntrySize - 4));
         int firstPokemonOffset = -1;
         int firstRawSpeciesId = -1;
-        int stride = (partyFlags & 1) == 1 ? 16 : 8;
+        int stride = trainerPokemonStride(partyFlags);
         boolean partyPointerValid = partyPointer != -1 && partySize > 0 && partySize <= 6
                 && partyPointer >= 0 && partyPointer + partySize * stride <= rom.length;
         if (partyPointerValid) {
@@ -2851,6 +2866,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                                                                                    int entryLen,
                                                                                    Collection<Integer> trainerIds,
                                                                                    Species[] speciesByInternalId) {
+        return readFrlgRawTrainerPartyDiagnostics(rom, baseOffset, entryLen, trainerIds, speciesByInternalId, false);
+    }
+
+    static List<FrlgRawTrainerPartyDiagnostics> readFrlgRawTrainerPartyDiagnostics(byte[] rom, int baseOffset,
+                                                                                   int entryLen,
+                                                                                   Collection<Integer> trainerIds,
+                                                                                   Species[] speciesByInternalId,
+                                                                                   boolean cfruDpeMode) {
         List<FrlgRawTrainerPartyDiagnostics> diagnostics = new ArrayList<>();
         for (int trainerId : trainerIds) {
             int trainerOffset = baseOffset + trainerId * entryLen;
@@ -2864,7 +2887,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             int partyFlags = rom[trainerOffset] & 0xFF;
             int partySize = rom[trainerOffset + (entryLen - 8)] & 0xFF;
             int partyPointer = readPointerFromRom(rom, trainerOffset + (entryLen - 4));
-            int stride = (partyFlags & 1) == 1 ? 16 : 8;
+            int stride = trainerPokemonStride(partyFlags, cfruDpeMode);
             boolean partyPointerValid = partyPointer != -1 && partyPointer >= 0
                     && partySize > 0 && partySize <= 6
                     && partyPointer + partySize * stride <= rom.length;
@@ -2876,7 +2899,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     party.add(new FrlgRawTrainerPokemonDiagnostics(i, pokemonOffset,
                             readLittleEndianWord(rom, pokemonOffset + 2), rawSpecies,
                             speciesNameForDiagnostics(rawSpecies, speciesByInternalId),
-                            readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags)));
+                            readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags, cfruDpeMode),
+                            trainerPokemonLayoutComparisonForDiagnostics(rom, pokemonOffset, partyFlags)));
                 }
             }
             diagnostics.add(new FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, trainerClass, trainerPic,
@@ -2895,15 +2919,47 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private static List<Integer> readRawTrainerPokemonMovesForDiagnostics(byte[] rom, int pokemonOffset,
                                                                           int partyFlags) {
+        return readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags, false);
+    }
+
+    private static List<Integer> readRawTrainerPokemonMovesForDiagnostics(byte[] rom, int pokemonOffset,
+                                                                          int partyFlags,
+                                                                          boolean cfruDpeMode) {
         if ((partyFlags & 1) == 0) {
             return Collections.emptyList();
         }
-        int moveOffset = pokemonOffset + ((partyFlags & 2) == 2 ? 8 : 6);
+        int moveOffset = pokemonOffset + trainerPokemonMovesOffset(partyFlags, cfruDpeMode);
         List<Integer> moves = new ArrayList<>(4);
         for (int move = 0; move < 4; move++) {
             moves.add(readLittleEndianWord(rom, moveOffset + move * 2));
         }
         return moves;
+    }
+
+    static String trainerPokemonLayoutComparisonForDiagnostics(byte[] rom, int pokemonOffset, int partyFlags) {
+        if (partyFlags != 3) {
+            return "";
+        }
+        TrainerPokemonLayoutDiagnostics classicDecode =
+                trainerPokemonLayoutDiagnostics(rom, pokemonOffset, partyFlags, false);
+        TrainerPokemonLayoutDiagnostics cfruExpandedDecode =
+                trainerPokemonLayoutDiagnostics(rom, pokemonOffset, partyFlags, true);
+        return "classic=" + classicDecode
+                + " cfruExpanded=" + cfruExpandedDecode
+                + " decodeDiverges=" + !classicDecode.moves().equals(cfruExpandedDecode.moves());
+    }
+
+    private static TrainerPokemonLayoutDiagnostics trainerPokemonLayoutDiagnostics(byte[] rom, int pokemonOffset,
+                                                                                  int partyFlags,
+                                                                                  boolean cfruDpeMode) {
+        int rowSize = trainerPokemonStride(partyFlags, cfruDpeMode);
+        int itemOffset = trainerPokemonItemOffset(partyFlags, cfruDpeMode);
+        int movesOffset = trainerPokemonMovesOffset(partyFlags, cfruDpeMode);
+        if (rom == null || pokemonOffset < 0 || pokemonOffset + rowSize > rom.length || movesOffset < 0) {
+            return new TrainerPokemonLayoutDiagnostics(rowSize, itemOffset, movesOffset, List.of());
+        }
+        return new TrainerPokemonLayoutDiagnostics(rowSize, itemOffset, movesOffset,
+                readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags, cfruDpeMode));
     }
 
     static boolean rawTrainerPokemonHasLeadingNoneMoveForDiagnostics(
@@ -3140,8 +3196,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         List<String> party = new ArrayList<>();
         for (FrlgRawTrainerPokemonDiagnostics pokemon : rawParty.party()) {
             String moves = pokemon.rawMoves().isEmpty() ? "" : " moves=" + pokemon.rawMoves();
+            String layout = pokemon.layoutComparison().isBlank() ? "" : " " + pokemon.layoutComparison();
             party.add(pokemon.decodedSpeciesName() + " Lv" + pokemon.level()
-                    + " raw=" + pokemon.rawSpeciesId() + moves);
+                    + " raw=" + pokemon.rawSpeciesId() + moves + layout);
         }
         return party.toString();
     }
@@ -3814,7 +3871,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     record FrlgRawTrainerPokemonDiagnostics(int partyIndex, int offset, int level, int rawSpeciesId,
-                                            String decodedSpeciesName, List<Integer> rawMoves) {
+                                            String decodedSpeciesName, List<Integer> rawMoves,
+                                            String layoutComparison) {
+        FrlgRawTrainerPokemonDiagnostics(int partyIndex, int offset, int level, int rawSpeciesId,
+                                         String decodedSpeciesName, List<Integer> rawMoves) {
+            this(partyIndex, offset, level, rawSpeciesId, decodedSpeciesName, rawMoves, "");
+        }
+    }
+
+    record TrainerPokemonLayoutDiagnostics(int rowSize, int itemOffset, int movesOffset, List<Integer> moves) {
     }
 
     record FrlgRawTrainerPartyDiagnostics(int trainerId, int trainerOffset, int trainerClass, int trainerPic,
@@ -4442,19 +4507,30 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     }
                 }
             } else if (pokeDataType == 3) {
+                int stride = trainerPokemonStride(pokeDataType, useCfruDpeGen9SpeciesCount);
+                int itemOffset = trainerPokemonItemOffset(pokeDataType, useCfruDpeGen9SpeciesCount);
+                int movesOffset = trainerPokemonMovesOffset(pokeDataType, useCfruDpeGen9SpeciesCount);
                 for (int poke = 0; poke < numPokes; poke++) {
-                    int slotOffset = pointerToPokes + poke * 16;
+                    int slotOffset = pointerToPokes + poke * stride;
                     try {
                         TrainerPokemon thisPoke = new TrainerPokemon();
                         thisPoke.setIVs(((readWord(slotOffset) & 0xFF) * 31) / 255);
                         thisPoke.setLevel(readWord(slotOffset + 2));
                         thisPoke.setSpecies(pokesInternal[readWord(slotOffset + 4)]);
-                        int itemID = Gen3Constants.itemIDToStandard(readWord(slotOffset + 6));
+                        if (useCfruDpeGen9SpeciesCount) {
+                            thisPoke.setAbilitySlot(rom[slotOffset
+                                    + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ABILITY_OFFSET] & 0xFF);
+                            thisPoke.setNature(rom[slotOffset
+                                    + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_NATURE_OFFSET]);
+                            readCfruDpeTrainerIvEvSpread(thisPoke, slotOffset);
+                        } else {
+                            thisPoke.setAbilitySlot(1);
+                        }
+                        int itemID = Gen3Constants.itemIDToStandard(readWord(slotOffset + itemOffset));
                         thisPoke.setHeldItem(items.get(itemID));
                         for (int move = 0; move < 4; move++) {
-                            thisPoke.getMoves()[move] = readWord(slotOffset + 8 + (move * 2));
+                            thisPoke.getMoves()[move] = readWord(slotOffset + movesOffset + (move * 2));
                         }
-                        thisPoke.setAbilitySlot(1);
                         tr.getPokemon().add(thisPoke);
                     } catch (RuntimeException e) {
                         throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, trainerId, trOffset, pokeDataType,
@@ -4467,6 +4543,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     numPokes, pointerToPokes, -1, -1, e);
         }
         return tr;
+    }
+
+    private void readCfruDpeTrainerIvEvSpread(TrainerPokemon pokemon, int slotOffset) {
+        int ivTotal = 0;
+        for (int i = 0; i < 6; i++) {
+            ivTotal += rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_IV_SPREAD_OFFSET + i] & 0xFF;
+        }
+        pokemon.setIVs(ivTotal / 6);
+        pokemon.setHpEVs(rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET]);
+        pokemon.setAtkEVs(rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 1]);
+        pokemon.setDefEVs(rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 2]);
+        pokemon.setSpeedEVs(rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 3]);
+        pokemon.setSpatkEVs(rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 4]);
+        pokemon.setSpdefEVs(rom[slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 5]);
     }
 
     private RuntimeException trainerLoadBoundsExceptionIfRelevant(boolean diagnosticMode, int trainerId,
@@ -4490,17 +4580,19 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                                            int partyPointer, int slotIndex, int slotOffset) {
         return "trainer=" + trainerId
                 + " slot=" + (slotIndex < 0 ? "<header>" : slotIndex)
-                + " layout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
-                + " expectedLayout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
-                + " bytesPerSlot=" + trainerPokemonStride(partyFlags)
+                + " layout=" + trainerPokemonLayoutForDiagnostics(partyFlags, useCfruDpeGen9SpeciesCount)
+                + " expectedLayout=" + trainerPokemonLayoutForDiagnostics(partyFlags, useCfruDpeGen9SpeciesCount)
+                + " bytesPerSlot=" + trainerPokemonStride(partyFlags, useCfruDpeGen9SpeciesCount)
                 + " cfruDpeMode=" + useCfruDpeGen9SpeciesCount
                 + " loadedSpeciesCount=" + loadedSpeciesCountForDiagnostics()
                 + " loadedMoveCount=" + loadedMoveCountForDiagnostics()
                 + " partyFlags=" + (partyFlags < 0 ? "<unknown>" : partyFlags)
                 + " partyCount=" + (partyCount < 0 ? "<unknown>" : partyCount)
                 + " trainerOffset=" + offsetClassForDiagnostics(trainerOffset, romEntry.getIntValue("TrainerEntrySize"))
-                + " partyPointer=" + offsetClassForDiagnostics(partyPointer, trainerPokemonStride(partyFlags))
-                + " slotOffset=" + offsetClassForDiagnostics(slotOffset, trainerPokemonStride(partyFlags))
+                + " partyPointer=" + offsetClassForDiagnostics(partyPointer,
+                        trainerPokemonStride(partyFlags, useCfruDpeGen9SpeciesCount))
+                + " slotOffset=" + offsetClassForDiagnostics(slotOffset,
+                        trainerPokemonStride(partyFlags, useCfruDpeGen9SpeciesCount))
                 + trainerSlotRawValuesDetail(partyFlags, slotOffset);
     }
 
@@ -4513,20 +4605,51 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private static String trainerPokemonLayoutForDiagnostics(int partyFlags) {
+        return trainerPokemonLayoutForDiagnostics(partyFlags, false);
+    }
+
+    private static String trainerPokemonLayoutForDiagnostics(int partyFlags, boolean cfruDpeMode) {
         return switch (partyFlags) {
             case 0 -> "basic";
             case 1 -> "custom-moves";
             case 2 -> "held-item";
-            case 3 -> "held-item-custom-moves";
+            case 3 -> cfruDpeMode ? "cfru-held-item-custom-moves" : "held-item-custom-moves";
             default -> partyFlags < 0 ? "<unknown>" : "unknown-flags-" + partyFlags;
         };
     }
 
     private static int trainerPokemonStride(int partyFlags) {
+        return trainerPokemonStride(partyFlags, false);
+    }
+
+    static int trainerPokemonStride(int partyFlags, boolean cfruDpeMode) {
         return switch (partyFlags) {
-            case 0, 2 -> 8;
-            case 1, 3 -> 16;
+            case 0, 2 -> GEN3_TRAINER_MON_BASIC_SIZE;
+            case 1 -> GEN3_TRAINER_MON_CUSTOM_MOVES_SIZE;
+            case 3 -> cfruDpeMode
+                    ? CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_SIZE
+                    : GEN3_TRAINER_MON_CUSTOM_MOVES_SIZE;
             default -> 1;
+        };
+    }
+
+    static int trainerPokemonItemOffset(int partyFlags, boolean cfruDpeMode) {
+        return switch (partyFlags) {
+            case 2 -> GEN3_TRAINER_MON_ITEM_OFFSET;
+            case 3 -> cfruDpeMode
+                    ? CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET
+                    : GEN3_TRAINER_MON_ITEM_OFFSET;
+            default -> -1;
+        };
+    }
+
+    static int trainerPokemonMovesOffset(int partyFlags, boolean cfruDpeMode) {
+        return switch (partyFlags) {
+            case 1 -> GEN3_TRAINER_MON_NO_ITEM_CUSTOM_MOVES_OFFSET;
+            case 3 -> cfruDpeMode
+                    ? CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET
+                    : GEN3_TRAINER_MON_ITEM_CUSTOM_MOVES_OFFSET;
+            default -> -1;
         };
     }
 
@@ -4544,7 +4667,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private String trainerSlotRawValuesDetail(int partyFlags, int slotOffset) {
-        int stride = trainerPokemonStride(partyFlags);
+        int stride = trainerPokemonStride(partyFlags, useCfruDpeGen9SpeciesCount);
         if (partyFlags < 0 || slotOffset < 0 || !offsetInRom(slotOffset, stride)) {
             return " rawSpecies=<unavailable>"
                     + " speciesStatus=<unavailable>"
@@ -4560,8 +4683,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         detail.append(" rawSpecies=").append(rawSpeciesValue)
                 .append(" speciesStatus=").append(speciesIndexStatusForDiagnostics(rawSpecies));
 
-        if (partyFlags == 2 || partyFlags == 3) {
-            int rawItem = safeReadWord(slotOffset + 6);
+        int itemOffset = trainerPokemonItemOffset(partyFlags, useCfruDpeGen9SpeciesCount);
+        if (itemOffset >= 0) {
+            int rawItem = safeReadWord(slotOffset + itemOffset);
             String rawItemValue = rawItem < 0 ? "<missing>" : Integer.toString(rawItem);
             detail.append(" rawItem=").append(rawItemValue)
                     .append(" itemStatus=").append(itemIndexStatusForDiagnostics(rawItem));
@@ -4569,11 +4693,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             detail.append(" rawItem=<not-present> itemStatus=<not-present>");
         }
 
-        int moveOffset = switch (partyFlags) {
-            case 1 -> slotOffset + 6;
-            case 3 -> slotOffset + 8;
-            default -> -1;
-        };
+        int moveOffsetInRow = trainerPokemonMovesOffset(partyFlags, useCfruDpeGen9SpeciesCount);
+        int moveOffset = moveOffsetInRow < 0 ? -1 : slotOffset + moveOffsetInRow;
         if (moveOffset < 0) {
             detail.append(" rawMoves=<not-present> moveStatus=<not-present>");
         } else {
@@ -4586,7 +4707,36 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             detail.append(" rawMoves=").append(Arrays.toString(rawMoves))
                     .append(" moveStatus=").append(Arrays.toString(moveStatuses));
         }
+        detail.append(trainerSlotLayoutComparisonDetail(partyFlags, slotOffset));
         return detail.toString();
+    }
+
+    private String trainerSlotLayoutComparisonDetail(int partyFlags, int slotOffset) {
+        if (partyFlags != 3) {
+            return "";
+        }
+        TrainerSlotLayoutDecode classicDecode = trainerSlotLayoutDecode(slotOffset, false);
+        TrainerSlotLayoutDecode cfruExpandedDecode = trainerSlotLayoutDecode(slotOffset, true);
+        return " classicDecode=" + classicDecode
+                + " cfruExpandedDecode=" + cfruExpandedDecode
+                + " decodeDiverges=" + !classicDecode.moves().equals(cfruExpandedDecode.moves());
+    }
+
+    private TrainerSlotLayoutDecode trainerSlotLayoutDecode(int slotOffset, boolean cfruDpeMode) {
+        int rowSize = trainerPokemonStride(3, cfruDpeMode);
+        if (slotOffset < 0 || !offsetInRom(slotOffset, rowSize)) {
+            return new TrainerSlotLayoutDecode(rowSize, trainerPokemonItemOffset(3, cfruDpeMode),
+                    trainerPokemonMovesOffset(3, cfruDpeMode), List.of());
+        }
+        int movesOffset = trainerPokemonMovesOffset(3, cfruDpeMode);
+        List<Integer> moves = new ArrayList<>(4);
+        for (int move = 0; move < 4; move++) {
+            moves.add(safeReadWord(slotOffset + movesOffset + move * 2));
+        }
+        return new TrainerSlotLayoutDecode(rowSize, trainerPokemonItemOffset(3, cfruDpeMode), movesOffset, moves);
+    }
+
+    private record TrainerSlotLayoutDecode(int rowSize, int itemOffset, int movesOffset, List<Integer> moves) {
     }
 
     private String speciesIndexStatusForDiagnostics(int rawSpecies) {
@@ -4842,28 +4992,34 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
 	private byte[] trainerPokemonToBytes(Trainer trainer) {
         normalizeTrainerCustomMoveStateBeforeWrite(trainer);
-		int dataSize = trainer.getPokemon().size() * (trainer.pokemonHaveCustomMoves() ? 16 : 8);
+        int partyFlags = trainer.getPoketype();
+        int rowSize = trainerPokemonStride(partyFlags, useCfruDpeGen9SpeciesCount);
+		int dataSize = trainer.getPokemon().size() * rowSize;
 		byte[] pokemonData = new byte[dataSize];
 
 		Map<Integer, List<MoveLearnt>> movesets = null;
 
 		if (trainer.pokemonHaveCustomMoves()) {
-			// custom moves, blocks of 16 bytes
 			for (int tpIndex = 0; tpIndex < trainer.getPokemon().size(); tpIndex++) {
 				TrainerPokemon tp = trainer.getPokemon().get(tpIndex);
+                int rowBase = tpIndex * rowSize;
 				// Add 1 to offset integer division truncation
-				writeWord(pokemonData, tpIndex * 16, Math.min(255, 1 + (tp.getIVs() * 255) / 31));
-				writeWord(pokemonData, tpIndex * 16 + 2, tp.getLevel());
-				writeWord(pokemonData, tpIndex * 16 + 4, getTrainerPokemonInternalSpeciesId(tp.getSpecies()));
+				writeWord(pokemonData, rowBase, Math.min(255, 1 + (tp.getIVs() * 255) / 31));
+				writeWord(pokemonData, rowBase + 2, tp.getLevel());
+				writeWord(pokemonData, rowBase + 4, getTrainerPokemonInternalSpeciesId(tp.getSpecies()));
 				int movesStart;
 				if (trainer.pokemonHaveItems()) {
                     int itemInternalID = tp.getHeldItem() == null ? 0 :
                             Gen3Constants.itemIDToInternal(tp.getHeldItem().getId());
-                    writeWord(pokemonData, tpIndex * 16 + 6, itemInternalID);
-					movesStart = 8;
+                    if (useCfruDpeGen9SpeciesCount && partyFlags == 3) {
+                        writeCfruDpeHeldItemCustomMoveMetadata(pokemonData, rowBase, tp, itemInternalID);
+                    } else {
+                        writeWord(pokemonData, rowBase + GEN3_TRAINER_MON_ITEM_OFFSET, itemInternalID);
+                    }
+					movesStart = trainerPokemonMovesOffset(partyFlags, useCfruDpeGen9SpeciesCount);
 				} else {
-					movesStart = 6;
-					writeWord(pokemonData, tpIndex * 16 + 14, 0);
+					movesStart = GEN3_TRAINER_MON_NO_ITEM_CUSTOM_MOVES_OFFSET;
+					writeWord(pokemonData, rowBase + 14, 0);
 				}
 				if (tp.isResetMoves()) {
 					if (movesets == null) {
@@ -4871,7 +5027,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 					}
 					int[] pokeMoves = normalizeTrainerMoveSlots(
                             getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel()));
-                    writeTrainerMoveSlots(pokemonData, tpIndex * 16 + movesStart, pokeMoves);
+                    writeTrainerMoveSlots(pokemonData, rowBase + movesStart, pokeMoves);
 				} else {
                     int[] pokeMoves = normalizeTrainerMoveSlots(tp.getMoves());
                     if (!trainerMoveSlotsHaveMoves(pokeMoves)) {
@@ -4884,7 +5040,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     } else {
                         tp.setMoves(pokeMoves);
                     }
-                    writeTrainerMoveSlots(pokemonData, tpIndex * 16 + movesStart, pokeMoves);
+                    writeTrainerMoveSlots(pokemonData, rowBase + movesStart, pokeMoves);
 				}
 			}
 		} else {
@@ -4902,6 +5058,25 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
 		return pokemonData;
 	}
+
+    private void writeCfruDpeHeldItemCustomMoveMetadata(byte[] pokemonData, int rowBase, TrainerPokemon tp,
+                                                        int itemInternalID) {
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ABILITY_OFFSET] =
+                (byte) Math.max(0, Math.min(4, tp.getAbilitySlot()));
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_NATURE_OFFSET] = tp.getNature();
+        int iv = Math.max(0, Math.min(31, tp.getIVs()));
+        for (int i = 0; i < 6; i++) {
+            pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_IV_SPREAD_OFFSET + i] = (byte) iv;
+        }
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET] = tp.getHpEVs();
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 1] = tp.getAtkEVs();
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 2] = tp.getDefEVs();
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 3] = tp.getSpeedEVs();
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 4] = tp.getSpatkEVs();
+        pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 5] = tp.getSpdefEVs();
+        writeWord(pokemonData, rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET, itemInternalID);
+        writeWord(pokemonData, rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_TERA_TYPE_OFFSET, 0);
+    }
 
     static void normalizeTrainerCustomMoveStateBeforeWrite(Trainer trainer) {
         for (TrainerPokemon tp : trainer.getPokemon()) {
@@ -4958,7 +5133,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
 		int pokeType = rom[trainerOffset] & 0xFF;
 		int pokeCount = rom[trainerOffset + (entryLen - 8)] & 0xFF;
-		return pokeCount * ((pokeType & 1) == 1 ? 16 : 8);
+		return pokeCount * trainerPokemonStride(pokeType, useCfruDpeGen9SpeciesCount);
 	}
 
     /**
