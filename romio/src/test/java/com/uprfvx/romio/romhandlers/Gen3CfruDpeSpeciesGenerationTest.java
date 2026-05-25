@@ -11,6 +11,7 @@ import java.lang.reflect.Method;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class Gen3CfruDpeSpeciesGenerationTest {
 
@@ -41,6 +42,27 @@ public class Gen3CfruDpeSpeciesGenerationTest {
         assertEquals(1, generationOf(romHandler, species));
     }
 
+    @Test
+    public void cfruDpeTableProfileCanRecoverWhenNameScanStopsBeforeGen9() throws Exception {
+        Gen3RomHandler romHandler = cfruDpeRomHandler();
+        Gen3RomEntry romEntry = fieldValue(romHandler, "romEntry", Gen3RomEntry.class);
+        byte[] rom = new byte[0x200000];
+        int statsOffset = 0x160000;
+        romEntry.putIntValue("PokemonStats", statsOffset);
+        writePointer(rom, 0x3EA7C, 0x170000);
+        writePointer(rom, 0x43C68, 0x172000);
+        writePointer(rom, 0x125A8C, 0x178000);
+        writePointer(rom, Gen3Constants.moveNamesPointer, 0x179000);
+        writePointer(rom, Gen3Constants.moveDataPointer, 0x17D000);
+        writePlausibleStats(rom, statsOffset, 824);
+        writePlausibleStats(rom, statsOffset, 1000);
+        writePlausibleStats(rom, statsOffset, 1294);
+        writePlausibleStats(rom, statsOffset, 1439);
+        setField(romHandler, "rom", rom);
+
+        assertTrue(hasCfruDpeGen9TableProfile(romHandler));
+    }
+
     private static ProblemSpecies problemSpecies(String name, int identityNumber, int expectedGeneration) {
         return new ProblemSpecies(species(25, identityNumber, name), expectedGeneration);
     }
@@ -60,6 +82,36 @@ public class Gen3CfruDpeSpeciesGenerationTest {
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    private static boolean hasCfruDpeGen9TableProfile(Gen3RomHandler romHandler) {
+        try {
+            Method method = Gen3RomHandler.class.getDeclaredMethod("hasCfruDpeGen9TableProfile");
+            method.setAccessible(true);
+            return (boolean) method.invoke(romHandler);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static void writePlausibleStats(byte[] rom, int statsOffset, int speciesId) {
+        int offset = statsOffset + speciesId * Gen3Constants.baseStatsEntrySize;
+        rom[offset + Gen3Constants.bsHPOffset] = 80;
+        rom[offset + Gen3Constants.bsAttackOffset] = 80;
+        rom[offset + Gen3Constants.bsDefenseOffset] = 80;
+        rom[offset + Gen3Constants.bsSpeedOffset] = 80;
+        rom[offset + Gen3Constants.bsSpAtkOffset] = 80;
+        rom[offset + Gen3Constants.bsSpDefOffset] = 80;
+        rom[offset + Gen3Constants.bsPrimaryTypeOffset] = 0;
+        rom[offset + Gen3Constants.bsSecondaryTypeOffset] = 0;
+    }
+
+    private static void writePointer(byte[] rom, int offset, int value) {
+        int pointer = value + 0x8000000;
+        rom[offset] = (byte) (pointer & 0xFF);
+        rom[offset + 1] = (byte) ((pointer >>> 8) & 0xFF);
+        rom[offset + 2] = (byte) ((pointer >>> 16) & 0xFF);
+        rom[offset + 3] = (byte) ((pointer >>> 24) & 0xFF);
     }
 
     private static Gen3RomHandler cfruDpeRomHandler() throws Exception {
