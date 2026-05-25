@@ -189,6 +189,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private static final int CFRU_DPE_HAKAMO_O_INTERNAL_ID = 1000;
     private static final int CFRU_DPE_SPRIGATITO_INTERNAL_ID = 1294;
     private static final int CFRU_DPE_PECHARUNT_INTERNAL_ID = 1439;
+    private static final int CFRU_DPE_SPECIES_COUNT = CFRU_DPE_PECHARUNT_INTERNAL_ID + 1;
     private static final int CFRU_DPE_TMHMMOVES_POINTER_LOCATION = 0x125A8C;
     private static final int CFRU_DPE_TMHMLEARNSETS_POINTER_LOCATION = 0x43C68;
     private static final int CFRU_DPE_TM_COUNT = 120;
@@ -510,7 +511,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
             int countAfterDummyCheck = iPokemonCount;
             int countAfterNameAndStatsCheck = iPokemonCount;
-            useCfruDpeGen9SpeciesCount = hasCfruDpeGen9SpeciesCount(countAfterNameAndStatsCheck);
+            useCfruDpeGen9SpeciesCount = hasCfruDpeGen9SpeciesCount(countAfterNameAndStatsCheck)
+                    || hasCfruDpeGen9TableProfile();
 
             // Jambo's Moves Learnt table hack?
             // need to check this before using moveset pointers
@@ -567,7 +569,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     }
                 }
             } else {
-                iPokemonCount = countAfterNameAndStatsCheck;
+                iPokemonCount = Math.max(countAfterNameAndStatsCheck, CFRU_DPE_SPECIES_COUNT);
             }
             int countAfterPokedexOrderCheck = iPokemonCount;
 
@@ -668,6 +670,28 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 && hasPlausibleBaseStats(CFRU_DPE_HAKAMO_O_INTERNAL_ID)
                 && hasPlausibleBaseStats(CFRU_DPE_SPRIGATITO_INTERNAL_ID)
                 && hasPlausibleBaseStats(CFRU_DPE_PECHARUNT_INTERNAL_ID);
+    }
+
+    private boolean hasCfruDpeGen9TableProfile() {
+        return isRomHack
+                && "BPRE".equals(romEntry.getRomCode())
+                && hasPlausibleBaseStats(CFRU_DPE_XERNEAS_INTERNAL_ID)
+                && hasPlausibleBaseStats(CFRU_DPE_HAKAMO_O_INTERNAL_ID)
+                && hasPlausibleBaseStats(CFRU_DPE_SPRIGATITO_INTERNAL_ID)
+                && hasPlausibleBaseStats(CFRU_DPE_PECHARUNT_INTERNAL_ID)
+                && pointerAtRomOffsetFits(CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION,
+                        CFRU_DPE_SPECIES_COUNT * Integer.BYTES)
+                && pointerAtRomOffsetFits(CFRU_DPE_TMHMLEARNSETS_POINTER_LOCATION,
+                        CFRU_DPE_SPECIES_COUNT * CFRU_DPE_TMHM_COMPAT_BYTES)
+                && pointerAtRomOffsetFits(CFRU_DPE_TMHMMOVES_POINTER_LOCATION, CFRU_DPE_TMHM_COUNT * Short.BYTES)
+                && pointerAtRomOffsetFits(Gen3Constants.moveNamesPointer,
+                        CFRU_DPE_MOVES_COUNT * romEntry.getIntValue("MoveNameLength"))
+                && pointerAtRomOffsetFits(Gen3Constants.moveDataPointer, CFRU_DPE_MOVES_COUNT * GEN3_BATTLE_MOVE_ENTRY_SIZE);
+    }
+
+    private boolean pointerAtRomOffsetFits(int pointerOffset, int requiredLength) {
+        int pointer = safeReadPointer(pointerOffset);
+        return offsetInRom(pointer, requiredLength);
     }
 
     private boolean hasExpectedPokemonName(int internalSpeciesId, String expectedName) {
