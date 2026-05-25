@@ -68,6 +68,29 @@ public class TrainerMovesetDecisionTest {
         assertTrue(trainer.pokemonHaveCustomMoves());
     }
 
+    @Test
+    public void betterMovesetsCompactsNoneMoveOutOfFirstSlot() {
+        Species randomizedSpecies = species(10, "RandomizedSpecies");
+        TrainerPokemon trainerPokemon = pokemon(randomizedSpecies, 6, 33, 81, 78, 0);
+        trainerPokemon.setResetMoves(true);
+        Map<Integer, List<MoveLearnt>> movesLearnt = new HashMap<>();
+        movesLearnt.put(randomizedSpecies.getNumber(), List.of(
+                new MoveLearnt(0, 1),
+                new MoveLearnt(1, 1),
+                new MoveLearnt(2, 5),
+                new MoveLearnt(3, 6)));
+        TrainerMovesetTestRomHandler handler = TrainerMovesetTestRomHandler.create(
+                List.of(trainer(trainerPokemon)),
+                List.of(move(1, "Scratch"), move(2, "Ember"), move(3, "Lick")),
+                movesLearnt);
+
+        new TrainerMovesetRandomizer(handler.proxy, betterRegularMovesets(), new Random(1))
+                .randomizeTrainerMovesets();
+
+        assertFalse(trainerPokemon.isResetMoves());
+        assertArrayEquals(new int[] {1, 2, 3, 0}, trainerPokemon.getMoves());
+    }
+
     private static Settings betterRegularMovesets() {
         Settings settings = new Settings();
         settings.setBetterRegularTrainerMovesets(true);

@@ -288,6 +288,32 @@ public class TrainerSpecialRulesTest {
     }
 
     @Test
+    public void route22StyleRivalKeepsStarterInLastEqualLevelSlotThroughRandomization() {
+        Species playerStarter = species(101, "PlayerStarter");
+        Species rivalStarter = species(102, "RivalStarter");
+        Species friendStarter = species(103, "FriendStarter");
+        Species filler = species(301, "Filler");
+        Species replacement = species(302, "Replacement");
+        Trainer route22Rival = trainer(0x14B, "RIVAL2-0", pokemon(filler, 9), pokemon(filler, 9));
+        TrainerTestRomHandler handler = TrainerTestRomHandler.create(
+                List.of(playerStarter, rivalStarter, friendStarter, filler, replacement),
+                List.of(route22Rival),
+                List.of(playerStarter, rivalStarter, friendStarter),
+                Collections.emptyList());
+        Settings settings = new Settings();
+        settings.setTrainersMod(Settings.TrainersMod.RANDOM);
+        settings.setRivalCarriesStarterThroughout(true);
+        TrainerPokemonRandomizer randomizer = new TrainerPokemonRandomizer(handler.proxy, settings, new Random(17));
+
+        randomizer.makeRivalCarryStarter();
+        randomizer.randomizeTrainerPokes();
+        randomizer.makeRivalCarryStarter();
+
+        assertSame(rivalStarter, route22Rival.getPokemon().get(1).getSpecies());
+        assertTrue(route22Rival.getPokemon().get(0).isResetMoves());
+    }
+
+    @Test
     public void runtimeSourceRivalRowsCarryCounterStarterWhenTaggedFromKnownRuntimeSource() {
         Species playerStarter = species(101, "PlayerStarter");
         Species rivalStarter = species(102, "RivalStarter");
