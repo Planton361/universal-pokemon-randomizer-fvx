@@ -2383,7 +2383,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     int level = readLittleEndianWord(rom, pokemonOffset + 2);
                     int rawSpecies = readLittleEndianWord(rom, pokemonOffset + 4);
                     party.add(new FrlgRawTrainerPokemonDiagnostics(i, pokemonOffset, level, rawSpecies,
-                            getFrlgOakLabSpeciesNameForDiagnostics(rawSpecies)));
+                            getFrlgOakLabSpeciesNameForDiagnostics(rawSpecies),
+                            readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags)));
                 }
             }
             diagnostics.add(new FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, trainerClass, trainerPic,
@@ -2630,6 +2631,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             if (outputClassification == FrlgTrainerRuntimeSourceClassification.VALID_RUNTIME_NOT_LOADED) {
                 warnings.add("WARN valid runtime not loaded after strict sync");
             }
+            warnings.addAll(rawTrainerMoveWarnings(outputRawParty));
+            warnings.addAll(frlgRoute22RivalStarterWarnings(outputRawByTrainerId, trainerId));
             rows.add(new FrlgTrainerRuntimeSourcePostRandomizationAuditRow(
                     trainerId, formatRawTrainerParty(baseRawParty), formatRawTrainerParty(outputRawParty),
                     formatLoadedTrainerParty(outputLoadedTrainer), formatClassPic(baseSource.trainerClass(),
@@ -2685,7 +2688,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             FrlgRawTrainerPokemonDiagnostics basePokemon = baseRawParty.party().get(i);
             FrlgRawTrainerPokemonDiagnostics outputPokemon = outputRawParty.party().get(i);
             if (basePokemon.level() != outputPokemon.level()
-                    || basePokemon.rawSpeciesId() != outputPokemon.rawSpeciesId()) {
+                    || basePokemon.rawSpeciesId() != outputPokemon.rawSpeciesId()
+                    || !basePokemon.rawMoves().equals(outputPokemon.rawMoves())) {
                 return true;
             }
         }
@@ -2767,7 +2771,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     int rawSpecies = readLittleEndianWord(rom, pokemonOffset + 4);
                     party.add(new FrlgRawTrainerPokemonDiagnostics(i, pokemonOffset,
                             readLittleEndianWord(rom, pokemonOffset + 2), rawSpecies,
-                            speciesNameForDiagnostics(rawSpecies, speciesByInternalId)));
+                            speciesNameForDiagnostics(rawSpecies, speciesByInternalId),
+                            readRawTrainerPokemonMovesForDiagnostics(rom, pokemonOffset, partyFlags)));
                 }
             }
             diagnostics.add(new FrlgRawTrainerPartyDiagnostics(trainerId, trainerOffset, trainerClass, trainerPic,
@@ -2782,6 +2787,115 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         Species species = speciesByInternalId[rawSpeciesId];
         return species == null ? "?" : species.getFullName();
+    }
+
+    private static List<Integer> readRawTrainerPokemonMovesForDiagnostics(byte[] rom, int pokemonOffset,
+                                                                          int partyFlags) {
+        if ((partyFlags & 1) == 0) {
+            return Collections.emptyList();
+        }
+        int moveOffset = pokemonOffset + ((partyFlags & 2) == 2 ? 8 : 6);
+        List<Integer> moves = new ArrayList<>(4);
+        for (int move = 0; move < 4; move++) {
+            moves.add(readLittleEndianWord(rom, moveOffset + move * 2));
+        }
+        return moves;
+    }
+
+    static boolean rawTrainerPokemonHasLeadingNoneMoveForDiagnostics(
+            FrlgRawTrainerPokemonDiagnostics pokemon) {
+        if (pokemon == null || pokemon.rawMoves().isEmpty()
+                || pokemon.rawMoves().get(0) != MoveIDs.none) {
+            return false;
+        }
+        for (int i = 1; i < pokemon.rawMoves().size(); i++) {
+            if (pokemon.rawMoves().get(i) != MoveIDs.none) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> rawTrainerMoveWarnings(FrlgRawTrainerPartyDiagnostics rawParty) {
+        if (rawParty == null || rawParty.party().isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<String> warnings = new ArrayList<>();
+        for (FrlgRawTrainerPokemonDiagnostics pokemon : rawParty.party()) {
+            if (rawTrainerPokemonHasLeadingNoneMoveForDiagnostics(pokemon)) {
+                warnings.add("WARN output raw custom moves have leading MOVE_NONE"
+                        + " slot=" + pokemon.partyIndex()
+                        + " moves=" + pokemon.rawMoves());
+            }
+        }
+        return warnings;
+    }
+
+    private static List<String> frlgRoute22RivalStarterWarnings(
+            Map<Integer, FrlgRawTrainerPartyDiagnostics> outputRawByTrainerId,
+            int trainerId) {
+        int variant = frlgRivalVariantForTrainerId(trainerId);
+        int protectedSlot = frlgRoute22ProtectedStarterSlotForTrainerId(trainerId);
+        if (variant < 0 || protectedSlot < 0) {
+            return Collections.emptyList();
+        }
+        FrlgRawTrainerPartyDiagnostics openingRival =
+                outputRawByTrainerId.get(frlgOpeningRivalTrainerIdForVariant(variant));
+        FrlgRawTrainerPartyDiagnostics route22Rival = outputRawByTrainerId.get(trainerId);
+        FrlgRawTrainerPokemonDiagnostics openingStarter = rawPartyPokemonAtSlot(openingRival, 0);
+        FrlgRawTrainerPokemonDiagnostics route22Starter = rawPartyPokemonAtSlot(route22Rival, protectedSlot);
+        if (openingStarter == null || route22Starter == null
+                || openingStarter.rawSpeciesId() == route22Starter.rawSpeciesId()) {
+            return Collections.emptyList();
+        }
+        return List.of("WARN route22 protected starter differs from opening rival starter"
+                + " protectedSlot=" + protectedSlot
+                + " openingTrainerId=" + frlgOpeningRivalTrainerIdForVariant(variant)
+                + " openingRawSpecies=" + openingStarter.rawSpeciesId()
+                + " route22RawSpecies=" + route22Starter.rawSpeciesId());
+    }
+
+    private static FrlgRawTrainerPokemonDiagnostics rawPartyPokemonAtSlot(
+            FrlgRawTrainerPartyDiagnostics rawParty, int slot) {
+        if (rawParty == null || slot < 0 || slot >= rawParty.party().size()) {
+            return null;
+        }
+        return rawParty.party().get(slot);
+    }
+
+    private static int frlgOpeningRivalTrainerIdForVariant(int variant) {
+        return switch (variant) {
+            case 0 -> 0x148;
+            case 1 -> 0x146;
+            case 2 -> 0x147;
+            default -> -1;
+        };
+    }
+
+    private static int frlgRivalVariantForTrainerId(int trainerId) {
+        String tag = FRLG_RUNTIME_TRAINER_SOURCE_KNOWN_TAGS.get(trainerId);
+        if (tag == null || !tag.startsWith("RIVAL") || !tag.contains("-")) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(tag.substring(tag.indexOf('-') + 1));
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static int frlgRoute22ProtectedStarterSlotForTrainerId(int trainerId) {
+        String tag = FRLG_RUNTIME_TRAINER_SOURCE_KNOWN_TAGS.get(trainerId);
+        if (tag == null) {
+            return -1;
+        }
+        if (tag.startsWith("RIVAL2-")) {
+            return 1;
+        }
+        if (tag.startsWith("RIVAL7-")) {
+            return 5;
+        }
+        return -1;
     }
 
     static String frlgRuntimeTrainerSourceTag(int trainerId) {
@@ -2843,8 +2957,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     speciesByInternalId)) {
                 return false;
             }
+            if (!rawPokemon.rawMoves().isEmpty()
+                    && !rawPokemon.rawMoves().equals(trainerPokemonMovesAsList(loadedPokemon))) {
+                return false;
+            }
         }
         return true;
+    }
+
+    private static List<Integer> trainerPokemonMovesAsList(TrainerPokemon pokemon) {
+        List<Integer> moves = new ArrayList<>(4);
+        for (int move : pokemon.getMoves()) {
+            moves.add(move);
+        }
+        return moves;
     }
 
     private static boolean loadedSpeciesMatchesRawSpeciesId(Species loadedSpecies, int rawSpeciesId,
@@ -2909,8 +3035,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         List<String> party = new ArrayList<>();
         for (FrlgRawTrainerPokemonDiagnostics pokemon : rawParty.party()) {
+            String moves = pokemon.rawMoves().isEmpty() ? "" : " moves=" + pokemon.rawMoves();
             party.add(pokemon.decodedSpeciesName() + " Lv" + pokemon.level()
-                    + " raw=" + pokemon.rawSpeciesId());
+                    + " raw=" + pokemon.rawSpeciesId() + moves);
         }
         return party.toString();
     }
@@ -3583,7 +3710,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     record FrlgRawTrainerPokemonDiagnostics(int partyIndex, int offset, int level, int rawSpeciesId,
-                                            String decodedSpeciesName) {
+                                            String decodedSpeciesName, List<Integer> rawMoves) {
     }
 
     record FrlgRawTrainerPartyDiagnostics(int trainerId, int trainerOffset, int trainerClass, int trainerPic,
