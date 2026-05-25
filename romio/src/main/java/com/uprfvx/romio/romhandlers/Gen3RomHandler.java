@@ -312,7 +312,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (!diagnostics.loaded()) {
             return diagnostics;
         }
-        diagnostics = runGen3LoadDiagnosticPhase("trainer load", this::loadTrainers);
+        diagnostics = runGen3LoadDiagnosticPhase("trainer load", this::loadTrainersForDiagnostics);
         if (!diagnostics.loaded()) {
             return diagnostics;
         }
@@ -332,13 +332,33 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
-    public record Gen3RomLoadDiagnostics(boolean loaded, String phase, String exceptionClass) {
+    public record Gen3RomLoadDiagnostics(boolean loaded, String phase, String exceptionClass, String detail) {
         static Gen3RomLoadDiagnostics loaded(String phase) {
-            return new Gen3RomLoadDiagnostics(true, phase, null);
+            return new Gen3RomLoadDiagnostics(true, phase, null, null);
         }
 
         static Gen3RomLoadDiagnostics failed(String phase, RuntimeException exception) {
-            return new Gen3RomLoadDiagnostics(false, phase, exception.getClass().getSimpleName());
+            if (exception instanceof TrainerLoadBoundsException boundsException) {
+                Throwable cause = boundsException.getCause();
+                String exceptionClass = cause == null
+                        ? exception.getClass().getSimpleName()
+                        : cause.getClass().getSimpleName();
+                return new Gen3RomLoadDiagnostics(false, phase, exceptionClass, boundsException.detail());
+            }
+            return new Gen3RomLoadDiagnostics(false, phase, exception.getClass().getSimpleName(), null);
+        }
+    }
+
+    static final class TrainerLoadBoundsException extends RuntimeException {
+        private final String detail;
+
+        TrainerLoadBoundsException(String detail, RuntimeException cause) {
+            super(cause);
+            this.detail = detail;
+        }
+
+        String detail() {
+            return detail;
         }
     }
 
@@ -4287,85 +4307,231 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    protected void loadTrainersForDiagnostics() {
+        trainers.clear();
+        frlgRuntimeTrainerSourceIds.clear();
+        int baseOffset = romEntry.getIntValue("TrainerData");
+        int amount = romEntry.getIntValue("TrainerCount");
+        int entryLen = romEntry.getIntValue("TrainerEntrySize");
+        List<String> tcnames = this.getTrainerClassNames();
+        for (int i = 1; i < amount; i++) {
+            int trOffset = baseOffset + i * entryLen;
+            trainers.add(readTrainerDataRowForDiagnostics(i, trOffset, entryLen, tcnames));
+        }
+
+        if (romEntry.getRomType() == Gen3Constants.RomType_Em) {
+            readMossdeepStevenTrainer();
+        }
+
+        if (romEntry.getRomType() == Gen3Constants.RomType_Ruby || romEntry.getRomType() == Gen3Constants.RomType_Sapp) {
+            Gen3Constants.trainerTagsRS(trainers, romEntry.getRomType());
+        } else if (romEntry.getRomType() == Gen3Constants.RomType_Em) {
+            Gen3Constants.trainerTagsE(trainers);
+            Gen3Constants.setMultiBattleStatusEm(trainers);
+        } else {
+            Gen3Constants.trainerTagsFRLG(trainers);
+            loadFrlgRuntimeTrainerSourceRowsForDiagnostics(baseOffset, entryLen, tcnames);
+        }
+    }
+
     private Trainer readTrainerDataRow(int trainerId, int trOffset, int entryLen, List<String> tcnames) {
+        return readTrainerDataRowInternal(trainerId, trOffset, entryLen, tcnames, false);
+    }
+
+    private Trainer readTrainerDataRowForDiagnostics(int trainerId, int trOffset, int entryLen,
+                                                     List<String> tcnames) {
+        return readTrainerDataRowInternal(trainerId, trOffset, entryLen, tcnames, true);
+    }
+
+    private Trainer readTrainerDataRowInternal(int trainerId, int trOffset, int entryLen, List<String> tcnames,
+                                               boolean diagnosticMode) {
         // Trainer entries are 40 bytes. The party pointer can also be referenced directly by FRLG trainerbattle scripts.
         Trainer tr = new Trainer();
         tr.setOffset(trOffset);
         tr.setIndex(trainerId);
-        int trainerclass = rom[trOffset + GEN3_TRAINER_CLASS_OFFSET] & 0xFF;
-        tr.setTrainerclass(trainerclass);
-        tr.setTrainerPic(rom[trOffset + GEN3_TRAINER_PIC_OFFSET] & 0xFF);
+        int trainerclass = -1;
+        int pokeDataType = -1;
+        int numPokes = -1;
+        int pointerToPokes = -1;
+        try {
+            trainerclass = rom[trOffset + GEN3_TRAINER_CLASS_OFFSET] & 0xFF;
+            tr.setTrainerclass(trainerclass);
+            tr.setTrainerPic(rom[trOffset + GEN3_TRAINER_PIC_OFFSET] & 0xFF);
 
-        int pokeDataType = rom[trOffset] & 0xFF;
-        if (rom[trOffset + (entryLen - 16)] == 0x01) {
-            tr.getCurrBattleStyle().setStyle(BattleStyle.Style.DOUBLE_BATTLE);
-        }
-        int numPokes = rom[trOffset + (entryLen - 8)] & 0xFF;
-        int pointerToPokes = readPointer(trOffset + (entryLen - 4));
-        tr.setName(this.readVariableLengthString(trOffset + GEN3_TRAINER_NAME_OFFSET));
-        tr.setFullDisplayName(tcnames.get(trainerclass) + " " + tr.getName());
-        // Pokemon structure data is like IV IV LV SP SP, optionally HI HI and/or four move words.
-        if (pokeDataType == 0) {
-            for (int poke = 0; poke < numPokes; poke++) {
-                TrainerPokemon thisPoke = new TrainerPokemon();
-                thisPoke.setIVs(((readWord(pointerToPokes + poke * 8) & 0xFF) * 31) / 255);
-                thisPoke.setLevel(readWord(pointerToPokes + poke * 8 + 2));
-                thisPoke.setSpecies(pokesInternal[readWord(pointerToPokes + poke * 8 + 4)]);
-                thisPoke.setAbilitySlot(1);
-                tr.getPokemon().add(thisPoke);
+            pokeDataType = rom[trOffset] & 0xFF;
+            if (rom[trOffset + (entryLen - 16)] == 0x01) {
+                tr.getCurrBattleStyle().setStyle(BattleStyle.Style.DOUBLE_BATTLE);
             }
-        } else if (pokeDataType == 2) {
-            for (int poke = 0; poke < numPokes; poke++) {
-                TrainerPokemon thisPoke = new TrainerPokemon();
-                thisPoke.setIVs(((readWord(pointerToPokes + poke * 8) & 0xFF) * 31) / 255);
-                thisPoke.setLevel(readWord(pointerToPokes + poke * 8 + 2));
-                thisPoke.setSpecies(pokesInternal[readWord(pointerToPokes + poke * 8 + 4)]);
-                int itemID = Gen3Constants.itemIDToStandard(readWord(pointerToPokes + poke * 8 + 6));
-                thisPoke.setHeldItem(items.get(itemID));
-                thisPoke.setAbilitySlot(1);
-                tr.getPokemon().add(thisPoke);
-            }
-        } else if (pokeDataType == 1) {
-            for (int poke = 0; poke < numPokes; poke++) {
-                TrainerPokemon thisPoke = new TrainerPokemon();
-                thisPoke.setIVs(((readWord(pointerToPokes + poke * 16) & 0xFF) * 31) / 255);
-                thisPoke.setLevel(readWord(pointerToPokes + poke * 16 + 2));
-                thisPoke.setSpecies(pokesInternal[readWord(pointerToPokes + poke * 16 + 4)]);
-                for (int move = 0; move < 4; move++) {
-                    thisPoke.getMoves()[move] = readWord(pointerToPokes + poke * 16 + 6 + (move * 2));
+            numPokes = rom[trOffset + (entryLen - 8)] & 0xFF;
+            pointerToPokes = readPointer(trOffset + (entryLen - 4));
+            tr.setName(this.readVariableLengthString(trOffset + GEN3_TRAINER_NAME_OFFSET));
+            tr.setFullDisplayName(tcnames.get(trainerclass) + " " + tr.getName());
+            // Pokemon structure data is like IV IV LV SP SP, optionally HI HI and/or four move words.
+            if (pokeDataType == 0) {
+                for (int poke = 0; poke < numPokes; poke++) {
+                    int slotOffset = pointerToPokes + poke * 8;
+                    try {
+                        TrainerPokemon thisPoke = new TrainerPokemon();
+                        thisPoke.setIVs(((readWord(slotOffset) & 0xFF) * 31) / 255);
+                        thisPoke.setLevel(readWord(slotOffset + 2));
+                        thisPoke.setSpecies(pokesInternal[readWord(slotOffset + 4)]);
+                        thisPoke.setAbilitySlot(1);
+                        tr.getPokemon().add(thisPoke);
+                    } catch (RuntimeException e) {
+                        throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, trainerId, trOffset, pokeDataType,
+                                numPokes, pointerToPokes, poke, slotOffset, e);
+                    }
                 }
-                thisPoke.setAbilitySlot(1);
-                tr.getPokemon().add(thisPoke);
-            }
-        } else if (pokeDataType == 3) {
-            for (int poke = 0; poke < numPokes; poke++) {
-                TrainerPokemon thisPoke = new TrainerPokemon();
-                thisPoke.setIVs(((readWord(pointerToPokes + poke * 16) & 0xFF) * 31) / 255);
-                thisPoke.setLevel(readWord(pointerToPokes + poke * 16 + 2));
-                thisPoke.setSpecies(pokesInternal[readWord(pointerToPokes + poke * 16 + 4)]);
-                int itemID = Gen3Constants.itemIDToStandard(readWord(pointerToPokes + poke * 16 + 6));
-                thisPoke.setHeldItem(items.get(itemID));
-                for (int move = 0; move < 4; move++) {
-                    thisPoke.getMoves()[move] = readWord(pointerToPokes + poke * 16 + 8 + (move * 2));
+            } else if (pokeDataType == 2) {
+                for (int poke = 0; poke < numPokes; poke++) {
+                    int slotOffset = pointerToPokes + poke * 8;
+                    try {
+                        TrainerPokemon thisPoke = new TrainerPokemon();
+                        thisPoke.setIVs(((readWord(slotOffset) & 0xFF) * 31) / 255);
+                        thisPoke.setLevel(readWord(slotOffset + 2));
+                        thisPoke.setSpecies(pokesInternal[readWord(slotOffset + 4)]);
+                        int itemID = Gen3Constants.itemIDToStandard(readWord(slotOffset + 6));
+                        thisPoke.setHeldItem(items.get(itemID));
+                        thisPoke.setAbilitySlot(1);
+                        tr.getPokemon().add(thisPoke);
+                    } catch (RuntimeException e) {
+                        throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, trainerId, trOffset, pokeDataType,
+                                numPokes, pointerToPokes, poke, slotOffset, e);
+                    }
                 }
-                thisPoke.setAbilitySlot(1);
-                tr.getPokemon().add(thisPoke);
+            } else if (pokeDataType == 1) {
+                for (int poke = 0; poke < numPokes; poke++) {
+                    int slotOffset = pointerToPokes + poke * 16;
+                    try {
+                        TrainerPokemon thisPoke = new TrainerPokemon();
+                        thisPoke.setIVs(((readWord(slotOffset) & 0xFF) * 31) / 255);
+                        thisPoke.setLevel(readWord(slotOffset + 2));
+                        thisPoke.setSpecies(pokesInternal[readWord(slotOffset + 4)]);
+                        for (int move = 0; move < 4; move++) {
+                            thisPoke.getMoves()[move] = readWord(slotOffset + 6 + (move * 2));
+                        }
+                        thisPoke.setAbilitySlot(1);
+                        tr.getPokemon().add(thisPoke);
+                    } catch (RuntimeException e) {
+                        throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, trainerId, trOffset, pokeDataType,
+                                numPokes, pointerToPokes, poke, slotOffset, e);
+                    }
+                }
+            } else if (pokeDataType == 3) {
+                for (int poke = 0; poke < numPokes; poke++) {
+                    int slotOffset = pointerToPokes + poke * 16;
+                    try {
+                        TrainerPokemon thisPoke = new TrainerPokemon();
+                        thisPoke.setIVs(((readWord(slotOffset) & 0xFF) * 31) / 255);
+                        thisPoke.setLevel(readWord(slotOffset + 2));
+                        thisPoke.setSpecies(pokesInternal[readWord(slotOffset + 4)]);
+                        int itemID = Gen3Constants.itemIDToStandard(readWord(slotOffset + 6));
+                        thisPoke.setHeldItem(items.get(itemID));
+                        for (int move = 0; move < 4; move++) {
+                            thisPoke.getMoves()[move] = readWord(slotOffset + 8 + (move * 2));
+                        }
+                        thisPoke.setAbilitySlot(1);
+                        tr.getPokemon().add(thisPoke);
+                    } catch (RuntimeException e) {
+                        throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, trainerId, trOffset, pokeDataType,
+                                numPokes, pointerToPokes, poke, slotOffset, e);
+                    }
+                }
             }
+        } catch (RuntimeException e) {
+            throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, trainerId, trOffset, pokeDataType,
+                    numPokes, pointerToPokes, -1, -1, e);
         }
         return tr;
     }
 
+    private RuntimeException trainerLoadBoundsExceptionIfRelevant(boolean diagnosticMode, int trainerId,
+                                                                  int trainerOffset, int partyFlags,
+                                                                  int partyCount, int partyPointer,
+                                                                  int slotIndex, int slotOffset,
+                                                                  RuntimeException exception) {
+        if (diagnosticMode && isTrainerLoadBoundsException(exception)) {
+            return new TrainerLoadBoundsException(trainerLoadBoundsDetail(trainerId, trainerOffset, partyFlags,
+                    partyCount, partyPointer, slotIndex, slotOffset), exception);
+        }
+        return exception;
+    }
+
+    private static boolean isTrainerLoadBoundsException(RuntimeException exception) {
+        return exception instanceof ArrayIndexOutOfBoundsException
+                || exception instanceof IndexOutOfBoundsException;
+    }
+
+    private String trainerLoadBoundsDetail(int trainerId, int trainerOffset, int partyFlags, int partyCount,
+                                           int partyPointer, int slotIndex, int slotOffset) {
+        return "trainer=" + trainerId
+                + " slot=" + (slotIndex < 0 ? "<header>" : slotIndex)
+                + " layout=" + trainerPokemonLayoutForDiagnostics(partyFlags)
+                + " partyFlags=" + (partyFlags < 0 ? "<unknown>" : partyFlags)
+                + " partyCount=" + (partyCount < 0 ? "<unknown>" : partyCount)
+                + " trainerOffset=" + offsetClassForDiagnostics(trainerOffset, romEntry.getIntValue("TrainerEntrySize"))
+                + " partyPointer=" + offsetClassForDiagnostics(partyPointer, trainerPokemonStride(partyFlags))
+                + " slotOffset=" + offsetClassForDiagnostics(slotOffset, trainerPokemonStride(partyFlags));
+    }
+
+    private static String trainerPokemonLayoutForDiagnostics(int partyFlags) {
+        return switch (partyFlags) {
+            case 0 -> "basic";
+            case 1 -> "custom-moves";
+            case 2 -> "held-item";
+            case 3 -> "held-item-custom-moves";
+            default -> partyFlags < 0 ? "<unknown>" : "unknown-flags-" + partyFlags;
+        };
+    }
+
+    private static int trainerPokemonStride(int partyFlags) {
+        return switch (partyFlags) {
+            case 0, 2 -> 8;
+            case 1, 3 -> 16;
+            default -> 1;
+        };
+    }
+
+    private String offsetClassForDiagnostics(int offset, int length) {
+        if (offset < 0) {
+            return "<missing>";
+        }
+        if (length < 0) {
+            return "<invalid-length>";
+        }
+        if (offset > rom.length - length) {
+            return "out-of-rom";
+        }
+        return "in-rom";
+    }
+
     private void loadFrlgRuntimeTrainerSourceRows(int baseOffset, int entryLen, List<String> tcnames) {
+        loadFrlgRuntimeTrainerSourceRowsInternal(baseOffset, entryLen, tcnames, false);
+    }
+
+    private void loadFrlgRuntimeTrainerSourceRowsForDiagnostics(int baseOffset, int entryLen, List<String> tcnames) {
+        loadFrlgRuntimeTrainerSourceRowsInternal(baseOffset, entryLen, tcnames, true);
+    }
+
+    private void loadFrlgRuntimeTrainerSourceRowsInternal(int baseOffset, int entryLen, List<String> tcnames,
+                                                          boolean diagnosticMode) {
         for (FrlgRuntimeTrainerSyncTarget target : findFrlgRuntimeTrainerDataRowsToLoad(rom, baseOffset, entryLen,
                 trainers, pokesInternal)) {
             if (findTrainerByIndex(target.trainerId()) != null) {
                 continue;
             }
             int trOffset = baseOffset + target.trainerId() * entryLen;
-            if (!canReadFrlgRuntimeTrainerDataRow(trOffset, entryLen, tcnames)) {
-                continue;
+            try {
+                if (!canReadFrlgRuntimeTrainerDataRow(trOffset, entryLen, tcnames)) {
+                    continue;
+                }
+            } catch (RuntimeException e) {
+                throw trainerLoadBoundsExceptionIfRelevant(diagnosticMode, target.trainerId(), trOffset, -1,
+                        -1, -1, -1, -1, e);
             }
-            Trainer tr = readTrainerDataRow(target.trainerId(), trOffset, entryLen, tcnames);
+            Trainer tr = diagnosticMode
+                    ? readTrainerDataRowForDiagnostics(target.trainerId(), trOffset, entryLen, tcnames)
+                    : readTrainerDataRow(target.trainerId(), trOffset, entryLen, tcnames);
             Gen3Constants.applyFrlgRivalTagMetadata(tr, target.tag());
             trainers.add(tr);
             frlgRuntimeTrainerSourceIds.add(target.trainerId());

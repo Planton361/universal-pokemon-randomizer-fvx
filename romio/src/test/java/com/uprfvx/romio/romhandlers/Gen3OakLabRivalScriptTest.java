@@ -64,6 +64,21 @@ public class Gen3OakLabRivalScriptTest {
     }
 
     @Test
+    public void gen3RomLoadDiagnosticsReportsTrainerLoadBoundsDetail() {
+        ThrowingDiagnosticRomHandler romHandler = new ThrowingDiagnosticRomHandler("trainer load",
+                "trainer=329 slot=1 layout=held-item-custom-moves partyFlags=3 partyCount=2 "
+                        + "trainerOffset=in-rom partyPointer=out-of-rom slotOffset=out-of-rom");
+
+        Gen3RomHandler.Gen3RomLoadDiagnostics diagnostics = romHandler.loadRomForDiagnostics("<redacted>");
+
+        assertFalse(diagnostics.loaded());
+        assertEquals("trainer load", diagnostics.phase());
+        assertEquals("ArrayIndexOutOfBoundsException", diagnostics.exceptionClass());
+        assertEquals("trainer=329 slot=1 layout=held-item-custom-moves partyFlags=3 partyCount=2 "
+                + "trainerOffset=in-rom partyPointer=out-of-rom slotOffset=out-of-rom", diagnostics.detail());
+    }
+
+    @Test
     public void oakLabStarterScriptContainsSeparatePlayerAndRivalStarterSpecies() {
         byte[] rom = new byte[1024];
         writeWord(rom, 64, 1001);
@@ -808,9 +823,15 @@ public class Gen3OakLabRivalScriptTest {
 
     private static class ThrowingDiagnosticRomHandler extends Gen3RomHandler {
         private final String failingPhase;
+        private final String trainerLoadDetail;
 
         ThrowingDiagnosticRomHandler(String failingPhase) {
+            this(failingPhase, null);
+        }
+
+        ThrowingDiagnosticRomHandler(String failingPhase, String trainerLoadDetail) {
             this.failingPhase = failingPhase;
+            this.trainerLoadDetail = trainerLoadDetail;
         }
 
         @Override
@@ -849,7 +870,11 @@ public class Gen3OakLabRivalScriptTest {
         }
 
         @Override
-        public void loadTrainers() {
+        protected void loadTrainersForDiagnostics() {
+            if ("trainer load".equals(failingPhase) && trainerLoadDetail != null) {
+                throw new Gen3RomHandler.TrainerLoadBoundsException(trainerLoadDetail,
+                        new ArrayIndexOutOfBoundsException());
+            }
             throwIfPhase("trainer load");
         }
 
