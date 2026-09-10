@@ -1969,12 +1969,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         writeByte(offset + Gen3Constants.bsCatchRateOffset, (byte) pkmn.getCatchRate());
         writeByte(offset + Gen3Constants.bsGrowthCurveOffset, pkmn.getGrowthCurve().toByte());
 
-        writeByte(offset + Gen3Constants.bsAbility1Offset, (byte) pkmn.getAbility1());
-        writeByte(offset + Gen3Constants.bsAbility2Offset, (byte) (
-                pkmn.getAbility2() == 0 ? pkmn.getAbility1() :
-                        pkmn.getAbility2())); // required to not break evos with random ability
-        if (useCfruDpeGen9SpeciesCount) {
-            writeByte(offset + Gen3Constants.bsHiddenAbilityOffset, (byte) pkmn.getAbility3());
+        // Preserve all three raw slots, including NONE in slot 2, for M-011.
+        if (!preservesHospitalityAbilities(pkmn)) {
+            writeByte(offset + Gen3Constants.bsAbility1Offset, (byte) pkmn.getAbility1());
+            writeByte(offset + Gen3Constants.bsAbility2Offset, (byte) (
+                    pkmn.getAbility2() == 0 ? pkmn.getAbility1() :
+                            pkmn.getAbility2())); // required to not break evos with random ability
+            if (useCfruDpeGen9SpeciesCount) {
+                writeByte(offset + Gen3Constants.bsHiddenAbilityOffset, (byte) pkmn.getAbility3());
+            }
         }
 
         // Held items
@@ -7605,6 +7608,26 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 abilityNames[i] = null;
             }
         }
+    }
+
+    // M-011: byte 0x6C is Hospitality only on these canonical DPE rows.
+    // Older inputs still assigning Weak Armor do not opt into this policy.
+    public boolean preservesHospitalityAbilities(Species species) {
+        return isHospitalitySpecies(useCfruDpeGen9SpeciesCount, species)
+                && species.getAbility1() == 0x6C;
+    }
+
+    static boolean isHospitalitySpecies(boolean cfruDpe, Species species) {
+        return cfruDpe && species != null
+                && (species.getSpeciesSetIdentityNumber() == 0x589
+                    || species.getSpeciesSetIdentityNumber() == 0x58A);
+    }
+
+    public String abilityNameForSpecies(int ability, Species species) {
+        if (ability == 0x6C && isHospitalitySpecies(useCfruDpeGen9SpeciesCount, species)) {
+            return "Hospitality";
+        }
+        return abilityName(ability);
     }
 
     @Override

@@ -11,6 +11,7 @@ import com.uprfvx.romio.MiscTweak;
 import com.uprfvx.romio.gamedata.*;
 import com.uprfvx.romio.romhandlers.Gen1RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 
 import java.io.PrintStream;
 import java.util.*;
@@ -659,15 +660,15 @@ public class RandomizationLogger {
                         pk.getSpdef(), pk.getSpeed());
             }
             if (romHandler.abilitiesPerSpecies() >= 1) {
-                log.printf("|%-" + abilityLen + "s", romHandler.abilityName(pk.getAbility1()));
+                log.printf("|%-" + abilityLen + "s", abilityNameForSpecies(pk.getAbility1(), pk));
             }
             if (romHandler.abilitiesPerSpecies() >= 2) {
                 log.printf("|%-" + abilityLen + "s",
-                        pk.getAbility2() == pk.getAbility1() ? "--" : romHandler.abilityName(pk.getAbility2()));
+                        pk.getAbility2() == pk.getAbility1() ? "--" : abilityNameForSpecies(pk.getAbility2(), pk));
             }
             if (romHandler.abilitiesPerSpecies() >= 3) {
                 log.printf("|%-" + abilityLen + "s",
-                        pk.getAbility3() == pk.getAbility1() ? "--" : romHandler.abilityName(pk.getAbility3()));
+                        pk.getAbility3() == pk.getAbility1() ? "--" : abilityNameForSpecies(pk.getAbility3(), pk));
             }
             if (romHandler.generationOfPokemon() != 1) {// i.e. wild pokes have held items
                 log.print("|");
@@ -1215,9 +1216,14 @@ public class RandomizationLogger {
         return "unknown move #" + moveId;
     }
 
+    private String abilityNameForSpecies(int ability, Species species) {
+        return romHandler instanceof Gen3RomHandler gen3
+                ? gen3.abilityNameForSpecies(ability, species) : romHandler.abilityName(ability);
+    }
+
     private String abilityNameForTrainerPokemon(TrainerPokemon trainerPokemon) {
         try {
-            return romHandler.abilityName(romHandler.getAbilityForTrainerPokemon(trainerPokemon));
+            return abilityNameForSpecies(romHandler.getAbilityForTrainerPokemon(trainerPokemon), trainerPokemon.getSpecies());
         } catch (RuntimeException ex) {
             return "unknown ability";
         }

@@ -7,6 +7,7 @@ import com.uprfvx.romio.constants.GlobalConstants;
 import com.uprfvx.romio.gamedata.MegaEvolution;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.romhandlers.RomHandler;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 
 import java.util.List;
 import java.util.Map;
@@ -108,7 +109,8 @@ public class SpeciesAbilityRandomizer extends Randomizer {
 
 
         romHandler.getSpeciesSetInclFormes().filter(Species::isActuallyCosmetic)
-                .filter(pk -> isAbilityRandomizationCandidate(pk.getBaseForme(), maxAbility))
+                .filter(pk -> isAbilityRandomizationCandidate(pk, maxAbility)
+                        && isAbilityRandomizationCandidate(pk.getBaseForme(), maxAbility))
                 .forEach(pk -> pk.copyBaseFormeAbilities(pk.getBaseForme()));
 
         if (megaEvolutionSanity) {
@@ -129,6 +131,9 @@ public class SpeciesAbilityRandomizer extends Randomizer {
     }
 
     private boolean isAbilityRandomizationCandidate(Species species, int maxAbility) {
+        if (romHandler instanceof Gen3RomHandler gen3 && gen3.preservesHospitalityAbilities(species)) {
+            return false;
+        }
         if (species == null || species.getBST() == 0) {
             return false;
         }
