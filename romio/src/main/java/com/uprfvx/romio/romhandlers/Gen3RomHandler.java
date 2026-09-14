@@ -7273,6 +7273,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public List<PickupItem> getPickupItems() {
+        rejectUnsupportedCfruDpePickup();
         List<PickupItem> pickupItems = new ArrayList<>();
         int pickupItemCount = romEntry.getIntValue("PickupItemCount");
         int sizeOfPickupEntry = romEntry.getRomType() == Gen3Constants.RomType_Em ? 2 : 4;
@@ -7334,6 +7335,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void setPickupItems(List<PickupItem> pickupItems) {
+        rejectUnsupportedCfruDpePickup();
         int sizeOfPickupEntry = romEntry.getRomType() == Gen3Constants.RomType_Em ? 2 : 4;
         if (pickupItemsTableOffset > 0) {
             for (int i = 0; i < pickupItems.size(); i++) {
@@ -7341,6 +7343,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 int itemInternalID = Gen3Constants.itemIDToInternal(pickupItems.get(i).getItem().getId());
                 IOFunctions.write2ByteInt(rom, itemOffset, itemInternalID);
             }
+        }
+    }
+
+    private void rejectUnsupportedCfruDpePickup() {
+        if (useCfruDpeGen9SpeciesCount) {
+            // CFRU's ChoosePickupItem uses separate level-dependent common/rare
+            // arrays. The vanilla FRLG locator below does not identify them.
+            throw new RomIOException("Pickup randomization is unsupported for this CFRU/DPE profile. "
+                    + "Set Pickup Items to Unchanged; the engine's active tables are preserved.");
         }
     }
 
