@@ -83,24 +83,9 @@ public class CliRandomizer {
                 String filename = fh.getAbsolutePath();
 
                 GameRandomizer randomizer = new GameRandomizer(settings, cpg, romHandler, bundle, saveAsDirectory);
-                randomizer.randomize(filename, verboseLog, seed);
+                GameRandomizer.Results randomizationResult = randomizer.randomize(filename, verboseLog, seed);
                 verboseLog.close();
-                byte[] out = baos.toByteArray();
-                if (saveLog) {
-                    try {
-                        FileOutputStream fos = new FileOutputStream(filename + ".log");
-                        fos.write(0xEF);
-                        fos.write(0xBB);
-                        fos.write(0xBF);
-                        fos.write(out);
-                        fos.close();
-                    } catch (IOException e) {
-                        printWarning("Could not write log.");
-                    }
-                }
-                System.out.println("Randomized successfully!");
-                // this is the only successful exit, everything else will return false at the end of the function
-                return true;
+                return completeRandomization(randomizationResult, filename, baos.toByteArray(), saveLog);
 
             } else {
                 printError("Could not load " + romFile.getAbsolutePath() + "; " + results.getFailType());
@@ -111,6 +96,29 @@ public class CliRandomizer {
             e.printStackTrace();
         }
         return false;
+    }
+
+    // The ROM layer reports failures in Results rather than throwing them to
+    // this caller. Check before publishing a log or announcing a saved output.
+    static boolean completeRandomization(GameRandomizer.Results result, String filename, byte[] out, boolean saveLog) {
+        if (!result.wasSaveSuccessful()) {
+            printError("Randomization failed: " + result.getException());
+            return false;
+        }
+        if (saveLog) {
+            try {
+                FileOutputStream fos = new FileOutputStream(filename + ".log");
+                fos.write(0xEF);
+                fos.write(0xBB);
+                fos.write(0xBF);
+                fos.write(out);
+                fos.close();
+            } catch (IOException e) {
+                printWarning("Could not write log.");
+            }
+        }
+        System.out.println("Randomized successfully!");
+        return true;
     }
 
     private static void displaySettingsWarnings(Settings settings, RomHandler romHandler) {
