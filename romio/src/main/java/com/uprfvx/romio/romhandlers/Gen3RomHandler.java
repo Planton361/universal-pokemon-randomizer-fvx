@@ -8391,7 +8391,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public int miscTweaksAvailable() {
         int available = MiscTweak.LOWER_CASE_POKEMON_NAMES.getValue();
-        if (romEntry.getIntValue("NationalDexTweakPossible") != 0) {
+        if (!isCfruDpeGen9BpreProfile() && romEntry.getIntValue("NationalDexTweakPossible") != 0) {
             available |= MiscTweak.NATIONAL_DEX_AT_START.getValue();
         }
         if (usesCfruDpeBpreRunningLogic()
@@ -8428,6 +8428,12 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void applyMiscTweak(MiscTweak tweak) {
+        if (tweak == MiscTweak.NATIONAL_DEX_AT_START && isCfruDpeGen9BpreProfile()) {
+            // This dispatcher does not recheck availability, so a stale serialized bit can reach it.
+            // The generic FRLG routine rewrites the vanilla handoff and Oak/Aide scripts; like the
+            // profile-specific Running Shoes patches, safely ignore it for this unsupported target.
+            return;
+        }
         if (tweak == MiscTweak.RUNNING_SHOES_INDOORS) {
             applyRunningShoesIndoorsPatch();
         } else if (tweak == MiscTweak.FASTEST_TEXT) {
@@ -8511,6 +8517,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private boolean usesCfruDpeBpreRunningLogic() {
+        return isCfruDpeGen9BpreProfile();
+    }
+
+    private boolean isCfruDpeGen9BpreProfile() {
         return useCfruDpeGen9SpeciesCount && "BPRE".equals(romEntry.getRomCode());
     }
 
