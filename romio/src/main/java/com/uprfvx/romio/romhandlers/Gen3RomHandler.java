@@ -167,6 +167,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private String[] pokeNames;
     private int pickupItemsTableOffset;
     private boolean useCfruDpeGen9SpeciesCount;
+    private final Map<Integer, CfruDpeEvolutionRow> originalCfruDpeEvolutionRows = new HashMap<>();
+
+    // Value snapshots must not alias mutable Evolution objects. Estimated levels are
+    // randomizer bookkeeping; they are not fields of a Gen3 evolution-table entry.
+    private record CfruDpeModeledEvolution(int from, int to, EvolutionType type, int parameter, int forme) {}
+    private record CfruDpeEvolutionRow(byte[] raw, List<CfruDpeModeledEvolution> modeled,
+                                     boolean fullyModeled) {}
+
     private final Map<Species, byte[]> originalCfruDpeNormalPaletteBytes = new IdentityHashMap<>();
     private final Map<Species, byte[]> originalCfruDpeShinyPaletteBytes = new IdentityHashMap<>();
     private static final String CFRU_DPE_DIAGNOSTIC_PREFIX = "[temporary CFRU/DPE species diagnostics] ";
@@ -1351,6 +1359,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void saveSpeciesStats() {
+        if (useCfruDpeGen9SpeciesCount) {
+            // Validate every evolution row before even names/stats are rewritten.
+            prepareCfruDpeEvolutionRows();
+        }
         // Write pokemon names & stats
         int offs = romEntry.getIntValue("PokemonNames");
         int nameLen = romEntry.getIntValue("PokemonNameLength");
@@ -6996,6 +7008,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void loadEvolutions() {
+        originalCfruDpeEvolutionRows.clear();
         for (Species pkmn : pokes) {
             if (pkmn != null) {
                 pkmn.getEvolutionsFrom().clear();
@@ -7033,10 +7046,33 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     }
                 }
             }
+            if (useCfruDpeGen9SpeciesCount) {
+                byte[] raw = Arrays.copyOfRange(rom, evoOffset, evoOffset + getEvolutionRowSize());
+                originalCfruDpeEvolutionRows.put(getEvolutionInternalSpeciesId(pk),
+                        new CfruDpeEvolutionRow(raw, snapshotCfruDpeEvolutions(pk),
+                                Arrays.equals(raw, encodeCfruDpeEvolutions(pk))));
+            }
         }
     }
 
     private void writeEvolutions() {
+        if (useCfruDpeGen9SpeciesCount) {
+            Map<Integer, byte[]> rows = prepareCfruDpeEvolutionRows();
+            int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+            for (int i = 1; i <= numRealPokemon; i++) {
+                Species pk = speciesList.get(i);
+                if (pk == null) {
+                    continue;
+                }
+                int internalId = getEvolutionInternalSpeciesId(pk);
+                byte[] row = rows.get(internalId);
+                System.arraycopy(row, 0, rom, getEvolutionRowOffset(baseOffset, pk), row.length);
+                CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(internalId);
+                originalCfruDpeEvolutionRows.put(internalId,
+                        new CfruDpeEvolutionRow(row, snapshotCfruDpeEvolutions(pk), original.fullyModeled()));
+            }
+            return;
+        }
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
         int evolutionSlotsPerSpecies = getEvolutionSlotsPerSpecies();
         for (int i = 1; i <= numRealPokemon; i++) {
@@ -7070,6 +7106,85 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 evosWritten++;
             }
         }
+    }
+
+    private List<CfruDpeModeledEvolution> snapshotCfruDpeEvolutions(Species species) {
+        return species.getEvolutionsFrom().stream().map(evo -> new CfruDpeModeledEvolution(
+                getEvolutionInternalSpeciesId(evo.getFrom()), getEvolutionInternalSpeciesId(evo.getTo()),
+                evo.getType(), evo.getExtraInfo(), evo.getForme())).toList();
+    }
+
+    private RomIOException unsafeCfruDpeEvolutionChange(Species species, String reason) {
+        return new RomIOException("Cannot safely write CFRU/DPE evolutions for internal species "
+                + getEvolutionInternalSpeciesId(species) + ": " + reason
+                + ". Keep this species' evolutions Unchanged; opaque methods and raw metadata must be preserved.");
+    }
+
+    private Map<Integer, byte[]> prepareCfruDpeEvolutionRows() {
+        Map<Integer, byte[]> rows = new LinkedHashMap<>();
+        int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+        for (int i = 1; i <= numRealPokemon; i++) {
+            Species pk = speciesList.get(i);
+            if (pk == null) {
+                continue;
+            }
+            int id = getEvolutionInternalSpeciesId(pk);
+            CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(id);
+            if (original == null) {
+                throw unsafeCfruDpeEvolutionChange(pk, "missing loaded raw row");
+            }
+            int offset = getEvolutionRowOffset(baseOffset, pk);
+            if (!Arrays.equals(original.raw(), Arrays.copyOfRange(rom, offset, offset + getEvolutionRowSize()))) {
+                throw unsafeCfruDpeEvolutionChange(pk, "raw row changed outside the evolution writer");
+            }
+            byte[] row;
+            if (original.modeled().equals(snapshotCfruDpeEvolutions(pk))) {
+                // No repacking: retain even holes, duplicate relationships, invalid
+                // targets, unknown methods, auxiliary fields and empty-slot metadata.
+                row = original.raw();
+            } else {
+                if (!original.fullyModeled()) {
+                    throw unsafeCfruDpeEvolutionChange(pk, "loaded row contains unmodeled slots or metadata");
+                }
+                row = encodeCfruDpeEvolutions(pk);
+            }
+            if (rows.put(id, row) != null) {
+                throw unsafeCfruDpeEvolutionChange(pk, "duplicate internal species row");
+            }
+        }
+        return rows;
+    }
+
+    private byte[] encodeCfruDpeEvolutions(Species species) {
+        List<Evolution> evolutions = species.getEvolutionsFrom();
+        if (evolutions.size() > getEvolutionSlotsPerSpecies()) {
+            throw unsafeCfruDpeEvolutionChange(species, "more relationships than available slots");
+        }
+        byte[] row = new byte[getEvolutionRowSize()];
+        int offset = 0;
+        for (Evolution evo : evolutions) {
+            int method = Gen3Constants.evolutionTypeToIndex(evo.getType());
+            int parameter = evo.getExtraInfo();
+            int target = getEvolutionInternalSpeciesId(evo.getTo());
+            if (method < 1 || method > Gen3Constants.evolutionMethodCount || parameter < 0 || parameter > 0xFFFF
+                    || target < 1 || target > romEntry.getIntValue("PokemonCount")
+                    || target >= pokesInternal.length || pokesInternal[target] == null
+                    || getEvolutionInternalSpeciesId(evo.getFrom()) != getEvolutionInternalSpeciesId(species)
+                    || evo.getForme() != 0) {
+                throw unsafeCfruDpeEvolutionChange(species, "relationship is not representable by supported Gen3 fields");
+            }
+            if (evo.getType().usesItem()) {
+                parameter = Gen3Constants.itemIDToInternal(parameter);
+            }
+            if (parameter < 0 || parameter > 0xFFFF) {
+                throw unsafeCfruDpeEvolutionChange(species, "parameter exceeds the encoded field width");
+            }
+            IOFunctions.write2ByteInt(row, offset, method);
+            IOFunctions.write2ByteInt(row, offset + 2, parameter);
+            IOFunctions.write2ByteInt(row, offset + 4, target);
+            offset += GEN3_EVOLUTION_ENTRY_SIZE;
+        }
+        return row;
     }
 
     private int getEvolutionRowOffset(int baseOffset, Species species) {
