@@ -152,6 +152,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private List<Species> speciesList;
     private int numRealPokemon;
     private List<Item> items;
+    // Opaque custom-row bytes belong only to the exact member loaded by this handler.
+    private final Map<TrainerPokemon, Integer> originalCfruDpeTrainerOpaqueWords = new IdentityHashMap<>();
     private Move[] moves;
     private final Map<Move, CfruDpeMoveType> originalCfruDpeMoveTypes = new IdentityHashMap<>();
 
@@ -4446,6 +4448,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public void loadTrainers() {
         trainers.clear();
+        originalCfruDpeTrainerOpaqueWords.clear();
         frlgRuntimeTrainerSourceIds.clear();
         int baseOffset = romEntry.getIntValue("TrainerData");
         int amount = romEntry.getIntValue("TrainerCount");
@@ -4473,6 +4476,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     protected void loadTrainersForDiagnostics() {
         trainers.clear();
+        originalCfruDpeTrainerOpaqueWords.clear();
         frlgRuntimeTrainerSourceIds.clear();
         int baseOffset = romEntry.getIntValue("TrainerData");
         int amount = romEntry.getIntValue("TrainerCount");
@@ -4605,6 +4609,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                         thisPoke.setHeldItem(items.get(itemID));
                         for (int move = 0; move < 4; move++) {
                             thisPoke.getMoves()[move] = readWord(slotOffset + movesOffset + (move * 2));
+                        }
+                        if (useCfruDpeGen9SpeciesCount) {
+                            originalCfruDpeTrainerOpaqueWords.put(thisPoke,
+                                    readWord(slotOffset + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_TERA_TYPE_OFFSET));
                         }
                         tr.getPokemon().add(thisPoke);
                     } catch (RuntimeException e) {
@@ -5207,7 +5215,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 4] = tp.getSpatkEVs();
         pokemonData[rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_EV_SPREAD_OFFSET + 5] = tp.getSpdefEVs();
         writeWord(pokemonData, rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_ITEM_OFFSET, itemInternalID);
-        writeWord(pokemonData, rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_TERA_TYPE_OFFSET, 0);
+        writeWord(pokemonData, rowBase + CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_TERA_TYPE_OFFSET,
+                originalCfruDpeTrainerOpaqueWords.getOrDefault(tp, 0));
     }
 
     static void normalizeTrainerCustomMoveStateBeforeWrite(Trainer trainer) {
