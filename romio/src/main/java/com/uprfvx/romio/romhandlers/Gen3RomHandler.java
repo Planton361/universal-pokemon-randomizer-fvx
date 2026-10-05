@@ -167,6 +167,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private String[] pokeNames;
     private int pickupItemsTableOffset;
     private boolean useCfruDpeGen9SpeciesCount;
+    private final Map<Species, CfruDpeAbilities> originalCfruDpeAbilities = new IdentityHashMap<>();
+
+    private record CfruDpeAbilities(int slot1, int slot2, int hidden) {
+        private static CfruDpeAbilities of(Species species) {
+            return new CfruDpeAbilities(species.getAbility1(), species.getAbility2(), species.getAbility3());
+        }
+    }
+
     private final Map<Integer, CfruDpeEvolutionRow> originalCfruDpeEvolutionRows = new HashMap<>();
 
     // Value snapshots must not alias mutable Evolution objects. Estimated levels are
@@ -822,6 +830,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void loadSpeciesStats() {
+        originalCfruDpeAbilities.clear();
         loadPokemonNames();
         loadPokedexOrder();
 
@@ -1928,6 +1937,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         pkmn.setAbility2(rom[offset + Gen3Constants.bsAbility2Offset] & 0xFF);
         if (useCfruDpeGen9SpeciesCount) {
             pkmn.setAbility3(rom[offset + Gen3Constants.bsHiddenAbilityOffset] & 0xFF);
+            originalCfruDpeAbilities.put(pkmn, CfruDpeAbilities.of(pkmn));
         }
 
         // Held Items?
@@ -1981,10 +1991,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         writeByte(offset + Gen3Constants.bsCatchRateOffset, (byte) pkmn.getCatchRate());
         writeByte(offset + Gen3Constants.bsGrowthCurveOffset, pkmn.getGrowthCurve().toByte());
 
+        // CFRU/DPE zero slot 2 is meaningful loaded data. Only an unchanged
+        // ability tuple bypasses the legacy randomized-ability evolution fallback.
+        boolean unchangedAbilities = useCfruDpeGen9SpeciesCount
+                && CfruDpeAbilities.of(pkmn).equals(originalCfruDpeAbilities.get(pkmn));
+        int ability2 = unchangedAbilities || pkmn.getAbility2() != 0
+                ? pkmn.getAbility2() : pkmn.getAbility1();
         writeByte(offset + Gen3Constants.bsAbility1Offset, (byte) pkmn.getAbility1());
-        writeByte(offset + Gen3Constants.bsAbility2Offset, (byte) (
-                pkmn.getAbility2() == 0 ? pkmn.getAbility1() :
-                        pkmn.getAbility2())); // required to not break evos with random ability
+        writeByte(offset + Gen3Constants.bsAbility2Offset, (byte) ability2);
         if (useCfruDpeGen9SpeciesCount) {
             writeByte(offset + Gen3Constants.bsHiddenAbilityOffset, (byte) pkmn.getAbility3());
         }
@@ -2013,6 +2027,12 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     : bi.getSecondaryEggGroup().toID());
             writeByte(offset + Gen3Constants.bsSecondaryEggGroupOffset, secondaryEggGroupByte);
             writeByte(offset + Gen3Constants.bsEggCyclesOffset, (byte) bi.getEggCycles());
+        }
+        if (useCfruDpeGen9SpeciesCount) {
+            // Track bytes actually written, not a modeled zero that used fallback.
+            // Repeated saves and later mutations compare against the current row.
+            originalCfruDpeAbilities.put(pkmn, new CfruDpeAbilities(
+                    pkmn.getAbility1() & 0xFF, ability2 & 0xFF, pkmn.getAbility3() & 0xFF));
         }
     }
 
