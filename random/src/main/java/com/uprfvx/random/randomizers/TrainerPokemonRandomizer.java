@@ -1288,7 +1288,7 @@ public class TrainerPokemonRandomizer extends Randomizer {
         }
         return tp.isResetMoves() ?
                 romHandler.getMovesAtLevel(romHandler.getAltFormeOfSpecies(
-                                tp.getSpecies(), tp.getForme()).getNumber(),
+                                tp.getSpecies(), tp.getForme()),
                         movesets,
                         tp.getLevel()) :
                 tp.getMoves();

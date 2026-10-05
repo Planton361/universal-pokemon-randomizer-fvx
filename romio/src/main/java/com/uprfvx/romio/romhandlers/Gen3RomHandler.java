@@ -5170,7 +5170,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 						movesets = this.getMovesLearnt();
 					}
 					int[] pokeMoves = normalizeTrainerMoveSlots(
-                            getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel()));
+                            getMovesAtLevel(tp.getSpecies(), movesets, tp.getLevel()));
                     writeTrainerMoveSlots(pokemonData, rowBase + movesStart, pokeMoves);
 				} else {
                     int[] pokeMoves = normalizeTrainerMoveSlots(tp.getMoves());
@@ -5180,7 +5180,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                             movesets = this.getMovesLearnt();
                         }
                         pokeMoves = normalizeTrainerMoveSlots(
-                                getMovesAtLevel(tp.getSpecies().getNumber(), movesets, tp.getLevel()));
+                                getMovesAtLevel(tp.getSpecies(), movesets, tp.getLevel()));
                     } else {
                         tp.setMoves(pokeMoves);
                     }
@@ -5390,6 +5390,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             movesets.put(internalSpecies, moves);
         }
         return movesets;
+    }
+
+    @Override
+    public int[] getMovesAtLevel(Species species, Map<Integer, List<MoveLearnt>> movesets, int level) {
+        if (useCfruDpeGen9SpeciesCount && usesInternalSpeciesIdentityForExtendedBpreHack()) {
+            // Use the learnset loader's identity owner; never guess from key presence.
+            return super.getMovesAtLevel(getCfruDpeLearnsetInternalSpeciesId(species), movesets, level);
+        }
+        return getMovesAtLevel(species.getNumber(), movesets, level);
     }
 
     @Override
