@@ -401,6 +401,15 @@ public interface RomHandler {
      */
     int[] getMovesAtLevel(int pkmn, Map<Integer, List<MoveLearnt>> movesets, int level);
 
+    /**
+     * Get level-up moves using an explicit Species identity. Handlers whose
+     * learnsets use another identity domain override this instead of guessing
+     * the meaning of an integer key.
+     */
+    default int[] getMovesAtLevel(Species species, Map<Integer, List<MoveLearnt>> movesets, int level) {
+        return getMovesAtLevel(species.getNumber(), movesets, level);
+    }
+
 
         // ==============
     // Static Pokemon
