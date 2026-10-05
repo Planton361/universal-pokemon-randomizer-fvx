@@ -196,6 +196,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private static final int CFRU_DPE_DIAGNOSTIC_SAMPLE_LIMIT = 12;
     private static final int CFRU_DPE_XERNEAS_INTERNAL_ID = 824;
     private static final int CFRU_DPE_MOVES_COUNT = 992;
+    // CFRU include/constants/moves.h: Z, Max and G-Max moves occupy this exact block.
+    // Regular Gen-9 moves resume at 0x39B; standard MoveIDs use a different domain.
+    private static final int CFRU_DPE_FIRST_SYSTEM_MOVE = 0x2FF;
+    private static final int CFRU_DPE_LAST_SYSTEM_MOVE = 0x39A;
     private static final int GEN3_BATTLE_MOVE_ENTRY_SIZE = 0xC;
     private static final int CFRU_DPE_MOVE_SPLIT_PHYSICAL = 0;
     private static final int CFRU_DPE_MOVE_SPLIT_SPECIAL = 1;
@@ -8685,6 +8689,18 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private boolean usesCfruDpeBpreRunningLogic() {
         return isCfruDpeGen9BpreProfile();
+    }
+
+    @Override
+    public List<Integer> getIllegalMoves() {
+        if (!isCfruDpeGen9BpreProfile()) {
+            return super.getIllegalMoves();
+        }
+        List<Integer> illegalMoves = new ArrayList<>();
+        for (int move = CFRU_DPE_FIRST_SYSTEM_MOVE; move <= CFRU_DPE_LAST_SYSTEM_MOVE; move++) {
+            illegalMoves.add(move);
+        }
+        return illegalMoves;
     }
 
     private boolean isCfruDpeGen9BpreProfile() {
