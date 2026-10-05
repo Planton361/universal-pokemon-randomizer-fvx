@@ -153,6 +153,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private int numRealPokemon;
     private List<Item> items;
     private Move[] moves;
+    private final Map<Move, CfruDpeMoveType> originalCfruDpeMoveTypes = new IdentityHashMap<>();
+
+    // Opaque raw bytes remain data, not additional modeled Type semantics.
+    private record CfruDpeMoveType(byte raw, Type modeled) {}
     private boolean jamboMovesetHack;
     private boolean havePatchedObedience;
     private String[] tb;
@@ -1406,6 +1410,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void loadMoves() {
+        originalCfruDpeMoveTypes.clear();
         int moveCount = romEntry.getIntValue("MoveCount");
         moves = new Move[moveCount + 1];
         int offs = romEntry.getIntValue("MoveData");
@@ -1422,6 +1427,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             moves[i].power = rom[moveOffset + 1] & 0xFF;
             moves[i].pp = rom[moveOffset + 4] & 0xFF;
             moves[i].type = typeFromMoveData(rom[moveOffset + 2] & 0xFF);
+            if (useCfruDpeGen9SpeciesCount) {
+                originalCfruDpeMoveTypes.put(moves[i],
+                        new CfruDpeMoveType(rom[moveOffset + 2], moves[i].type));
+            }
             moves[i].target = rom[moveOffset + 6] & 0xFF;
             moves[i].category = categoryFromMoveData(moves[i], rom[moveOffset + 10] & 0xFF);
             moves[i].priority = rom[moveOffset + 7];
@@ -1889,15 +1898,29 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             writeFixedLengthString(newMoveName, stringOffset, namelen);
 
             int moveOffset = offs + i * GEN3_BATTLE_MOVE_ENTRY_SIZE;
-            writeGen3BattleMoveData(rom, moveOffset, moves[i], hitratio, useCfruDpeGen9SpeciesCount);
+            CfruDpeMoveType original = useCfruDpeGen9SpeciesCount ? originalCfruDpeMoveTypes.get(moves[i]) : null;
+            // A value no-op (including NORMAL -> NORMAL) retains the loaded byte.
+            byte rawType = original != null && original.modeled() == moves[i].type
+                    ? original.raw() : moveDataTypeToByte(moves[i].type, useCfruDpeGen9SpeciesCount);
+            writeGen3BattleMoveData(rom, moveOffset, moves[i], hitratio, useCfruDpeGen9SpeciesCount, rawType);
+            if (useCfruDpeGen9SpeciesCount) {
+                originalCfruDpeMoveTypes.put(moves[i], new CfruDpeMoveType(rom[moveOffset + 2],
+                        typeFromMoveData(rom[moveOffset + 2] & 0xFF)));
+            }
         }
     }
 
     static void writeGen3BattleMoveData(byte[] data, int moveOffset, Move move, int hitratio,
                                         boolean useCfruDpeGen9SpeciesCount) {
+        writeGen3BattleMoveData(data, moveOffset, move, hitratio, useCfruDpeGen9SpeciesCount,
+                moveDataTypeToByte(move.type, useCfruDpeGen9SpeciesCount));
+    }
+
+    private static void writeGen3BattleMoveData(byte[] data, int moveOffset, Move move, int hitratio,
+                                               boolean useCfruDpeGen9SpeciesCount, byte rawType) {
         data[moveOffset] = (byte) move.effectIndex;
         data[moveOffset + 1] = (byte) move.power;
-        data[moveOffset + 2] = moveDataTypeToByte(move.type, useCfruDpeGen9SpeciesCount);
+        data[moveOffset + 2] = rawType;
         data[moveOffset + 3] = (byte) hitratio;
         data[moveOffset + 4] = (byte) move.pp;
         if (useCfruDpeGen9SpeciesCount) {
