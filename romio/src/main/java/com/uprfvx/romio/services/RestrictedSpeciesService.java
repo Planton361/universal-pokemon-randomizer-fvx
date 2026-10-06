@@ -5,6 +5,7 @@ import com.uprfvx.romio.gamedata.GenRestrictions;
 import com.uprfvx.romio.gamedata.MegaEvolution;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.gamedata.SpeciesSet;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 
 import java.util.Collections;
@@ -166,6 +167,14 @@ public class RestrictedSpeciesService {
         } else {
             allInclAltFormes = SpeciesSet.unmodifiable(romHandler.getSpeciesSetInclFormes()
                     .filter(sp -> SpecialFormPredicates.isSpeciesAllowed(sp, null, effectiveOptions)));
+        }
+        // Apply after evolutionary-relative expansion as well as direct generation limits.
+        // Every ordinary selection consumer receives this same baseline, independently
+        // of the generic form options. Evolution gets safe candidates only; no row edits.
+        if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+            var movesets = gen3.getMovesLearnt();
+            allInclAltFormes = SpeciesSet.unmodifiable(allInclAltFormes.filter(
+                    sp -> gen3.getCfruDpeRandomPoolEligibility(sp, movesets).eligible()));
         }
         megaEvolutions = romHandler.getMegaEvolutions().stream()
                 .filter(mevo -> allInclAltFormes.contains(mevo.getTo()))
