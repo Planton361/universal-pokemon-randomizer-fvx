@@ -28,6 +28,7 @@ import com.uprfvx.romio.constants.ItemIDs;
 import com.uprfvx.romio.gamedata.*;
 import com.uprfvx.romio.graphics.packs.CustomPlayerGraphics;
 import com.uprfvx.romio.services.RestrictedSpeciesService;
+import com.uprfvx.romio.services.AbilityRandomizationPolicy;
 import com.uprfvx.romio.services.TypeService;
 
 import java.awt.image.BufferedImage;
@@ -223,6 +224,10 @@ public interface RomHandler {
     int abilitiesPerSpecies();
 
     int highestAbilityIndex();
+
+    default AbilityRandomizationPolicy getAbilityRandomizationPolicy() {
+        return AbilityRandomizationPolicy.legacy(this);
+    }
 
     String abilityName(int number);
 

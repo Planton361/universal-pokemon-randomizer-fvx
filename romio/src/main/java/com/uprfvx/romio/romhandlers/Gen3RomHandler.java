@@ -36,6 +36,7 @@ import com.uprfvx.romio.romhandlers.romentries.Gen3EventTextEntry;
 import com.uprfvx.romio.romhandlers.romentries.Gen3RomEntry;
 import com.uprfvx.romio.romhandlers.romentries.RomEntry;
 import com.uprfvx.romio.services.CfruDpeItemCategories;
+import com.uprfvx.romio.services.AbilityRandomizationPolicy;
 import com.uprfvx.romio.services.CfruDpeItemPoolPolicy;
 import compressors.DSCmp;
 import compressors.DSDecmp;
@@ -7937,6 +7938,12 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public int highestAbilityIndex() {
         return useCfruDpeGen9SpeciesCount ? Gen3Constants.cfruDpeHighestAbilityIndex : Gen3Constants.highestAbilityIndex;
+    }
+
+    @Override
+    public AbilityRandomizationPolicy getAbilityRandomizationPolicy() {
+        return useCfruDpeGen9SpeciesCount ? AbilityRandomizationPolicy.cfruDpe()
+                : AbilityRandomizationPolicy.legacy(this);
     }
 
     private void loadAbilityNames() {
