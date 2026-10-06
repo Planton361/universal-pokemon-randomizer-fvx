@@ -6,6 +6,7 @@ import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.gamedata.SpeciesSet;
 import com.uprfvx.romio.romhandlers.RomHandler;
 import com.uprfvx.romio.services.RestrictedSpeciesService;
+import com.uprfvx.romio.services.SpeciesClassificationPolicy;
 import com.uprfvx.romio.services.TypeService;
 import org.junit.jupiter.api.Test;
 
@@ -95,6 +96,7 @@ public class TradeDecisionTest {
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) {
             return switch (method.getName()) {
+                case "getSpeciesClassificationPolicy" -> SpeciesClassificationPolicy.legacy();
                 case "getRestrictedSpeciesService" -> restrictedSpeciesService;
                 case "getTypeService" -> typeService;
                 case "getInGameTrades" -> trades;
