@@ -3,6 +3,7 @@ package com.uprfvx.random.randomizers;
 import com.uprfvx.random.Settings;
 import com.uprfvx.random.exceptions.RandomizationException;
 import com.uprfvx.romio.gamedata.*;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 
 import java.util.*;
@@ -345,6 +346,12 @@ public class StarterRandomizer extends Randomizer {
         for (int customStarter : starterIndices) {
             if (!(customStarter == 0)) {
                 Species starter = romSpecies.get(customStarter);
+                if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+                    var eligibility = gen3.getCfruDpeRandomPoolEligibility(starter, gen3.getMovesLearnt());
+                    if (!eligibility.eligible()) {
+                        throw new RandomizationException("Unsafe CFRU/DPE custom starter: " + eligibility.reason());
+                    }
+                }
                 customStarters.add(starter);
             }
         }

@@ -49,6 +49,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import com.uprfvx.romio.services.SpecialFormPredicates;
+
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -949,6 +951,34 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return romEntry.getIntValue("TrainerEntrySize");
     }
 
+    public boolean usesCfruDpeRandomPoolPolicy() {
+        return useCfruDpeGen9SpeciesCount;
+    }
+
+    /** Single CFRU/DPE baseline contract; path-specific restrictions may only narrow it. */
+    public SpecialFormPredicates.CfruDpePoolEligibility getCfruDpeRandomPoolEligibility(
+            Species species, Map<Integer, List<MoveLearnt>> movesets) {
+        if (!usesCfruDpeRandomPoolPolicy()) {
+            return new SpecialFormPredicates.CfruDpePoolEligibility(true, "CFRU/DPE policy not applicable");
+        }
+        var category = SpecialFormPredicates.cfruDpePoolCategory(species);
+        if (!category.eligible()) {
+            return new SpecialFormPredicates.CfruDpePoolEligibility(false, category.reason());
+        }
+        if (species.getNumber() <= 0) {
+            return new SpecialFormPredicates.CfruDpePoolEligibility(false, "invalid species-to-Dex mapping");
+        }
+        if (species.getHp() <= 0 || species.getAttack() <= 0 || species.getDefense() <= 0
+                || species.getSpeed() <= 0 || species.getSpatk() <= 0 || species.getSpdef() <= 0
+                || species.getPrimaryType(false) == null) {
+            return new SpecialFormPredicates.CfruDpePoolEligibility(false, "invalid required base stats/type");
+        }
+        var issue = getCfruDpeRandomPoolSpeciesAssetIssues(species, movesets).stream().findFirst();
+        return new SpecialFormPredicates.CfruDpePoolEligibility(issue.isEmpty(),
+                issue.map(CfruDpeRandomPoolAssetIssue::getLabel)
+                        .orElse(category.reason() + ": valid baseline data/assets"));
+    }
+
     public boolean hasUsableCfruDpeRandomPoolSpeciesAssets(Species species,
                                                            Map<Integer, List<MoveLearnt>> movesets) {
         return getCfruDpeRandomPoolSpeciesAssetIssues(species, movesets).isEmpty();
@@ -976,7 +1006,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
 
         List<MoveLearnt> moves = movesets == null ? null : movesets.get(internalSpecies);
-        if (moves == null || moves.isEmpty()) {
+        if (moves == null || moves.stream().noneMatch(move ->
+                move != null && move.move > 0 && move.move < CFRU_DPE_MOVES_COUNT)) {
             issues.add(CfruDpeRandomPoolAssetIssue.NO_USABLE_LEARNSET);
         }
         if (!hasValidCfruDpeRandomPoolAssetPointer("PokemonFrontImages", internalSpecies)) {
@@ -1036,7 +1067,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private boolean hasValidCfruDpeRandomPoolAssetPointer(String tableKey, int internalSpecies) {
         int tableOffset = romEntry.getIntValue(tableKey);
         int pointerOffset = tableOffset + internalSpecies * 8;
-        return pointerOffset >= 0
+        return tableOffset > 0 && pointerOffset >= 0
                 && pointerOffset + GBConstants.longSize <= rom.length
                 && readPointer(pointerOffset, true) != -1;
     }
