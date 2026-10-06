@@ -147,6 +147,7 @@ public class SpeciesAbilityDecisionTest {
                 case "getTypeService" -> typeService;
                 case "abilitiesPerSpecies" -> 2;
                 case "highestAbilityIndex" -> highestAbility;
+                case "getAbilityRandomizationPolicy" -> com.uprfvx.romio.services.AbilityRandomizationPolicy.legacy(this.proxy);
                 case "getUselessAbilities" -> new java.util.ArrayList<>(List.of(3));
                 case "getSpeciesSetInclFormes", "getSpeciesSet" -> speciesSet;
                 case "getAltFormes" -> new SpeciesSet();

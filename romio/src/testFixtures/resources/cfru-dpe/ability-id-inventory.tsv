@@ -1,0 +1,256 @@
+# CFRU e68a701aa4e68733ef8ad1e7cadb68825c0d16c2 include/constants/abilities.h
+# id	hex	primary	classification	aliases (shared numeric ownership)	evidence
+1	0x01	ABILITY_STENCH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+2	0x02	ABILITY_DRIZZLE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+3	0x03	ABILITY_SPEEDBOOST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+4	0x04	ABILITY_BATTLEARMOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+5	0x05	ABILITY_STURDY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+6	0x06	ABILITY_DAMP	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+7	0x07	ABILITY_LIMBER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+8	0x08	ABILITY_SANDVEIL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+9	0x09	ABILITY_STATIC	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+10	0x0A	ABILITY_VOLTABSORB	RANDOMIZABLE_PRIMARY	ABILITY_EARTHEATER	Named primary ID; species-dependent effects retain native CFRU guards
+11	0x0B	ABILITY_WATERABSORB	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+12	0x0C	ABILITY_OBLIVIOUS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+13	0x0D	ABILITY_CLOUDNINE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+14	0x0E	ABILITY_COMPOUNDEYES	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+15	0x0F	ABILITY_INSOMNIA	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+16	0x10	ABILITY_COLORCHANGE	RANDOMIZABLE_PRIMARY	ABILITY_ELECTROMORPHOSIS	Named primary ID; species-dependent effects retain native CFRU guards
+17	0x11	ABILITY_IMMUNITY	RANDOMIZABLE_PRIMARY	ABILITY_PURIFYINGSALT	Named primary ID; species-dependent effects retain native CFRU guards
+18	0x12	ABILITY_FLASHFIRE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+19	0x13	ABILITY_SHIELDDUST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+20	0x14	ABILITY_OWNTEMPO	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+21	0x15	ABILITY_SUCTIONCUPS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+22	0x16	ABILITY_INTIMIDATE	RANDOMIZABLE_PRIMARY	ABILITY_SUPERSWEETSYRUP	Named primary ID; species-dependent effects retain native CFRU guards
+23	0x17	ABILITY_SHADOWTAG	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+24	0x18	ABILITY_ROUGHSKIN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+25	0x19	ABILITY_WONDERGUARD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+26	0x1A	ABILITY_LEVITATE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+27	0x1B	ABILITY_EFFECTSPORE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+28	0x1C	ABILITY_SYNCHRONIZE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+29	0x1D	ABILITY_CLEARBODY	RANDOMIZABLE_PRIMARY	ABILITY_GOODASGOLD	Named primary ID; species-dependent effects retain native CFRU guards
+30	0x1E	ABILITY_NATURALCURE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+31	0x1F	ABILITY_LIGHTNINGROD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+32	0x20	ABILITY_SERENEGRACE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+33	0x21	ABILITY_SWIFTSWIM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+34	0x22	ABILITY_CHLOROPHYLL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+35	0x23	ABILITY_ILLUMINATE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+36	0x24	ABILITY_TRACE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+37	0x25	ABILITY_HUGEPOWER	RANDOMIZABLE_PRIMARY	ABILITY_SUPREMEOVERLORD	Named primary ID; species-dependent effects retain native CFRU guards
+38	0x26	ABILITY_POISONPOINT	RANDOMIZABLE_PRIMARY	ABILITY_TOXICDEBRIS	Named primary ID; species-dependent effects retain native CFRU guards
+39	0x27	ABILITY_INNERFOCUS	RANDOMIZABLE_PRIMARY	ABILITY_GUARDDOG	Named primary ID; species-dependent effects retain native CFRU guards
+40	0x28	ABILITY_MAGMAARMOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+41	0x29	ABILITY_WATERVEIL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+42	0x2A	ABILITY_MAGNETPULL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+43	0x2B	ABILITY_SOUNDPROOF	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+44	0x2C	ABILITY_RAINDISH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+45	0x2D	ABILITY_SANDSTREAM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+46	0x2E	ABILITY_PRESSURE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+47	0x2F	ABILITY_THICKFAT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+48	0x30	ABILITY_EARLYBIRD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+49	0x31	ABILITY_FLAMEBODY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+50	0x32	ABILITY_RUNAWAY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+51	0x33	ABILITY_KEENEYE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+52	0x34	ABILITY_HYPERCUTTER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+53	0x35	ABILITY_PICKUP	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+54	0x36	ABILITY_TRUANT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+55	0x37	ABILITY_HUSTLE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+56	0x38	ABILITY_CUTECHARM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+57	0x39	ABILITY_PLUS	RANDOMIZABLE_PRIMARY	ABILITY_POISONPUPPETEER	Named primary ID; species-dependent effects retain native CFRU guards
+58	0x3A	ABILITY_MINUS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+59	0x3B	ABILITY_FORECAST	UNSAFE_EXCLUDE		Castform-only Forecast; existing useless semantic exclusion (general_bs_commands.c:CastformDataTypeChange)
+60	0x3C	ABILITY_STICKYHOLD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+61	0x3D	ABILITY_SHEDSKIN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+62	0x3E	ABILITY_GUTS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+63	0x3F	ABILITY_MARVELSCALE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+64	0x40	ABILITY_LIQUIDOOZE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+65	0x41	ABILITY_OVERGROW	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+66	0x42	ABILITY_BLAZE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+67	0x43	ABILITY_TORRENT	RANDOMIZABLE_PRIMARY	ABILITY_ZEROTOHERO	Named primary ID; species-dependent effects retain native CFRU guards
+68	0x44	ABILITY_SWARM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+69	0x45	ABILITY_ROCKHEAD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+70	0x46	ABILITY_DROUGHT	RANDOMIZABLE_PRIMARY	ABILITY_ORICHALCUMPULSE	Named primary ID; species-dependent effects retain native CFRU guards
+71	0x47	ABILITY_ARENATRAP	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+72	0x48	ABILITY_TRANSISTOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+73	0x49	ABILITY_DRAGONSMAW	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+74	0x4A	ABILITY_NEUTRALIZINGGAS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+75	0x4B	ABILITY_SHELLARMOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+76	0x4C	ABILITY_HUNGERSWITCH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+77	0x4D	ABILITY_LINGERINGAROMA	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+78	0x4E	ABILITY_SWEETVEIL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+79	0x4F	ABILITY_SKILLLINK	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+80	0x50	ABILITY_MOTORDRIVE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+81	0x51	ABILITY_MULTISCALE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+82	0x52	ABILITY_TECHNICIAN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+83	0x53	ABILITY_SCRAPPY	RANDOMIZABLE_PRIMARY	ABILITY_MINDSEYE	Named primary ID; species-dependent effects retain native CFRU guards
+84	0x54	ABILITY_SUPERLUCK	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+85	0x55	ABILITY_SNIPER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+86	0x56	ABILITY_REGENERATOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+87	0x57	ABILITY_PRANKSTER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+88	0x58	ABILITY_ADAPTABILITY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+89	0x59	ABILITY_BIGPECKS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+90	0x5A	ABILITY_MAGICBOUNCE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+91	0x5B	ABILITY_RECKLESS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+92	0x5C	ABILITY_SHEERFORCE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+93	0x5D	ABILITY_IRONFIST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+94	0x5E	ABILITY_RIVALRY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+95	0x5F	ABILITY_SANDFORCE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+96	0x60	ABILITY_SOLARPOWER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+97	0x61	ABILITY_HEATPROOF	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+98	0x62	ABILITY_DRYSKIN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+99	0x63	ABILITY_TINTEDLENS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+100	0x64	ABILITY_UNSEENFIST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+101	0x65	ABILITY_FILTER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+102	0x66	ABILITY_INFILTRATOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+103	0x67	ABILITY_DOWNLOAD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+104	0x68	ABILITY_POISONHEAL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+105	0x69	ABILITY_ICEBODY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+106	0x6A	ABILITY_MOODY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+107	0x6B	ABILITY_HYDRATION	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+108	0x6C	ABILITY_HEALER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+109	0x6D	ABILITY_SNOWCLOAK	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+110	0x6E	ABILITY_TANGLEDFEET	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+111	0x6F	ABILITY_SNOWWARNING	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+112	0x70	ABILITY_QUICKFEET	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+113	0x71	ABILITY_SAPSIPPER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+114	0x72	ABILITY_OVERCOAT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+115	0x73	ABILITY_MAGICGUARD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+116	0x74	ABILITY_BULLETPROOF	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+117	0x75	ABILITY_GALEWINGS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+118	0x76	ABILITY_MOXIE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+119	0x77	ABILITY_AFTERMATH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+120	0x78	ABILITY_CURSEDBODY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+121	0x79	ABILITY_GOOEY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+122	0x7A	ABILITY_MUMMY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+123	0x7B	ABILITY_GRIMNEIGH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+124	0x7C	ABILITY_SANDRUSH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+125	0x7D	ABILITY_ANALYTIC	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+126	0x7E	ABILITY_NOGUARD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+127	0x7F	ABILITY_MEGALAUNCHER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+128	0x80	ABILITY_TOUGHCLAWS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+129	0x81	ABILITY_STRONGJAW	RANDOMIZABLE_PRIMARY	ABILITY_SHARPNESS	Named primary ID; species-dependent effects retain native CFRU guards
+130	0x82	ABILITY_VICTORYSTAR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+131	0x83	ABILITY_STORMDRAIN	RANDOMIZABLE_PRIMARY	ABILITY_EVAPORATE	Named primary ID; species-dependent effects retain native CFRU guards
+132	0x84	ABILITY_DARKAURA	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+133	0x85	ABILITY_FAIRYAURA	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+134	0x86	ABILITY_AURABREAK	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+135	0x87	ABILITY_REFRIGERATE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+136	0x88	ABILITY_PIXILATE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+137	0x89	ABILITY_AERILATE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+138	0x8A	ABILITY_NORMALIZE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+139	0x8B	ABILITY_UNBURDEN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+140	0x8C	ABILITY_SIMPLE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+141	0x8D	ABILITY_UNAWARE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+142	0x8E	ABILITY_DEFIANT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+143	0x8F	ABILITY_COMPETITIVE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+144	0x90	ABILITY_DEFEATIST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+145	0x91	ABILITY_SLOWSTART	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+146	0x92	ABILITY_TOXICBOOST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+147	0x93	ABILITY_FLAREBOOST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+148	0x94	ABILITY_FURCOAT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+149	0x95	ABILITY_WONDERSKIN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+150	0x96	ABILITY_PROTEAN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+151	0x97	ABILITY_PARENTALBOND	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+152	0x98	ABILITY_MOLDBREAKER	RANDOMIZABLE_PRIMARY	ABILITY_MYCELIUMMIGHT	Named primary ID; species-dependent effects retain native CFRU guards
+153	0x99	ABILITY_ASONE_GRIM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+154	0x9A	ABILITY_ASONE_CHILLING	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+155	0x9B	ABILITY_ZENMODE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+156	0x9C	ABILITY_BATTLEBOND	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+157	0x9D	ABILITY_BEASTBOOST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+158	0x9E	ABILITY_CORROSION	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+159	0x9F	ABILITY_DISGUISE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+160	0xA0	ABILITY_EMERGENCYEXIT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+161	0xA1	ABILITY_FLUFFY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+162	0xA2	ABILITY_STEELYSPIRIT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+163	0xA3	ABILITY_PERISHBODY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+164	0xA4	ABILITY_WANDERINGSPIRIT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+165	0xA5	ABILITY_POWERCONSTRUCT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+166	0xA6	ABILITY_PRISMARMOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+167	0xA7	ABILITY_RKS_SYSTEM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+168	0xA8	ABILITY_SCHOOLING	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+169	0xA9	ABILITY_SHADOWSHIELD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+170	0xAA	ABILITY_SHIELDSDOWN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+171	0xAB	ABILITY_SLUSHRUSH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+172	0xAC	ABILITY_SOULHEART	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+173	0xAD	ABILITY_STAMINA	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+174	0xAE	ABILITY_STEELWORKER	RANDOMIZABLE_PRIMARY	ABILITY_ROCKYPAYLOAD	Named primary ID; species-dependent effects retain native CFRU guards
+175	0xAF	ABILITY_QUARKDRIVE	RANDOMIZABLE_PRIMARY	ABILITY_PROTOSYNTHESIS	Named primary ID; species-dependent effects retain native CFRU guards
+176	0xB0	ABILITY_TRIAGE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+177	0xB1	ABILITY_WATERBUBBLE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+178	0xB2	ABILITY_WATERCOMPACTION	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+179	0xB3	ABILITY_STALL	RANDOMIZABLE_PRIMARY	ABILITY_BEADSOFRUIN,ABILITY_SWORDOFRUIN,ABILITY_TABLETOFRUIN,ABILITY_VESSELOFRUIN	Named primary ID; species-dependent effects retain native CFRU guards
+180	0xB4	ABILITY_MULTITYPE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+181	0xB5	ABILITY_ELECTRICSURGE	RANDOMIZABLE_PRIMARY	ABILITY_HADRONENGINE	Named primary ID; species-dependent effects retain native CFRU guards
+182	0xB6	ABILITY_GRASSYSURGE	RANDOMIZABLE_PRIMARY	ABILITY_SEEDSOWER	Named primary ID; species-dependent effects retain native CFRU guards
+183	0xB7	ABILITY_MISTYSURGE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+184	0xB8	ABILITY_PSYCHICSURGE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+185	0xB9	ABILITY_SURGESURFER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+186	0xBA	ABILITY_GRASSPELT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+187	0xBB	ABILITY_ANGERPOINT	RANDOMIZABLE_PRIMARY	ABILITY_WINDRIDER	Named primary ID; species-dependent effects retain native CFRU guards
+188	0xBC	ABILITY_ANTICIPATION	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+189	0xBD	ABILITY_FOREWARN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+190	0xBE	ABILITY_FRISK	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+191	0xBF	ABILITY_CONTRARY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+192	0xC0	ABILITY_UNNERVE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+193	0xC1	ABILITY_WEAKARMOR	RANDOMIZABLE_PRIMARY	ABILITY_ANGERSHELL	Named primary ID; species-dependent effects retain native CFRU guards
+194	0xC2	ABILITY_HEAVYMETAL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+195	0xC3	ABILITY_LIGHTMETAL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+196	0xC4	ABILITY_STEADFAST	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+197	0xC5	ABILITY_IMPOSTER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+198	0xC6	ABILITY_JUSTIFIED	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+199	0xC7	ABILITY_RATTLED	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+200	0xC8	ABILITY_MERCILESS	RANDOMIZABLE_PRIMARY	ABILITY_DRILLBEAK	Named primary ID; species-dependent effects retain native CFRU guards
+201	0xC9	ABILITY_AROMAVEIL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+202	0xCA	ABILITY_FLOWERVEIL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+203	0xCB	ABILITY_LEAFGUARD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+204	0xCC	ABILITY_KLUTZ	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+205	0xCD	ABILITY_FLOWERGIFT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+206	0xCE	ABILITY_BADDREAMS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+207	0xCF	ABILITY_PICKPOCKET	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+208	0xD0	ABILITY_PORTALPOWER	UNSAFE_EXCLUDE		Portal Power disabled by src/config.h; damage_calc.c effect guarded by PORTAL_POWER
+209	0xD1	ABILITY_POISONTOUCH	RANDOMIZABLE_PRIMARY	ABILITY_TOXICCHAIN	Named primary ID; species-dependent effects retain native CFRU guards
+210	0xD2	ABILITY_MAGICIAN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+211	0xD3	ABILITY_STANCECHANGE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+212	0xD4	ABILITY_PRIMORDIALSEA	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+213	0xD5	ABILITY_DESOLATELAND	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+214	0xD6	ABILITY_DELTASTREAM	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+215	0xD7	ABILITY_GORILLATACTICS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+216	0xD8	ABILITY_BERSERK	RANDOMIZABLE_PRIMARY	ABILITY_WINDPOWER	Named primary ID; species-dependent effects retain native CFRU guards
+217	0xD9	ABILITY_LONGREACH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+218	0xDA	ABILITY_LIQUIDVOICE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+219	0xDB	ABILITY_QUICKDRAW	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+220	0xDC	ABILITY_INNARDSOUT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+221	0xDD	ABILITY_DAZZLING	RANDOMIZABLE_PRIMARY	ABILITY_ARMORTAIL	Named primary ID; species-dependent effects retain native CFRU guards
+222	0xDE	ABILITY_GLUTTONY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+223	0xDF	ABILITY_HONEYGATHER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+224	0xE0	ABILITY_FRIENDGUARD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+225	0xE1	ABILITY_HARVEST	RANDOMIZABLE_PRIMARY	ABILITY_CUDCHEW	Named primary ID; species-dependent effects retain native CFRU guards
+226	0xE2	ABILITY_TELEPATHY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+227	0xE3	ABILITY_ILLUSION	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+228	0xE4	ABILITY_CHEEKPOUCH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+229	0xE5	ABILITY_SYMBIOSIS	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+230	0xE6	ABILITY_STAKEOUT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+231	0xE7	ABILITY_COMATOSE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+232	0xE8	ABILITY_DANCER	RANDOMIZABLE_PRIMARY	ABILITY_OPPORTUNIST	Named primary ID; species-dependent effects retain native CFRU guards
+233	0xE9	ABILITY_BATTERY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+234	0xEA	ABILITY_RECEIVER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+235	0xEB	ABILITY_CURIOUSMEDICINE	RANDOMIZABLE_PRIMARY	ABILITY_COSTAR	Named primary ID; species-dependent effects retain native CFRU guards
+236	0xEC	ABILITY_NEUROFORCE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+237	0xED	ABILITY_GALVANIZE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+238	0xEE	ABILITY_INTREPIDSWORD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+239	0xEF	ABILITY_DAUNTLESSSHIELD	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+240	0xF0	ABILITY_BALLFETCH	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+241	0xF1	ABILITY_COTTONDOWN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+242	0xF2	ABILITY_MIRRORARMOR	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+243	0xF3	ABILITY_GULPMISSILE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+244	0xF4	ABILITY_STALWART	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+245	0xF5	ABILITY_STEAMENGINE	RANDOMIZABLE_PRIMARY	ABILITY_THERMALEXCHANGE,ABILITY_WELLBAKEDBODY	Named primary ID; species-dependent effects retain native CFRU guards
+246	0xF6	ABILITY_PUNKROCK	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+247	0xF7	ABILITY_SANDSPIT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+248	0xF8	ABILITY_ICESCALES	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+249	0xF9	ABILITY_RIPEN	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+250	0xFA	ABILITY_ICEFACE	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+251	0xFB	ABILITY_POWERSPOT	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+252	0xFC	ABILITY_MIMICRY	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+253	0xFD	ABILITY_SCREENCLEANER	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards
+254	0xFE	ABILITY_PASTELVEIL	RANDOMIZABLE_PRIMARY		Named primary ID; species-dependent effects retain native CFRU guards

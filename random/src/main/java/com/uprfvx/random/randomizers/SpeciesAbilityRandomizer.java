@@ -1,13 +1,12 @@
 package com.uprfvx.random.randomizers;
 
 import com.uprfvx.random.Settings;
-import com.uprfvx.romio.constants.AbilityIDs;
-import com.uprfvx.romio.constants.Gen3Constants;
-import com.uprfvx.romio.constants.GlobalConstants;
+import com.uprfvx.romio.services.AbilityRandomizationPolicy;
 import com.uprfvx.romio.gamedata.MegaEvolution;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.romhandlers.RomHandler;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -36,32 +35,30 @@ public class SpeciesAbilityRandomizer extends Randomizer {
 
         final boolean hasHiddenAbilities = (romHandler.abilitiesPerSpecies() == 3);
 
-        final List<Integer> bannedAbilities = romHandler.getUselessAbilities();
+        final AbilityRandomizationPolicy policy = romHandler.getAbilityRandomizationPolicy();
+        final List<Integer> bannedAbilities = new ArrayList<>(policy.useless());
 
         if (!allowWonderGuard) {
-            bannedAbilities.add(AbilityIDs.wonderGuard);
+            bannedAbilities.add(policy.wonderGuard());
         }
 
         if (banTrappingAbilities) {
-            bannedAbilities.addAll(GlobalConstants.battleTrappingAbilities);
+            bannedAbilities.addAll(policy.trapping());
         }
 
         if (banNegativeAbilities) {
-            bannedAbilities.addAll(GlobalConstants.negativeAbilities);
+            bannedAbilities.addAll(policy.negative());
         }
 
         if (banBadAbilities) {
-            bannedAbilities.addAll(GlobalConstants.badAbilities);
+            bannedAbilities.addAll(policy.bad());
             if (!isMultiBattleOnly) {
-                bannedAbilities.addAll(GlobalConstants.doubleBattleAbilities);
+                bannedAbilities.addAll(policy.doubleBattle());
             }
         }
 
         if (weighDuplicatesTogether) {
-            bannedAbilities.addAll(GlobalConstants.duplicateAbilities);
-            if (romHandler.generationOfPokemon() == 3) {
-                bannedAbilities.add(Gen3Constants.airLockIndex); // Special case for Air Lock in Gen 3
-            }
+            bannedAbilities.addAll(policy.duplicateExclusions());
         }
 
         final int maxAbility = romHandler.highestAbilityIndex();
@@ -72,15 +69,15 @@ public class SpeciesAbilityRandomizer extends Randomizer {
             if (!isAbilityRandomizationCandidate(pk, maxAbility)) {
                 return;
             }
-            if (pk.getAbility1() != AbilityIDs.wonderGuard && pk.getAbility2() != AbilityIDs.wonderGuard
-                    && pk.getAbility3() != AbilityIDs.wonderGuard) {
+            if (pk.getAbility1() != policy.wonderGuard() && pk.getAbility2() != policy.wonderGuard()
+                    && pk.getAbility3() != policy.wonderGuard()) {
                 // Pick first ability
-                pk.setAbility1(pickRandomAbility(maxAbility, bannedAbilities, weighDuplicatesTogether));
+                pk.setAbility1(pickRandomAbility(policy, bannedAbilities, weighDuplicatesTogether));
 
                 // Second ability?
                 if (ensureTwoAbilities || random.nextDouble() < 0.5) {
                     // Yes, second ability
-                    pk.setAbility2(pickRandomAbility(maxAbility, bannedAbilities, weighDuplicatesTogether,
+                    pk.setAbility2(pickRandomAbility(policy, bannedAbilities, weighDuplicatesTogether,
                             pk.getAbility1()));
                 } else {
                     // Nope
@@ -89,7 +86,7 @@ public class SpeciesAbilityRandomizer extends Randomizer {
 
                 // Third ability?
                 if (hasHiddenAbilities) {
-                    pk.setAbility3(pickRandomAbility(maxAbility, bannedAbilities, weighDuplicatesTogether,
+                    pk.setAbility3(pickRandomAbility(policy, bannedAbilities, weighDuplicatesTogether,
                             pk.getAbility1(), pk.getAbility2()));
                 }
             }
@@ -98,8 +95,8 @@ public class SpeciesAbilityRandomizer extends Randomizer {
                     || !isAbilityRandomizationCandidate(evTo, maxAbility)) {
                 return;
             }
-            if (evTo.getAbility1() != AbilityIDs.wonderGuard && evTo.getAbility2() != AbilityIDs.wonderGuard
-                    && evTo.getAbility3() != AbilityIDs.wonderGuard) {
+            if (evTo.getAbility1() != policy.wonderGuard() && evTo.getAbility2() != policy.wonderGuard()
+                    && evTo.getAbility3() != policy.wonderGuard()) {
                 evTo.setAbility1(evFrom.getAbility1());
                 evTo.setAbility2(evFrom.getAbility2());
                 evTo.setAbility3(evFrom.getAbility3());
@@ -144,11 +141,11 @@ public class SpeciesAbilityRandomizer extends Randomizer {
         return ability >= 0 && ability <= maxAbility;
     }
 
-    private int pickRandomAbilityVariation(int selectedAbility, int... alreadySetAbilities) {
+    private int pickRandomAbilityVariation(AbilityRandomizationPolicy policy, int selectedAbility, int... alreadySetAbilities) {
         int newAbility = selectedAbility;
 
         while (true) {
-            Map<Integer, List<Integer>> abilityVariations = romHandler.getAbilityVariations();
+            Map<Integer, List<Integer>> abilityVariations = policy.variations();
             for (int baseAbility: abilityVariations.keySet()) {
                 if (selectedAbility == baseAbility) {
                     List<Integer> variationsForThisAbility = abilityVariations.get(selectedAbility);
@@ -173,12 +170,12 @@ public class SpeciesAbilityRandomizer extends Randomizer {
         return newAbility;
     }
 
-    private int pickRandomAbility(int maxAbility, List<Integer> bannedAbilities, boolean useVariations,
+    private int pickRandomAbility(AbilityRandomizationPolicy policy, List<Integer> bannedAbilities, boolean useVariations,
                                   int... alreadySetAbilities) {
         int newAbility;
 
         while (true) {
-            newAbility = random.nextInt(maxAbility) + 1;
+            newAbility = policy.candidateIds().get(random.nextInt(policy.candidateIds().size()));
 
             if (bannedAbilities.contains(newAbility)) {
                 continue;
@@ -194,7 +191,7 @@ public class SpeciesAbilityRandomizer extends Randomizer {
 
             if (!repeat) {
                 if (useVariations) {
-                    newAbility = pickRandomAbilityVariation(newAbility, alreadySetAbilities);
+                    newAbility = pickRandomAbilityVariation(policy, newAbility, alreadySetAbilities);
                 }
                 break;
             }
