@@ -51,9 +51,40 @@ public class EvolutionRandomizer extends Randomizer {
             banned.addAll(romHandler.getIrregularFormes());
         }
 
-        new InnerRandomizer(pokemonPool, banned, similarStrength, sameType, limitToThreeStages, noConvergence,
-                forceChange, forceGrowth, evolveEveryLevel)
-                .randomizeEvolutions();
+        Map<Species, List<Evolution>> rawGraph = romHandler.getTargetOnlyEvolutionGraph();
+        if (rawGraph == null) {
+            new InnerRandomizer(pokemonPool, banned, similarStrength, sameType, limitToThreeStages, noConvergence,
+                    forceChange, forceGrowth, evolveEveryLevel, false).randomizeEvolutions();
+            return;
+        }
+        if (evolveEveryLevel) {
+            throw new RandomizationException("CFRU/DPE RANDOM_EVERY_LEVEL is unsupported: creating relations would "
+                    + "repack raw evolution slots. Use ordinary RANDOM target randomization.");
+        }
+        // Work on a temporary topology. Restore both directions on success and
+        // failure; only a fully validated handler plan may publish target changes.
+        Map<Species, List<Evolution>> savedFrom = new LinkedHashMap<>();
+        Map<Species, List<Evolution>> savedTo = new LinkedHashMap<>();
+        rawGraph.keySet().forEach(sp -> {
+            savedFrom.put(sp, new ArrayList<>(sp.getEvolutionsFrom()));
+            savedTo.put(sp, new ArrayList<>(sp.getEvolutionsTo()));
+            sp.getEvolutionsFrom().clear();
+            sp.getEvolutionsTo().clear();
+        });
+        Map<Species, List<Evolution>> plan = new LinkedHashMap<>();
+        try {
+            rawGraph.forEach((sp, edges) -> edges.forEach(edge -> {
+                sp.getEvolutionsFrom().add(edge);
+                edge.getTo().getEvolutionsTo().add(edge);
+            }));
+            new InnerRandomizer(pokemonPool, banned, similarStrength, sameType, limitToThreeStages, noConvergence,
+                    forceChange, forceGrowth, false, true).randomizeEvolutions();
+            rawGraph.keySet().forEach(sp -> plan.put(sp, new ArrayList<>(sp.getEvolutionsFrom())));
+        } finally {
+            savedFrom.forEach((sp, edges) -> { sp.getEvolutionsFrom().clear(); sp.getEvolutionsFrom().addAll(edges); });
+            savedTo.forEach((sp, edges) -> { sp.getEvolutionsTo().clear(); sp.getEvolutionsTo().addAll(edges); });
+        }
+        romHandler.applyTargetOnlyEvolutionGraph(plan);
     }
 
     private class InnerRandomizer {
@@ -68,6 +99,7 @@ public class EvolutionRandomizer extends Randomizer {
         private final boolean forceChange;
         private final boolean forceGrowth;
         private final boolean evolveEveryLevel;
+        private final boolean targetOnly;
 
         private final SpeciesSet pokemonPool;
         private final SpeciesSet banned;
@@ -78,7 +110,7 @@ public class EvolutionRandomizer extends Randomizer {
                                boolean similarStrength, boolean sameType,
                                boolean limitToThreeStages, boolean noConvergence,
                                boolean forceChange, boolean forceGrowth,
-                               boolean evolveEveryLevel) {
+                               boolean evolveEveryLevel, boolean targetOnly) {
             this.pokemonPool = pokemonPool;
             this.banned = banned;
             this.similarStrength = similarStrength;
@@ -88,6 +120,7 @@ public class EvolutionRandomizer extends Randomizer {
             this.forceChange = forceChange;
             this.forceGrowth = forceGrowth;
             this.evolveEveryLevel = evolveEveryLevel;
+            this.targetOnly = targetOnly;
             if (evolveEveryLevel && similarStrength) {
                 throw new IllegalArgumentException("Can't use evolveEveryLevel and similarStrength together.");
             }
@@ -150,8 +183,14 @@ public class EvolutionRandomizer extends Randomizer {
 
         private void clearEvolutions() {
             for (Species pk : pokemonPool) {
-                pk.getEvolutionsFrom().clear();
-                pk.getEvolutionsTo().clear();
+                if (targetOnly) {
+                    List<Evolution> owned = pk.getEvolutionsFrom().stream().filter(e -> e.getExtraInfo() >= 0).toList();
+                    for (Evolution edge : owned) edge.getTo().getEvolutionsTo().remove(edge);
+                    pk.getEvolutionsFrom().removeAll(owned);
+                } else {
+                    pk.getEvolutionsFrom().clear();
+                    pk.getEvolutionsTo().clear();
+                }
             }
         }
 
@@ -162,7 +201,8 @@ public class EvolutionRandomizer extends Randomizer {
                 // it should NEVER be used except for iteration.
                 return Collections.singletonList(new Evolution(from, from, EvolutionType.LEVEL, 0));
             } else {
-                return allOriginalEvos.get(from);
+                return targetOnly ? allOriginalEvos.get(from).stream().filter(e -> e.getExtraInfo() >= 0).toList()
+                        : allOriginalEvos.get(from);
             }
         }
 
@@ -176,7 +216,7 @@ public class EvolutionRandomizer extends Randomizer {
             if (newEvo.getType() == EvolutionType.LEVEL_FEMALE_ESPURR) {
                 newEvo.updateEvolutionMethod(EvolutionType.LEVEL_FEMALE_ONLY, newEvo.getExtraInfo());
             }
-            newEvo.setForme(picked.getRandomCosmeticFormeNumber(random));
+            if (!targetOnly) newEvo.setForme(picked.getRandomCosmeticFormeNumber(random));
             return newEvo;
         }
 
@@ -292,7 +332,7 @@ public class EvolutionRandomizer extends Randomizer {
         private int numEvolutions(Species pk, int depth, int maxInterested) {
             if (pk.getEvolutionsFrom().isEmpty()) {
                 // looks ahead to see if an evo MUST be given to this Pokemon in the future
-                return allOriginalEvos.get(pk).isEmpty() ? 0 : 1;
+                return allOriginalEvos.getOrDefault(pk, List.of()).isEmpty() ? 0 : 1;
             }
             if (depth == maxInterested - 1) {
                 return 1;

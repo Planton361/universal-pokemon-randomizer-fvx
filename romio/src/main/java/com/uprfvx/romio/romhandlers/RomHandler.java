@@ -145,6 +145,20 @@ public interface RomHandler {
      */
     void saveSpeciesStats();
 
+    /**
+     * Optional target-only evolution adapter. NONE edges describe topology only,
+     * never trigger semantics. extraInfo is the slot token: nonnegative tokens
+     * grant target ownership; negative tokens are fixed graph edges. The handler
+     * retains raw slot ownership. Null means
+     * use the generation's normal evolution graph/writer.
+     */
+    default Map<Species, List<Evolution>> getTargetOnlyEvolutionGraph() { return null; }
+
+    /** Validate the complete plan before publishing any target or writer state. */
+    default void applyTargetOnlyEvolutionGraph(Map<Species, List<Evolution>> graph) {
+        throw new UnsupportedOperationException("Target-only evolutions are not supported");
+    }
+
     // ==================================
     // Methods to set up Gen Restrictions
     // ==================================

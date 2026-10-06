@@ -235,6 +235,7 @@ public class EvolutionFilterOptionsTest {
                 case "getMegaEvolutions" -> Collections.emptyList();
                 case "getAllowedItems" -> Collections.emptySet();
                 case "altFormesCanHaveDifferentEvolutions" -> false;
+                case "getTargetOnlyEvolutionGraph" -> null;
                 case "toString" -> "EvolutionTestRomHandler";
                 case "hashCode" -> System.identityHashCode(this);
                 case "equals" -> proxy == args[0];

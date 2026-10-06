@@ -184,6 +184,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private final Map<Integer, CfruDpeEvolutionRow> originalCfruDpeEvolutionRows = new HashMap<>();
+    private final Map<Integer, CfruDpeEvolutionRow> plannedCfruDpeEvolutionRows = new HashMap<>();
+
+    private record CfruDpeTargetSlot(int index, int method, int parameter, int target, int auxiliary, boolean randomizable) {}
 
     // Value snapshots must not alias mutable Evolution objects. Estimated levels are
     // randomizer bookkeeping; they are not fields of a Gen3 evolution-table entry.
@@ -7102,9 +7105,122 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 hex.charAt(3), hex.charAt(0), hex.charAt(1) });
     }
 
+    private List<CfruDpeTargetSlot> ordinaryTopologySlots(Species source,
+                                                       Map<Integer, List<MoveLearnt>> movesets) {
+        CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(getEvolutionInternalSpeciesId(source));
+        if (row == null) throw unsafeCfruDpeEvolutionChange(source, "missing loaded raw row");
+        List<CfruDpeTargetSlot> result = new ArrayList<>();
+        Map<List<Integer>, Integer> counts = new HashMap<>();
+        for (int offset = 0; offset < row.raw().length; offset += GEN3_EVOLUTION_ENTRY_SIZE) {
+            List<Integer> key = List.of(IOFunctions.read2ByteInt(row.raw(), offset),
+                    IOFunctions.read2ByteInt(row.raw(), offset + 2), IOFunctions.read2ByteInt(row.raw(), offset + 4),
+                    IOFunctions.read2ByteInt(row.raw(), offset + 6));
+            counts.merge(key, 1, Integer::sum);
+        }
+        for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+            int offset = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+            int method = IOFunctions.read2ByteInt(row.raw(), offset);
+            int parameter = IOFunctions.read2ByteInt(row.raw(), offset + 2);
+            int target = IOFunctions.read2ByteInt(row.raw(), offset + 4);
+            int auxiliary = IOFunctions.read2ByteInt(row.raw(), offset + 6);
+            // Duplicate relationships are not new branches; keep every duplicate raw.
+            boolean unique = counts.get(List.of(method, parameter, target, auxiliary)) == 1;
+            if (method < 1 || method > 42 || target <= 0 || target >= pokesInternal.length
+                    || pokesInternal[target] == null
+                    || !getCfruDpeRandomPoolEligibility(pokesInternal[target], movesets).eligible()) continue;
+            result.add(new CfruDpeTargetSlot(slot, method, parameter, target, auxiliary, unique));
+        }
+        return result;
+    }
+
+    @Override
+    public Map<Species, List<Evolution>> getTargetOnlyEvolutionGraph() {
+        if (!useCfruDpeGen9SpeciesCount) return null;
+        prepareCfruDpeEvolutionRows(); // Includes outside-writer mutation detection.
+        if (!plannedCfruDpeEvolutionRows.isEmpty()) {
+            throw new RomIOException("Save CFRU/DPE evolution targets before planning another randomization");
+        }
+        Map<Integer, List<MoveLearnt>> movesets = getMovesLearnt();
+        Map<Species, List<Evolution>> graph = new LinkedHashMap<>();
+        for (Species source : speciesList) {
+            if (source == null) continue;
+            CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(getEvolutionInternalSpeciesId(source));
+            if (!row.modeled().equals(snapshotCfruDpeEvolutions(source))) {
+                throw unsafeCfruDpeEvolutionChange(source, "save evolution tweaks before target randomization");
+            }
+            List<Evolution> edges = new ArrayList<>();
+            for (CfruDpeTargetSlot slot : ordinaryTopologySlots(source, movesets)) {
+                // A nonnegative slot token grants target ownership; a negative
+                // token is a fixed duplicate edge used only for graph constraints.
+                int token = slot.randomizable() ? slot.index() : -1 - slot.index();
+                edges.add(new Evolution(source, pokesInternal[slot.target()], EvolutionType.NONE, token));
+            }
+            graph.put(source, edges);
+        }
+        return graph;
+    }
+
+    @Override
+    public void applyTargetOnlyEvolutionGraph(Map<Species, List<Evolution>> graph) {
+        if (!useCfruDpeGen9SpeciesCount) throw new UnsupportedOperationException("Not CFRU/DPE");
+        // All validation and byte planning precede mutation of the loaded graph.
+        Map<Species, List<Evolution>> originalGraph = getTargetOnlyEvolutionGraph();
+        if (!graph.keySet().equals(originalGraph.keySet())) throw new RomIOException("Incomplete evolution target plan");
+        Map<Integer, List<MoveLearnt>> movesets = getMovesLearnt();
+        Map<Integer, CfruDpeEvolutionRow> planned = new HashMap<>();
+        Map<Evolution, Species> modeledTargets = new IdentityHashMap<>();
+        for (Species source : graph.keySet()) {
+            int id = getEvolutionInternalSpeciesId(source);
+            CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(id);
+            byte[] raw = original.raw().clone();
+            List<CfruDpeTargetSlot> slots = ordinaryTopologySlots(source, movesets);
+            List<Evolution> edges = graph.get(source);
+            if (edges == null || edges.size() != slots.size()) throw unsafeCfruDpeEvolutionChange(source, "slot count changed");
+            for (int i = 0; i < slots.size(); i++) {
+                CfruDpeTargetSlot slot = slots.get(i);
+                int token = slot.randomizable() ? slot.index() : -1 - slot.index();
+                List<Evolution> matching = edges.stream().filter(e -> e.getExtraInfo() == token).toList();
+                if (matching.size() != 1) throw unsafeCfruDpeEvolutionChange(source, "missing or duplicate slot token");
+                Evolution edge = matching.getFirst();
+                Species target = edge.getTo();
+                int targetId = target == null ? 0 : getEvolutionInternalSpeciesId(target);
+                if (edge.getFrom() != source || edge.getType() != EvolutionType.NONE
+                        || edge.getExtraInfo() != token || edge.getForme() != 0
+                        || (!slot.randomizable() && targetId != slot.target())
+                        || targetId <= 0 || targetId >= pokesInternal.length || pokesInternal[targetId] != target
+                        || !getCfruDpeRandomPoolEligibility(target, movesets).eligible()) {
+                    throw unsafeCfruDpeEvolutionChange(source, "invalid or unsafe target-only slot plan");
+                }
+                IOFunctions.write2ByteInt(raw, slot.index() * GEN3_EVOLUTION_ENTRY_SIZE + 4, targetId);
+                // Update only the existing decoded 1..15 graph. Extended topology
+                // remains available through the adapter without invented trigger types.
+                for (Evolution modeled : source.getEvolutionsFrom()) {
+                    int parameter = modeled.getType().usesItem()
+                            ? Gen3Constants.itemIDToInternal(modeled.getExtraInfo()) : modeled.getExtraInfo();
+                    if (Gen3Constants.evolutionTypeToIndex(modeled.getType()) == slot.method()
+                            && parameter == slot.parameter()
+                            && getEvolutionInternalSpeciesId(modeled.getTo()) == slot.target()) {
+                        modeledTargets.put(modeled, target);
+                    }
+                }
+            }
+            List<CfruDpeModeledEvolution> expected = source.getEvolutionsFrom().stream().map(evo ->
+                    new CfruDpeModeledEvolution(id, getEvolutionInternalSpeciesId(modeledTargets.getOrDefault(evo, evo.getTo())),
+                            evo.getType(), evo.getExtraInfo(), evo.getForme())).toList();
+            planned.put(id, new CfruDpeEvolutionRow(raw, expected, original.fullyModeled()));
+        }
+        modeledTargets.forEach((edge, target) -> {
+            edge.getTo().getEvolutionsTo().remove(edge);
+            edge.setTo(target);
+            target.getEvolutionsTo().add(edge);
+        });
+        plannedCfruDpeEvolutionRows.putAll(planned);
+    }
+
     @Override
     public void loadEvolutions() {
         originalCfruDpeEvolutionRows.clear();
+        plannedCfruDpeEvolutionRows.clear();
         for (Species pkmn : pokes) {
             if (pkmn != null) {
                 pkmn.getEvolutionsFrom().clear();
@@ -7167,6 +7283,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 originalCfruDpeEvolutionRows.put(internalId,
                         new CfruDpeEvolutionRow(row, snapshotCfruDpeEvolutions(pk), original.fullyModeled()));
             }
+            plannedCfruDpeEvolutionRows.clear();
             return;
         }
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
@@ -7234,7 +7351,24 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 throw unsafeCfruDpeEvolutionChange(pk, "raw row changed outside the evolution writer");
             }
             byte[] row;
-            if (original.modeled().equals(snapshotCfruDpeEvolutions(pk))) {
+            CfruDpeEvolutionRow planned = plannedCfruDpeEvolutionRows.get(id);
+            List<CfruDpeModeledEvolution> current = snapshotCfruDpeEvolutions(pk);
+            if (planned != null && !planned.modeled().equals(current)) {
+                if (planned.modeled().size() != current.size()) {
+                    throw unsafeCfruDpeEvolutionChange(pk, "target plan relationship count changed");
+                }
+                for (int edge = 0; edge < current.size(); edge++) {
+                    CfruDpeModeledEvolution expected = planned.modeled().get(edge);
+                    CfruDpeModeledEvolution actual = current.get(edge);
+                    if (actual.from() != expected.from() || actual.to() != expected.to()
+                            || actual.forme() != expected.forme()) {
+                        throw unsafeCfruDpeEvolutionChange(pk, "targets changed outside the validated target plan");
+                    }
+                }
+            }
+            if (planned != null && planned.modeled().equals(current)) {
+                row = planned.raw();
+            } else if (original.modeled().equals(current) && planned == null) {
                 // No repacking: retain even holes, duplicate relationships, invalid
                 // targets, unknown methods, auxiliary fields and empty-slot metadata.
                 row = original.raw();
