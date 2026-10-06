@@ -181,8 +181,10 @@ public class RestrictedSpeciesService {
                 .collect(Collectors.toSet());
         megaEvolutions = Collections.unmodifiableSet(megaEvolutions);
 
-        nonLegendariesInclAltFormes = SpeciesSet.unmodifiable(allInclAltFormes.filter(pk -> !pk.isLegendary()));
-        legendariesInclAltFormes = SpeciesSet.unmodifiable(allInclAltFormes.filter(Species::isLegendary));
+        SpeciesClassificationPolicy classification = romHandler.getSpeciesClassificationPolicy();
+        nonLegendariesInclAltFormes = SpeciesSet.unmodifiable(
+                allInclAltFormes.filter(pk -> !classification.isLegendary(pk)));
+        legendariesInclAltFormes = SpeciesSet.unmodifiable(allInclAltFormes.filter(classification::isLegendary));
         ultraBeastsInclAltFormes = SpeciesSet.unmodifiable(allInclAltFormes.filter(Species::isUltraBeast));
         SpeciesSet altFormes = romHandler.getAltFormes();
         all = SpeciesSet.unmodifiable(allInclAltFormes.filter(pk -> !altFormes.contains(pk)));

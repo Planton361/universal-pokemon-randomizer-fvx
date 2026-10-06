@@ -487,6 +487,7 @@ public class RestrictedSpeciesServiceGenLimitExclusionsTest {
                 case "getSpeciesSetInclFormes" -> new SpeciesSet(species);
                 case "getAltFormes" -> new SpeciesSet(altFormes);
                 case "getMegaEvolutions" -> megaEvolutions;
+                case "getSpeciesClassificationPolicy" -> SpeciesClassificationPolicy.legacy();
                 case "toString" -> "RestrictedSpeciesServiceGenLimitExclusionsTestRomHandler";
                 case "hashCode" -> System.identityHashCode(this);
                 case "equals" -> proxy == args[0];

@@ -13,6 +13,7 @@ import com.uprfvx.romio.gamedata.Type;
 import com.uprfvx.romio.gamedata.TypeTable;
 import com.uprfvx.romio.romhandlers.RomHandler;
 import com.uprfvx.romio.services.RestrictedSpeciesService;
+import com.uprfvx.romio.services.SpeciesClassificationPolicy;
 import com.uprfvx.romio.services.TypeService;
 import org.junit.jupiter.api.Test;
 
@@ -208,6 +209,7 @@ public class TrainerMovesetDecisionTest {
         @Override
         public Object invoke(Object proxy, Method method, Object[] args) {
             return switch (method.getName()) {
+                case "getSpeciesClassificationPolicy" -> SpeciesClassificationPolicy.legacy();
                 case "getRestrictedSpeciesService" -> restrictedSpeciesService;
                 case "getTypeService" -> typeService;
                 case "getSpeciesSetInclFormes", "getSpeciesSet" -> speciesSet;

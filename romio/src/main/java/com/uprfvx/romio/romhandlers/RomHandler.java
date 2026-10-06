@@ -29,6 +29,7 @@ import com.uprfvx.romio.gamedata.*;
 import com.uprfvx.romio.graphics.packs.CustomPlayerGraphics;
 import com.uprfvx.romio.services.RestrictedSpeciesService;
 import com.uprfvx.romio.services.AbilityRandomizationPolicy;
+import com.uprfvx.romio.services.SpeciesClassificationPolicy;
 import com.uprfvx.romio.services.TypeService;
 
 import java.awt.image.BufferedImage;
@@ -140,6 +141,11 @@ public interface RomHandler {
     int getHighestEvoLvl();
 
     RestrictedSpeciesService getRestrictedSpeciesService();
+
+    /** Classification for the central Legendary/Mythical random-pool partition. */
+    default SpeciesClassificationPolicy getSpeciesClassificationPolicy() {
+        return SpeciesClassificationPolicy.legacy();
+    }
 
     /**
      * Only made public for testing. Do NOT use otherwise!
