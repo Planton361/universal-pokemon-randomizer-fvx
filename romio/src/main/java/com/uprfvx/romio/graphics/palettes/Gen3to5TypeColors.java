@@ -43,7 +43,11 @@ public class Gen3to5TypeColors {
 	}
 	
 	private static final RandomColorSelector randomColorSelector = new RandomColorSelector(
-            new Random(),
+            // RandomPointSelector samples its rejection ceiling in the constructor.
+            // setRandom below replaces only the selection RNG, not that ceiling:
+            // an unseeded calibration therefore leaks JVM initialization into palette bytes.
+            // Keep calibration independent of the cosmetic stream, but reproducible.
+            new Random(0),
             RandomColorSelector.Mode.HSV, hsv -> {
                 double w = hsv[1];
                 if (20 <= hsv[0] && hsv[0] <= 70) {
