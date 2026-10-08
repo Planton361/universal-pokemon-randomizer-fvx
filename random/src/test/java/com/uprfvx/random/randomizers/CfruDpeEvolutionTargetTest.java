@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-class CfruDpeEvolutionTargetTest {
+public class CfruDpeEvolutionTargetTest {
     static Settings settings() {
         Settings s = new Settings(); s.setEvolutionsMod(Settings.EvolutionsMod.RANDOM);
         s.setEvosForceChange(true); return s;
@@ -178,6 +178,97 @@ class CfruDpeEvolutionTargetTest {
         assertThrows(RomIOException.class,f::preflightSave);
         assertThrows(RomIOException.class,f::saveSpeciesStats);
         assertThrows(RomIOException.class,f::write); assertArrayEquals(before,f.memory);
+    }
+
+    /** Shared only between approved test leaves; all bytes/properties are synthetic and in memory. */
+    public static void attestSyntheticOwnership(CfruDpeEvolutionFixture f) throws Exception {
+        byte[] b = f.memory;
+        b[0xAC]='B'; b[0xAD]='P'; b[0xAE]='R'; b[0xAF]='E'; b[0xBC]=0;
+        b[0x42EC4]=0; b[0x42EC5]=0x4B; b[0x42EC6]=0x18; b[0x42EC7]=0x47;
+        syntheticInt(b,0x42EC8,0x08048001); syntheticInt(b,0x42F6C,0x08000100);
+        System.arraycopy("CFRUEVO1".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,b,0x48200,8);
+        syntheticInt(b,0x48208,0x08048200); syntheticInt(b,0x4820C,0x08048001);
+        int[] fields={1,32,28,1,220,160};
+        for(int i=0;i<fields.length;i++) {b[0x48210+i*2]=(byte)fields[i]; b[0x48211+i*2]=(byte)(fields[i]>>>8);}
+        b[0x4821C]=(byte)220;
+        Properties p=new Properties();
+        p.setProperty("schema","OWNERSHIP_WITNESS_V1"); p.setProperty("version","1");
+        p.setProperty("cfru.sha","958c30ec58919ac3e13a40ddb9bd94a86651636e");
+        p.setProperty("dpe.sha","d887185de1f6ae6a78e85c4311bbadde17041d00");
+        p.setProperty("build.id","synthetic-build"); p.setProperty("config.id","synthetic-config");
+        p.setProperty("config.sha256","0".repeat(64)); p.setProperty("input.size",Integer.toString(b.length));
+        p.setProperty("input.sha256",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b)));
+        p.setProperty("record.offset","0x48200"); p.setProperty("table.rows","1440");
+        p.setProperty("table.slots","16"); p.setProperty("table.entryBytes","8");
+        syntheticInterval(p,"table",0x100,0x100+1440*128); syntheticInterval(p,"consumer",0x48000,0x48100);
+        p.setProperty("insertions.count","2"); syntheticInterval(p,"insertions.0",0x100,0x2E000);
+        syntheticInterval(p,"insertions.1",0x48000,0x4C000); p.setProperty("protected.count","4");
+        String[] types={"PICKUP_CODE","PICKUP_DATA","OTHER_CODE","OTHER_DATA"};
+        for(int i=0;i<types.length;i++) {
+            p.setProperty("protected."+i+".type",types[i]); syntheticInterval(p,"protected."+i,0x49000+i*0x100,0x49080+i*0x100);
+        }
+        f.setField("originalRom",b.clone()); f.loadEvolutions();
+        var bind=com.uprfvx.romio.romhandlers.Gen3RomHandler.class.getDeclaredMethod("acceptSyntheticEvolutionWitness",Properties.class);
+        bind.setAccessible(true); bind.invoke(f,p);
+    }
+    private static void syntheticInt(byte[] bytes,int at,int value) {
+        for(int i=0;i<4;i++) bytes[at+i]=(byte)(value>>>(8*i));
+    }
+    private static void syntheticInterval(Properties p,String prefix,int start,int end) {
+        p.setProperty(prefix+".start",Integer.toString(start)); p.setProperty(prefix+".end",Integer.toString(end));
+    }
+
+    @Test
+    void easierWithRandomTargetsAndForceChangeCoversFullInventoryDewottAndAllOwnedBytesAcrossSeeds() throws Exception {
+        Set<Integer> levels=Set.of(4,8,9,10,11,12,13,14,16,18,20,21,22,23,28,31,32,35,41,42);
+        Set<Integer> outgoing=new HashSet<>();
+        CfruDpeEvolutionFixture.inventory().stream().filter(s->s.method()>=1&&s.method()<=42).forEach(s->outgoing.add(s.source()));
+        for(long seed:new long[]{0,1,680,20261005658L}) {
+            var f=new CfruDpeEvolutionFixture(); f.populateExactSource(); attestSyntheticOwnership(f);
+            f.preflightCfruEvolutionEasier(20); byte[] before=f.memory.clone();
+            new EvolutionRandomizer(f,settings(),new Random(seed)).randomizeEvolutions();
+            assertArrayEquals(before,f.memory,"target plan must remain staged before easier writer");
+            f.condenseLevelEvolutions(20); f.makeEvolutionsEasier(false,false);
+            Set<Integer> allowed=new HashSet<>(); allowed.add(0x4821C);
+            int changed=0;
+            for(var row:CfruDpeEvolutionFixture.inventory()) {
+                int o=CfruDpeEvolutionFixture.offset(row.source(),row.slot());
+                int target=f.word(row.source(),row.slot(),4);
+                if(row.disposition().equals("ORDINARY_TARGET_RANDOMIZABLE") && f.getRestrictedSpeciesService().getAll(true).contains(f.species[row.source()])) {
+                    assertNotEquals(row.target(),target,row.toString()); changed++;
+                    allowed.add(o+4); allowed.add(o+5);
+                } else assertEquals(row.target(),target,row.toString());
+                if(levels.contains(row.method())) {
+                    assertEquals(Math.min(row.parameter(),outgoing.contains(target)?15:20),f.word(row.source(),row.slot(),2),row.toString());
+                    allowed.add(o+2); allowed.add(o+3);
+                }
+                assertEquals(row.method(),f.word(row.source(),row.slot(),0)); assertEquals(row.auxiliary(),f.word(row.source(),row.slot(),6));
+            }
+            assertTrue(changed>500); assertEquals(4,f.word(0x22B,0,0)); assertEquals(35,f.word(0x22B,1,0));
+            assertEquals(771,f.word(0x22B,1,6)); assertEquals(2999,f.word(0x574,0,2)); assertEquals(2999,f.word(0x575,0,2));
+            for(int i=0;i<before.length;i++) if(!allowed.contains(i)) assertEquals(before[i],f.memory[i],"unowned byte "+i);
+            byte[] after=f.memory.clone(); f.write(); f.loadEvolutions(); f.write(); f.write(); assertArrayEquals(after,f.memory);
+        }
+    }
+
+    @Test
+    void easierWriteFailurePreservesExistingRandomTargetPlanAndGraphForRetry() throws Exception {
+        class Failing extends CfruDpeEvolutionFixture {
+            boolean fail;
+            Failing() throws Exception {super();}
+            @Override protected void writeWord(int offset,int value) {
+                super.writeWord(offset,value); if(fail) throw new RomIOException("synthetic failure");
+            }
+        }
+        var f=new Failing(); f.populateExactSource(); attestSyntheticOwnership(f);
+        new EvolutionRandomizer(f,settings(),new Random(721)).randomizeEvolutions();
+        byte[] before=f.memory.clone(); Map<Integer,List<String>> graph=new HashMap<>();
+        for(Species sp:f.pool) graph.put(sp.getSpeciesSetIdentityNumber(),sp.getEvolutionsFrom().stream()
+                .map(e->e.getTo().getSpeciesSetIdentityNumber()+":"+e.getExtraInfo()).toList());
+        f.fail=true; assertThrows(RomIOException.class,()->f.condenseLevelEvolutions(20)); assertArrayEquals(before,f.memory);
+        for(Species sp:f.pool) assertEquals(graph.get(sp.getSpeciesSetIdentityNumber()),sp.getEvolutionsFrom().stream()
+                .map(e->e.getTo().getSpeciesSetIdentityNumber()+":"+e.getExtraInfo()).toList());
+        f.fail=false; f.condenseLevelEvolutions(20); f.write(); assertEquals(160,f.memory[0x4821C]&255);
     }
 
     static void assertAcyclic(Map<Species,List<Evolution>> graph, int limit) {
