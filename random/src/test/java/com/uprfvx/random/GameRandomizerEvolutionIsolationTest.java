@@ -6,7 +6,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.*;
+import com.uprfvx.romio.romhandlers.CfruDpeEvolutionFixture;
+import com.uprfvx.romio.exceptions.RomIOException;
+import com.uprfvx.romio.gamedata.*;
+import java.util.*;
+import java.io.PrintStream;
+import java.io.OutputStream;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -59,6 +65,46 @@ class GameRandomizerEvolutionIsolationTest {
         assertTrue(shouldLogEvolutions.contains("return evoRandomizer.isChangesMade();"));
         assertFalse(shouldLogEvolutions.contains("speciesMovesetRandomizer"));
         assertFalse(shouldLogEvolutions.contains("trainerNameRandomizer"));
+    }
+
+    @Test
+    void easierWitnessPreflightPrecedesRestrictionsUpdatersAndAllRandomizers() throws IOException {
+        String source=Files.readString(gameRandomizerSourcePath());
+        String body=methodBody(source,"public Results randomize(final String filename, final PrintStream log, long seed)");
+        assertTrue(body.indexOf("preflightCfruEvolutionEasier") < body.indexOf("setupSpeciesRestrictions()"));
+        assertTrue(body.indexOf("preflightCfruEvolutionEasier") < body.indexOf("applyUpdaters()"));
+        assertTrue(body.indexOf("preflightCfruEvolutionEasier") < body.indexOf("applyRandomizers()"));
+        assertTrue(body.contains("settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler"));
+    }
+
+    @Test
+    void realGameRandomizerRejectsMissingWitnessBeforeRestrictionOrRandomizerMutation() throws Exception {
+        class MemoryHandler extends CfruDpeEvolutionFixture {
+            int restrictionsRead;
+            MemoryHandler() throws Exception {super();}
+            @Override public List<Integer> getMoveTutorMoves() {return List.of();}
+            @Override public List<Trainer> getTrainers() {return List.of();}
+            @Override public List<InGameTrade> getInGameTrades() {return List.of();}
+            @Override public List<Move> getMoves() {return List.of();}
+            @Override public boolean canChangeStaticPokemon() {return false;}
+            @Override public com.uprfvx.romio.services.RestrictedSpeciesService getRestrictedSpeciesService() {
+                restrictionsRead++; return super.getRestrictedSpeciesService();
+            }
+        }
+        String previous=System.getProperty("uprfvx.cfruEvolutionOwnership"); System.clearProperty("uprfvx.cfruEvolutionOwnership");
+        try {
+            var f=new MemoryHandler(); f.populateExactSource(); byte[] before=f.memory.clone();
+            Settings settings=new Settings(); settings.setMakeEvolutionsEasier(true); settings.setMakeEvolutionsEasierLvl(40);
+            settings.setLimitPokemon(true); settings.setEvolutionsMod(Settings.EvolutionsMod.RANDOM);
+            settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
+            GameRandomizer game=new GameRandomizer(settings,null,f,null,false); int reads=f.restrictionsRead;
+            var result=game.randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),721);
+            assertFalse(result.wasSaveSuccessful()); assertInstanceOf(RomIOException.class,result.getException());
+            assertTrue(result.getException().getMessage().contains("explicit JVM opt-in missing"));
+            assertEquals(reads,f.restrictionsRead); assertArrayEquals(before,f.memory);
+        } finally {
+            if(previous==null) System.clearProperty("uprfvx.cfruEvolutionOwnership"); else System.setProperty("uprfvx.cfruEvolutionOwnership",previous);
+        }
     }
 
     private static Path gameRandomizerSourcePath() {

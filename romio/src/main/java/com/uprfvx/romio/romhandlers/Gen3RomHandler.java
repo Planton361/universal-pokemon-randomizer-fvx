@@ -49,6 +49,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import com.uprfvx.romio.services.SpecialFormPredicates;
@@ -196,6 +198,440 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private record CfruDpeEvolutionRow(byte[] raw, List<CfruDpeModeledEvolution> modeled,
                                      boolean fullyModeled) {}
 
+    static final String CFRU_EVOLUTION_OWNERSHIP_PROPERTY = "uprfvx.cfruEvolutionOwnership";
+    private static final int CFRU_EVOLUTION_HOOK = 0x42EC4;
+    private static final int CFRU_EVOLUTION_TABLE_POINTER = 0x42F6C;
+    // GetEvolutionTargetSpecies uses these param thresholds; method 14's minimum
+    // is also consumed by GetMinimumLevel alongside the method-13 Shedinja trigger.
+    // Method 40 is coins; 18/35 have additional, unowned type/item data in +6.
+    private static final Set<Integer> CFRU_PARAM_LEVEL_METHODS = Set.of(
+            4, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 21, 22, 23, 28, 31, 32, 35, 41, 42);
+    private EvolutionOwnershipWitness evolutionOwnershipWitness;
+    private boolean cfruEvolutionEasierApplied;
+    private Integer cfruEasierHighestLevel;
+
+    private static RomIOException evolutionOwnershipError(String reason) {
+        // Never include a local path, manifest value, input digest or nested IO exception.
+        return new RomIOException("CFRU Make Evolutions Easier: " + reason
+                + ". Requires an independently user-validated OWNERSHIP_WITNESS_V1");
+    }
+
+    private record EvolutionOwner(String type, int start, int end) {
+        boolean contains(int offset, int length) { return offset >= start && (long) offset + length <= end; }
+        boolean overlaps(EvolutionOwner other) { return start < other.end && other.start < end; }
+    }
+
+    /**
+     * Pilot trust premise: the user independently accepts the exact fresh build/link/output.
+     * Parsing this witness does not prove that premise. All offsets are ROM-relative,
+     * half-open intervals. No private witness or ROM identity is logged or serialized.
+     */
+    static final class EvolutionOwnershipWitness {
+        final String inputSha256, buildId, configId, configSha256;
+        final int inputSize, recordOffset;
+        final EvolutionOwner consumer, table;
+        final List<EvolutionOwner> insertions, protectedOwners;
+
+        private EvolutionOwnershipWitness(Properties p) {
+            Set<String> keys = new HashSet<>(Set.of("schema", "version", "cfru.sha", "dpe.sha",
+                    "build.id", "config.id", "config.sha256", "input.size", "input.sha256",
+                    "record.offset", "consumer.start", "consumer.end", "table.start", "table.end",
+                    "table.rows", "table.slots", "table.entryBytes", "insertions.count", "protected.count"));
+            if (!"OWNERSHIP_WITNESS_V1".equals(p.getProperty("schema")) || number(p, "version") != 1
+                    || !"958c30ec58919ac3e13a40ddb9bd94a86651636e".equals(p.getProperty("cfru.sha"))
+                    || !"d887185de1f6ae6a78e85c4311bbadde17041d00".equals(p.getProperty("dpe.sha"))) {
+                throw evolutionOwnershipError("unsupported schema or public source revision");
+            }
+            for (String key : List.of("build.id", "config.id")) {
+                String value = p.getProperty(key, "");
+                if (!value.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) {
+                    throw evolutionOwnershipError("missing or invalid declared build/config identity");
+                }
+            }
+            for (String key : List.of("config.sha256", "input.sha256")) {
+                if (!p.getProperty(key, "").matches("[0-9a-f]{64}")) {
+                    throw evolutionOwnershipError("missing or invalid identity digest");
+                }
+            }
+            buildId = p.getProperty("build.id");
+            configId = p.getProperty("config.id");
+            configSha256 = p.getProperty("config.sha256");
+            inputSha256 = p.getProperty("input.sha256");
+            inputSize = number(p, "input.size");
+            if (inputSize <= CFRU_EVOLUTION_TABLE_POINTER + 4 || inputSize > 0x2000000) {
+                throw evolutionOwnershipError("invalid input size");
+            }
+            consumer = owner(p, "consumer", "EVOLUTION_CODE", inputSize, 2);
+            table = owner(p, "table", "EVOLUTION_DATA", inputSize, 4);
+            recordOffset = number(p, "record.offset");
+            if ((recordOffset & 3) != 0 || (long) recordOffset + 32 > inputSize
+                    || number(p, "table.rows") != CFRU_DPE_SPECIES_COUNT
+                    || number(p, "table.slots") != 16 || number(p, "table.entryBytes") != 8
+                    || table.end - table.start != CFRU_DPE_SPECIES_COUNT * 128) {
+                throw evolutionOwnershipError("invalid record/table layout");
+            }
+            int insertionCount = number(p, "insertions.count");
+            int protectedCount = number(p, "protected.count");
+            if (insertionCount < 1 || insertionCount > 8 || protectedCount < 4 || protectedCount > 64) {
+                throw evolutionOwnershipError("missing or excessive ownership intervals");
+            }
+            List<EvolutionOwner> envelopes = new ArrayList<>();
+            for (int i = 0; i < insertionCount; i++) {
+                String prefix = "insertions." + i;
+                keys.add(prefix + ".start"); keys.add(prefix + ".end");
+                envelopes.add(owner(p, prefix, "INSERTION", inputSize, 4));
+            }
+            List<EvolutionOwner> protectedRanges = new ArrayList<>();
+            Set<String> required = new HashSet<>(Set.of("PICKUP_CODE", "PICKUP_DATA", "OTHER_CODE", "OTHER_DATA"));
+            for (int i = 0; i < protectedCount; i++) {
+                String prefix = "protected." + i;
+                keys.add(prefix + ".type"); keys.add(prefix + ".start"); keys.add(prefix + ".end");
+                String type = p.getProperty(prefix + ".type", "");
+                if (!Set.of("PICKUP_CODE", "PICKUP_DATA", "OTHER_CODE", "OTHER_DATA").contains(type)) {
+                    throw evolutionOwnershipError("unsupported protected owner type");
+                }
+                required.remove(type);
+                protectedRanges.add(owner(p, prefix, type, inputSize, type.endsWith("CODE") ? 2 : 1));
+            }
+            if (!required.isEmpty() || !p.stringPropertyNames().equals(keys) || p.size() != keys.size()) {
+                throw evolutionOwnershipError("incomplete or unknown witness fields/owners");
+            }
+            for (int i = 0; i < envelopes.size(); i++) for (int j = 0; j < i; j++) {
+                if (envelopes.get(i).overlaps(envelopes.get(j))) {
+                    throw evolutionOwnershipError("ambiguous insertion envelopes");
+                }
+            }
+            EvolutionOwner record = new EvolutionOwner("RECORD", recordOffset, recordOffset + 32);
+            for (EvolutionOwner child : List.of(consumer, record, table)) {
+                if (envelopes.stream().filter(e -> e.contains(child.start, child.end - child.start)).count() != 1) {
+                    throw evolutionOwnershipError("code/data outside accepted insertion envelopes");
+                }
+            }
+            List<EvolutionOwner> children = new ArrayList<>(protectedRanges);
+            children.addAll(List.of(consumer, record, table,
+                    new EvolutionOwner("HOOK", CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8),
+                    new EvolutionOwner("TABLE_POINTER", CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4),
+                    new EvolutionOwner("HEADER", 0xA0, 0xC0)));
+            for (int i = 0; i < children.size(); i++) for (int j = 0; j < i; j++) {
+                if (children.get(i).overlaps(children.get(j))) {
+                    throw evolutionOwnershipError("overlapping typed code/data owners");
+                }
+            }
+            insertions = List.copyOf(envelopes);
+            protectedOwners = List.copyOf(protectedRanges);
+        }
+
+        static EvolutionOwnershipWitness parse(Properties properties) {
+            // Defensive snapshot: caller changes cannot alter this per-loaded-input witness.
+            Properties snapshot = new Properties(); snapshot.putAll(properties);
+            return new EvolutionOwnershipWitness(snapshot);
+        }
+
+        static EvolutionOwnershipWitness read(InputStream input) {
+            try {
+                byte[] text = input.readNBytes(65537);
+                if (text.length > 65536) throw evolutionOwnershipError("witness exceeds size limit");
+                Properties p = new Properties() {
+                    @Override public synchronized Object put(Object key, Object value) {
+                        if (containsKey(key)) throw evolutionOwnershipError("duplicate witness field");
+                        return super.put(key, value);
+                    }
+                };
+                p.load(new java.io.ByteArrayInputStream(text));
+                return parse(p);
+            } catch (IOException | IllegalArgumentException e) {
+                throw evolutionOwnershipError("cannot read witness");
+            }
+        }
+
+        private static int number(Properties p, String key) {
+            String value = p.getProperty(key, "");
+            if (!value.matches("(?:0|[1-9][0-9]{0,9}|0x[0-9a-fA-F]{1,8})")) {
+                throw evolutionOwnershipError("invalid numeric witness field");
+            }
+            try {
+                long n = value.startsWith("0x") ? Long.parseLong(value.substring(2), 16) : Long.parseLong(value);
+                if (n > Integer.MAX_VALUE) throw evolutionOwnershipError("numeric witness overflow");
+                return (int) n;
+            } catch (NumberFormatException e) {
+                throw evolutionOwnershipError("numeric witness overflow");
+            }
+        }
+
+        private static EvolutionOwner owner(Properties p, String prefix, String type, int size, int alignment) {
+            int start = number(p, prefix + ".start"), end = number(p, prefix + ".end");
+            if (start >= end || end > size || start % alignment != 0 || end % alignment != 0) {
+                throw evolutionOwnershipError("invalid ownership interval bounds/alignment");
+            }
+            return new EvolutionOwner(type, start, end);
+        }
+    }
+
+    /** Called before restrictions, updaters or randomizers. Vanilla is deliberately a no-op. */
+    public void preflightCfruEvolutionEasier(int maxLevel) {
+        if (!useCfruDpeGen9SpeciesCount) return;
+        if (maxLevel < 1 || maxLevel > 100) throw evolutionOwnershipError("invalid level cap");
+        if (evolutionOwnershipWitness == null) {
+            String path = System.getProperty(CFRU_EVOLUTION_OWNERSHIP_PROPERTY);
+            if (path == null || path.isBlank()) throw evolutionOwnershipError("explicit JVM opt-in missing");
+            EvolutionOwnershipWitness candidate;
+            try (InputStream input = Files.newInputStream(Path.of(path))) {
+                candidate = EvolutionOwnershipWitness.read(input);
+            } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
+                throw evolutionOwnershipError("cannot read explicitly selected witness");
+            }
+            validateEvolutionOwnership(candidate, true);
+            validatePristineEvolutionOwners(candidate);
+            evolutionOwnershipWitness = candidate;
+        }
+        validateEvolutionOwnership(evolutionOwnershipWitness, true);
+        validateCfruEvolutionMethods(prepareCfruDpeEvolutionRows());
+    }
+
+    // Package-only seam for synthetic in-memory source tests; no public runtime bypass.
+    void acceptSyntheticEvolutionWitness(Properties properties) {
+        EvolutionOwnershipWitness candidate = EvolutionOwnershipWitness.parse(properties);
+        validateEvolutionOwnership(candidate, true);
+        validatePristineEvolutionOwners(candidate);
+        evolutionOwnershipWitness = candidate;
+    }
+
+    private void validatePristineEvolutionOwners(EvolutionOwnershipWitness w) {
+        List<EvolutionOwner> owners = new ArrayList<>(w.protectedOwners);
+        owners.add(w.table);
+        for (EvolutionOwner owner : owners) {
+            if (!Arrays.equals(originalRom, owner.start, owner.end, rom, owner.start, owner.end)) {
+                throw evolutionOwnershipError("attested input owners changed before opt-in");
+            }
+        }
+    }
+
+    private void validateEvolutionOwnership(EvolutionOwnershipWitness w, boolean checkLoadedTable) {
+        if (originalRom == null || rom == null || originalRom.length != w.inputSize || rom.length != w.inputSize
+                || !HexFormat.of().formatHex(sha256(originalRom)).equals(w.inputSha256)) {
+            throw evolutionOwnershipError("pristine input identity mismatch");
+        }
+        if (!useCfruDpeGen9SpeciesCount || !"BPRE".equals(romEntry.getRomCode()) || romEntry.getVersion() != 0
+                || !romCode(originalRom, "BPRE") || originalRom[Gen3Constants.romVersionOffset] != 0
+                || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT
+                || romEntry.getIntValue("PokemonEvolutions") != w.table.start
+                || gbaPointer(originalRom, CFRU_EVOLUTION_TABLE_POINTER, false) != w.table.start) {
+            throw evolutionOwnershipError("selected profile/table mismatch");
+        }
+        validateEvolutionRecord(w, originalRom);
+        validateEvolutionRecord(w, rom);
+        if (!Arrays.equals(originalRom, w.consumer.start, w.consumer.end, rom, w.consumer.start, w.consumer.end)
+                || !Arrays.equals(originalRom, CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8,
+                        rom, CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8)
+                || !Arrays.equals(originalRom, w.recordOffset, w.recordOffset + 28,
+                        rom, w.recordOffset, w.recordOffset + 28)
+                || !Arrays.equals(originalRom, CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4,
+                        rom, CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4)) {
+            throw evolutionOwnershipError("live immutable consumer/record changed");
+        }
+        if (!Arrays.equals(originalRom, w.table.start, w.table.start + 128, rom, w.table.start, w.table.start + 128)) {
+            throw evolutionOwnershipError("reserved evolution row changed");
+        }
+        if (checkLoadedTable) {
+            for (int id = 1; id < CFRU_DPE_SPECIES_COUNT; id++) {
+                CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(id);
+                int offset = w.table.start + id * 128;
+                if (row == null) {
+                    // The production loader omits unused/name-placeholder species. They grant
+                    // no parameter ownership; never silently omit an active ordinary evolution.
+                    if (!Arrays.equals(originalRom, offset, offset + 128, rom, offset, offset + 128)) {
+                        throw evolutionOwnershipError("unloaded evolution row changed");
+                    }
+                    for (int o = offset; o < offset + 128; o += 8) {
+                        int method = IOFunctions.read2ByteInt(rom, o), target = IOFunctions.read2ByteInt(rom, o + 4);
+                        if (method != 0 && method != 0xFD && method != 0xFE && target != 0) {
+                            throw evolutionOwnershipError("unloaded active evolution row");
+                        }
+                    }
+                } else if (!Arrays.equals(row.raw(), 0, 128, rom, offset, offset + 128)) {
+                    throw evolutionOwnershipError("stale loaded evolution table");
+                }
+            }
+        }
+    }
+
+    private static byte[] sha256(byte[] bytes) {
+        try { return MessageDigest.getInstance("SHA-256").digest(bytes); }
+        catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable"); }
+    }
+
+    private static int gbaPointer(byte[] bytes, int offset, boolean thumb) {
+        long pointer = Integer.toUnsignedLong(IOFunctions.readFullInt(bytes, offset));
+        if ((pointer & (thumb ? 1 : 3)) != (thumb ? 1 : 0)
+                || pointer < 0x08000000L || pointer >= 0x08000000L + bytes.length) {
+            throw evolutionOwnershipError("invalid ROM pointer/alignment");
+        }
+        return (int) (pointer - 0x08000000L) & ~1;
+    }
+
+    private static void validateEvolutionRecord(EvolutionOwnershipWitness w, byte[] bytes) {
+        int hook = CFRU_EVOLUTION_HOOK, r = w.recordOffset;
+        if (bytes[hook] != 0 || bytes[hook + 1] != 0x4B || bytes[hook + 2] != 0x18 || bytes[hook + 3] != 0x47) {
+            throw evolutionOwnershipError("live evolution hook mismatch");
+        }
+        int consumer = gbaPointer(bytes, hook + 4, true);
+        if (!w.consumer.contains(consumer, 2) || gbaPointer(bytes, r + 8, false) != r
+                || gbaPointer(bytes, r + 12, true) != consumer) {
+            throw evolutionOwnershipError("record self/consumer ownership mismatch");
+        }
+        byte[] magic = "CFRUEVO1".getBytes(StandardCharsets.US_ASCII);
+        if (!Arrays.equals(bytes, r, r + 8, magic, 0, 8)) throw evolutionOwnershipError("record identity missing");
+        int[] fields = {1, 32, 28, 1, 220, 160};
+        for (int i = 0; i < fields.length; i++) {
+            if (IOFunctions.read2ByteInt(bytes, r + 16 + i * 2) != fields[i]) {
+                throw evolutionOwnershipError("record immutable field mismatch");
+            }
+        }
+        if ((bytes[r + 28] & 255) != 220 && (bytes[r + 28] & 255) != 160) {
+            throw evolutionOwnershipError("unsupported live friendship threshold");
+        }
+        if (bytes[r + 29] != 0 || bytes[r + 30] != 0 || bytes[r + 31] != 0) {
+            throw evolutionOwnershipError("record reserved bytes nonzero");
+        }
+        // Bounded ambiguity check, never a signature-based provenance/discovery fallback.
+        int matches = 0;
+        for (EvolutionOwner envelope : w.insertions) {
+            for (int at = envelope.start; at <= envelope.end - 8; at++) {
+                if (Arrays.equals(bytes, at, at + 8, magic, 0, 8)) matches++;
+            }
+        }
+        if (matches != 1) throw evolutionOwnershipError("ambiguous record identity inside accepted insertions");
+    }
+
+    private void validateCfruEvolutionMethods(Map<Integer, byte[]> rows) {
+        for (byte[] row : rows.values()) for (int slot = 0; slot < 16; slot++) {
+            int o = slot * 8, method = IOFunctions.read2ByteInt(row, o), target = IOFunctions.read2ByteInt(row, o + 4);
+            if (method == 0 || target == 0 || method == 0xFD || method == 0xFE) continue;
+            if (method > 42 || method == 33) {
+                throw evolutionOwnershipError("NOT_SUPPORTED_FOR_SELECTED_METHOD " + method);
+            }
+            if (CFRU_PARAM_LEVEL_METHODS.contains(method)
+                    && (target >= CFRU_DPE_SPECIES_COUNT || pokesInternal[target] == null
+                    || IOFunctions.read2ByteInt(row, o + 2) > 100)) {
+                throw evolutionOwnershipError("invalid applicable level evolution");
+            }
+        }
+    }
+
+    private record EvolutionBytePatch(int offset, byte[] before, byte[] after) {}
+
+    @Override
+    public void condenseLevelEvolutions(int maxLevel) {
+        if (!useCfruDpeGen9SpeciesCount) { super.condenseLevelEvolutions(maxLevel); return; }
+        applyCfruEvolutionEasier(maxLevel);
+    }
+
+    @Override
+    public int getHighestEvoLvl() {
+        return cfruEasierHighestLevel == null ? super.getHighestEvoLvl() : cfruEasierHighestLevel;
+    }
+
+    private void applyCfruEvolutionEasier(int maxLevel) {
+        preflightCfruEvolutionEasier(maxLevel);
+        EvolutionOwnershipWitness w = evolutionOwnershipWitness;
+        Map<Integer, byte[]> currentRows = prepareCfruDpeEvolutionRows();
+        validateCfruEvolutionMethods(currentRows);
+        // Use every ordinary raw edge (including extended/fixed duplicates) for middle-stage detection.
+        Set<Integer> hasOutgoing = new HashSet<>();
+        for (var entry : currentRows.entrySet()) for (int o = 0; o < 128; o += 8) {
+            int method = IOFunctions.read2ByteInt(entry.getValue(), o), target = IOFunctions.read2ByteInt(entry.getValue(), o + 4);
+            if (method >= 1 && method <= 42 && target > 0 && target < CFRU_DPE_SPECIES_COUNT) hasOutgoing.add(entry.getKey());
+        }
+        int highest = getHighestEvoLvl();
+        for (byte[] row : currentRows.values()) for (int o = 0; o < 128; o += 8) {
+            if (CFRU_PARAM_LEVEL_METHODS.contains(IOFunctions.read2ByteInt(row, o))
+                    && IOFunctions.read2ByteInt(row, o + 4) != 0) {
+                highest = Math.max(highest, IOFunctions.read2ByteInt(row, o + 2));
+            }
+        }
+        boolean condense = maxLevel < highest;
+        Map<Evolution, Integer> estimates = new IdentityHashMap<>();
+        Map<Integer, CfruDpeEvolutionRow> committed = new HashMap<>();
+        Map<Evolution, Integer> parameters = new IdentityHashMap<>();
+        List<EvolutionBytePatch> patches = new ArrayList<>();
+        int intermediateCap = (3 * maxLevel + 3) / 4;
+        for (var entry : currentRows.entrySet()) {
+            int id = entry.getKey();
+            byte[] raw = entry.getValue().clone();
+            Species source = pokesInternal[id];
+            for (int o = 0; o < 128; o += 8) {
+                int method = IOFunctions.read2ByteInt(raw, o), target = IOFunctions.read2ByteInt(raw, o + 4);
+                int oldLevel = IOFunctions.read2ByteInt(raw, o + 2);
+                if (!CFRU_PARAM_LEVEL_METHODS.contains(method) || target == 0) continue;
+                int level = condense ? Math.min(oldLevel, hasOutgoing.contains(target) ? intermediateCap : maxLevel) : oldLevel;
+                IOFunctions.write2ByteInt(raw, o + 2, level);
+                for (Evolution evo : source.getEvolutionsFrom()) {
+                    if (Gen3Constants.evolutionTypeToIndex(evo.getType()) == method
+                            && getEvolutionInternalSpeciesId(evo.getTo()) == target && evo.getExtraInfo() == oldLevel) {
+                        parameters.put(evo, level);
+                    }
+                }
+            }
+            if (condense) for (Evolution evo : source.getEvolutionsFrom()) {
+                if (!evo.getType().usesLevelThreshold()) {
+                    estimates.put(evo, Math.min(evo.getEstimatedEvoLvl(),
+                            hasOutgoing.contains(getEvolutionInternalSpeciesId(evo.getTo())) ? intermediateCap : maxLevel));
+                }
+            }
+            List<CfruDpeModeledEvolution> modeled = source.getEvolutionsFrom().stream().map(evo ->
+                    new CfruDpeModeledEvolution(id, getEvolutionInternalSpeciesId(evo.getTo()), evo.getType(),
+                            parameters.getOrDefault(evo, evo.getExtraInfo()), evo.getForme())).toList();
+            committed.put(id, new CfruDpeEvolutionRow(raw, modeled, originalCfruDpeEvolutionRows.get(id).fullyModeled()));
+            int rowOffset = w.table.start + id * 128;
+            for (int o = 0; o < 128; o += 2) {
+                if (rom[rowOffset + o] == raw[o] && rom[rowOffset + o + 1] == raw[o + 1]) continue;
+                // Existing target plan owns only +4. This new plan owns only source-proven +2.
+                boolean ownedParameter = o % 8 == 2 && CFRU_PARAM_LEVEL_METHODS.contains(IOFunctions.read2ByteInt(raw, o - 2));
+                boolean ownedTarget = o % 8 == 4 && plannedCfruDpeEvolutionRows.containsKey(id);
+                if ((!ownedParameter && !ownedTarget) || !w.table.contains(rowOffset + o, 2)) {
+                    throw evolutionOwnershipError("write plan escapes owned evolution fields");
+                }
+                patches.add(new EvolutionBytePatch(rowOffset + o,
+                        Arrays.copyOfRange(rom, rowOffset + o, rowOffset + o + 2), Arrays.copyOfRange(raw, o, o + 2)));
+            }
+        }
+        patches.add(new EvolutionBytePatch(w.recordOffset + 28, new byte[]{rom[w.recordOffset + 28]}, new byte[]{(byte) 160}));
+        // Complete plan, ranges and old bytes validated before the first write. The existing raw-row
+        // guard remains the authority for all prior target-only plans and generic fully-owned tweaks.
+        validateEvolutionOwnership(w, true);
+        for (EvolutionBytePatch patch : patches) {
+            if (!Arrays.equals(patch.before, 0, patch.before.length, rom, patch.offset, patch.offset + patch.before.length)) {
+                throw evolutionOwnershipError("stale evolution write plan");
+            }
+        }
+        try {
+            for (EvolutionBytePatch patch : patches) {
+                if (patch.after.length == 2) writeWord(patch.offset, IOFunctions.read2ByteInt(patch.after, 0));
+                else writeByte(patch.offset, patch.after[0]);
+            }
+            for (EvolutionBytePatch patch : patches) {
+                if (!Arrays.equals(patch.after, 0, patch.after.length, rom, patch.offset, patch.offset + patch.after.length)) {
+                    throw evolutionOwnershipError("evolution write readback mismatch");
+                }
+            }
+            validateEvolutionOwnership(w, false);
+        } catch (RuntimeException e) {
+            for (EvolutionBytePatch patch : patches) System.arraycopy(patch.before, 0, rom, patch.offset, patch.before.length);
+            throw evolutionOwnershipError("evolution write failed; touched bytes restored");
+        }
+        // Publish graph/snapshots only after byte commit + readback; no state to roll back on write failure.
+        parameters.forEach((evo, level) -> {
+            if (evo.getExtraInfo() != level) { markImprovedEvolutions(evo.getFrom()); evo.updateEvolutionMethod(evo.getType(), level); }
+        });
+        originalCfruDpeEvolutionRows.putAll(committed);
+        plannedCfruDpeEvolutionRows.clear();
+        estimates.forEach((evo, level) -> {
+            if (evo.getEstimatedEvoLvl() != level) { markImprovedEvolutions(evo.getFrom()); evo.setEstimatedEvoLvl(level); }
+        });
+        cfruEasierHighestLevel = condense ? maxLevel : highest;
+        cfruEvolutionEasierApplied = true;
+    }
+
     private final Map<Species, byte[]> originalCfruDpeNormalPaletteBytes = new IdentityHashMap<>();
     private final Map<Species, byte[]> originalCfruDpeShinyPaletteBytes = new IdentityHashMap<>();
     private static final String CFRU_DPE_DIAGNOSTIC_PREFIX = "[temporary CFRU/DPE species diagnostics] ";
@@ -308,6 +744,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public void midLoadingSetUp() {
         super.midLoadingSetUp();
+        evolutionOwnershipWitness = null;
+        cfruEvolutionEasierApplied = false;
+        cfruEasierHighestLevel = null;
         isRomHack = false;
         jamboMovesetHack = false;
         useCfruDpeGen9SpeciesCount = false;
@@ -7498,6 +7937,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void makeEvolutionsEasier(boolean changeWithOtherEvos, boolean useEstimatedLevels) {
+        if (useCfruDpeGen9SpeciesCount) {
+            if (!cfruEvolutionEasierApplied || evolutionOwnershipWitness == null) {
+                throw evolutionOwnershipError("complete level/friendship plan has not been applied");
+            }
+            validateEvolutionOwnership(evolutionOwnershipWitness, true);
+            return;
+        }
         // Reduce the amount of happiness required to evolve.
         int offset = find(rom, Gen3Constants.friendshipValueForEvoLocator);
         if (offset > 0) {

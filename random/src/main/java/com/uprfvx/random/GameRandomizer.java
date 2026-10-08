@@ -33,6 +33,7 @@ import com.uprfvx.random.updaters.Updater;
 import com.uprfvx.romio.MiscTweak;
 import com.uprfvx.romio.graphics.packs.CustomPlayerGraphics;
 import com.uprfvx.romio.romhandlers.Gen1RomHandler;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 import com.uprfvx.romio.services.SpecialFormExclusionOptions;
 
@@ -205,6 +206,9 @@ public class GameRandomizer {
             final long startTime = System.currentTimeMillis();
             randomSource.seed(seed);
 
+            if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3) {
+                gen3.preflightCfruEvolutionEasier(settings.getMakeEvolutionsEasierLvl());
+            }
             setupSpeciesRestrictions();
             applyUpdaters();
             applyRandomizers();
