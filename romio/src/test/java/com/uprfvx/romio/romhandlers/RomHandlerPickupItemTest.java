@@ -56,3 +56,36 @@ public class RomHandlerPickupItemTest extends RomHandlerTest {
         return sb.toString();
     }
 }
+
+// Separate class deliberately has no inherited ROM-loading lifecycle.
+class Gen3VanillaPickupSourceTest {
+    @org.junit.jupiter.api.Test
+    void vanillaFireRedUses16FourByteRowsAndPreservesMetadataAndOtherBytes() throws Exception {
+        var f = new Gen3CfruDpePickupGuardTest.Fixture();
+        Gen3CfruDpePickupGuardTest.Fixture.setField(f.handler, "useCfruDpeGen9SpeciesCount", false);
+        int table = 0x1000;
+        Gen3CfruDpePickupGuardTest.Fixture.setField(f.handler, "pickupItemsTableOffset", table);
+        f.entry.putIntValue("PickupItemCount", 16);
+        for (int slot = 0; slot < 16; slot++) f.half(table + slot * 4, 13);
+        byte[] original = f.image.clone();
+        List<PickupItem> before = f.handler.getPickupItems();
+        org.junit.jupiter.api.Assertions.assertEquals(16, before.size());
+        int[] expected = {15, 10, 10, 10, 10, 10, 10, 5, 5, 5, 5, 1, 1, 1, 1, 1};
+        for (int row = 0; row < 10; row++) {
+            for (int slot = 0; slot < 16; slot++) {
+                org.junit.jupiter.api.Assertions.assertEquals(expected[slot], before.get(slot).getProbabilities()[row]);
+            }
+        }
+        f.handler.setPickupItems(before);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, f.image);
+        List<PickupItem> next = before.stream().map(old -> new PickupItem(f.item(14))).toList();
+        f.handler.setPickupItems(next);
+        for (int offset = 0; offset < f.image.length; offset++) {
+            boolean writable = offset >= table && offset < table + 64 && (offset - table) % 4 < 2;
+            if (!writable) org.junit.jupiter.api.Assertions.assertEquals(original[offset], f.image[offset]);
+        }
+        for (PickupItem item : f.handler.getPickupItems()) {
+            org.junit.jupiter.api.Assertions.assertEquals(f.item(14), item.getItem());
+        }
+    }
+}

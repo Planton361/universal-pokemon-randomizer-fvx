@@ -7620,7 +7620,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public List<PickupItem> getPickupItems() {
-        rejectUnsupportedCfruDpePickup();
+        if (useCfruDpeGen9SpeciesCount) {
+            return getCfruDpePickupItems(resolveCfruDpePickupLayout());
+        }
         List<PickupItem> pickupItems = new ArrayList<>();
         int pickupItemCount = romEntry.getIntValue("PickupItemCount");
         int sizeOfPickupEntry = romEntry.getRomType() == Gen3Constants.RomType_Em ? 2 : 4;
@@ -7682,7 +7684,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void setPickupItems(List<PickupItem> pickupItems) {
-        rejectUnsupportedCfruDpePickup();
+        if (useCfruDpeGen9SpeciesCount) {
+            setCfruDpePickupItems(pickupItems);
+            return;
+        }
         int sizeOfPickupEntry = romEntry.getRomType() == Gen3Constants.RomType_Em ? 2 : 4;
         if (pickupItemsTableOffset > 0) {
             for (int i = 0; i < pickupItems.size(); i++) {
@@ -7693,12 +7698,196 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
-    private void rejectUnsupportedCfruDpePickup() {
-        if (useCfruDpeGen9SpeciesCount) {
-            // CFRU's ChoosePickupItem uses separate level-dependent common/rare
-            // arrays. The vanilla FRLG locator below does not identify them.
-            throw new RomIOException("Pickup randomization is unsupported for this CFRU/DPE profile. "
-                    + "Set Pickup Items to Unchanged; the engine's active tables are preserved.");
+    // CFRU PR #75, fc5119052cb363dac5971ff0aee0b67ef0d6a42e ONLY.
+    // Resolve from the live dispatch, never by scanning for descriptor/table bytes.
+    private static final int[] CFRU_PICKUP_REPOINTS = {0x14C1C, 0x15A28, 0x15C6C, 0x15C98, 0x1D054};
+    private static final int[] CFRU_PICKUP_BRIDGE = {
+            0xB510, 0x4804, 0x4B04, 0xF000, 0xF803, 0xBC10, 0xBC01, 0x4700, 0x4718, 0x46C0};
+    private static final int[] CFRU_PICKUP_CEILINGS = {
+            19661, 26214, 32768, 39322, 45875, 52429, 58982, 61604, 64225, 64881, 65536};
+    // PickupItem exposes integer percentages; these are the nominal UI weights.
+    // Exact u16-draw partition remains in the untouched eleven u32 ceilings.
+    private static final int[] CFRU_PICKUP_WEIGHTS = {30, 10, 10, 10, 10, 10, 10, 4, 4, 1, 1};
+    private static final int CFRU_PICKUP_ITEM_COUNT = 779;
+
+    private record CfruPickupLayout(int common, int rare) {
+        int slotOffset(int slot) {
+            return slot < 18 ? common + slot * 2 : rare + (slot - 18) * 2;
+        }
+    }
+
+    private static RomIOException cfruPickupFailure(String reason) {
+        return new RomIOException("Pickup Random requires the supported CFRU/DPE E5 descriptor v1: "
+                + reason + ". Set Pickup Items to Unchanged for this unsupported output.");
+    }
+
+    private void requireCfruPickup(boolean condition, String reason) {
+        if (!condition) {
+            throw cfruPickupFailure(reason);
+        }
+    }
+
+    private long cfruPickupWord(int offset) {
+        requireCfruPickup(rom != null && offset >= 0 && offset <= rom.length - 4,
+                "missing or truncated Pickup data");
+        return Integer.toUnsignedLong(IOFunctions.readFullInt(rom, offset));
+    }
+
+    private int cfruPickupRegion(long pointer, int size, int alignment) {
+        long offset = pointer - 0x08000000L;
+        requireCfruPickup(pointer >= 0x08000000L && pointer < 0x0A000000L
+                        && pointer % alignment == 0 && rom != null
+                        && offset <= rom.length - (long) size && offset + size <= 0x02000000L,
+                "invalid, misaligned or out-of-bounds Pickup pointer");
+        return (int) offset;
+    }
+
+    private CfruPickupLayout resolveCfruDpePickupLayout() {
+        requireCfruPickup(rom != null && romEntry != null && items != null, "ROM/item data not loaded");
+        requireCfruPickup("BPRE".equals(romEntry.getRomCode())
+                        && romEntry.getRomType() == Gen3Constants.RomType_FRLG,
+                "unsupported game profile");
+        long tablePointer = cfruPickupWord(CFRU_PICKUP_REPOINTS[0]);
+        for (int site : CFRU_PICKUP_REPOINTS) {
+            requireCfruPickup(cfruPickupWord(site) == tablePointer, "missing or ambiguous E5 dispatch root");
+        }
+        int commandTable = cfruPickupRegion(tablePointer, 256 * 4, 4);
+        long anchorPointer = cfruPickupWord(commandTable + 0xE5 * 4);
+        requireCfruPickup((anchorPointer & 1) == 1, "E5 anchor is not Thumb");
+        int bridge = cfruPickupRegion(anchorPointer & ~1L, 28, 4);
+        for (int i = 0; i < CFRU_PICKUP_BRIDGE.length; i++) {
+            requireCfruPickup(IOFunctions.read2ByteInt(rom, bridge + i * 2) == CFRU_PICKUP_BRIDGE[i],
+                    "missing or incompatible E5 bridge");
+        }
+        int descriptor = cfruPickupRegion(cfruPickupWord(bridge + 20), 64, 4);
+        long consumerPointer = cfruPickupWord(bridge + 24);
+        requireCfruPickup((consumerPointer & 1) == 1, "Pickup consumer is not Thumb");
+        int consumer = cfruPickupRegion(consumerPointer & ~1L, 2, 2);
+        requireCfruPickup(cfruPickupWord(descriptor) == 0x31555043L
+                        && IOFunctions.read2ByteInt(rom, descriptor + 4) == 1
+                        && IOFunctions.read2ByteInt(rom, descriptor + 6) == 64,
+                "unknown descriptor magic/version/size");
+        requireCfruPickup(cfruPickupWord(descriptor + 8) == 6,
+                "unsupported config (requires non-UNBOUND, straight-to-bag and knocked-off)");
+        requireCfruPickup(cfruPickupWord(descriptor + 12) == 1
+                        && cfruPickupWord(descriptor + 52) == CFRU_PICKUP_ITEM_COUNT,
+                "unsupported item schema/count");
+        requireCfruPickup(cfruPickupWord(descriptor + 56) == consumerPointer
+                        && cfruPickupWord(descriptor + 60) == anchorPointer,
+                "descriptor is not coupled to the live E5 anchor/consumer");
+        int[] counts = {18, 11, 9, 2};
+        for (int i = 0; i < counts.length; i++) {
+            requireCfruPickup(IOFunctions.read2ByteInt(rom, descriptor + 32 + i * 2) == counts[i],
+                    "incompatible table counts");
+        }
+        int[] shape = {4, 2, 4, 10, 10, 9, 2, 1, 100, 0, 0, 0};
+        for (int i = 0; i < shape.length; i++) {
+            requireCfruPickup((rom[descriptor + 40 + i] & 0xFF) == shape[i],
+                    "incompatible pointer/item/ceiling widths, level windows or reserved fields");
+        }
+        int[] sizes = {36, 22, 36, 8};
+        int[] tables = new int[4];
+        List<int[]> regions = new ArrayList<>();
+        regions.add(new int[]{commandTable, 1024});
+        regions.add(new int[]{bridge, 28});
+        regions.add(new int[]{descriptor, 64});
+        regions.add(new int[]{consumer, 2});
+        for (int site : CFRU_PICKUP_REPOINTS) {
+            regions.add(new int[]{site, 4});
+        }
+        // The header contains the profile identity; no table may alias it.
+        regions.add(new int[]{0, 0xC0});
+        for (int i = 0; i < tables.length; i++) {
+            tables[i] = cfruPickupRegion(cfruPickupWord(descriptor + 16 + i * 4), sizes[i], i < 2 ? 2 : 4);
+            regions.add(new int[]{tables[i], sizes[i]});
+        }
+        for (int i = 0; i < regions.size(); i++) {
+            for (int j = i + 1; j < regions.size(); j++) {
+                int[] first = regions.get(i), second = regions.get(j);
+                requireCfruPickup(first[0] + first[1] <= second[0] || second[0] + second[1] <= first[0],
+                        "overlapping or aliased Pickup/dispatch regions");
+            }
+        }
+        for (int i = 0; i < CFRU_PICKUP_CEILINGS.length; i++) {
+            int offset = i < 9 ? tables[2] + i * 4 : tables[3] + (i - 9) * 4;
+            requireCfruPickup(cfruPickupWord(offset) == CFRU_PICKUP_CEILINGS[i],
+                    "incompatible common/rare probability ceilings");
+        }
+        CfruPickupLayout layout = new CfruPickupLayout(tables[0], tables[1]);
+        for (int slot = 0; slot < 29; slot++) {
+            cfruPickupItem(IOFunctions.read2ByteInt(rom, layout.slotOffset(slot)));
+        }
+        return layout;
+    }
+
+    private Item cfruPickupItem(int internal) {
+        requireCfruPickup(internal > 0 && internal < CFRU_PICKUP_ITEM_COUNT, "invalid raw Pickup item ID");
+        int id = Gen3Constants.itemIDToStandard(internal);
+        Item item = id < items.size() ? items.get(id) : null;
+        requireCfruPickup(item != null && item.getId() == id && item.isAllowed() && !item.isTM()
+                        && !isCfruDpeItemNameFallback(item.getName())
+                        && !CfruDpeItemPoolPolicy.isBannedFromNormalItemPools(item),
+                "unknown or ineligible Pickup item");
+        requireCfruPickup(Gen3Constants.itemIDToInternal(id) == internal, "non-roundtripping Pickup item ID");
+        return item;
+    }
+
+    private int[] cfruPickupProbabilities(int slot) {
+        int[] probabilities = new int[PickupItem.PROBABILITY_SLOTS];
+        for (int row = 0; row < probabilities.length; row++) {
+            int index = slot < 18 ? slot - row : slot - 18 - row;
+            int window = slot < 18 ? 9 : 2;
+            if (index >= 0 && index < window) {
+                probabilities[row] = CFRU_PICKUP_WEIGHTS[index + (slot < 18 ? 0 : 9)];
+            }
+        }
+        return probabilities;
+    }
+
+    private List<PickupItem> getCfruDpePickupItems(CfruPickupLayout layout) {
+        List<PickupItem> result = new ArrayList<>(29);
+        for (int slot = 0; slot < 29; slot++) {
+            PickupItem item = new PickupItem(cfruPickupItem(IOFunctions.read2ByteInt(rom, layout.slotOffset(slot))));
+            System.arraycopy(cfruPickupProbabilities(slot), 0, item.getProbabilities(), 0, PickupItem.PROBABILITY_SLOTS);
+            result.add(item);
+        }
+        return result;
+    }
+
+    private void setCfruDpePickupItems(List<PickupItem> pickupItems) {
+        // Resolve anew: never trust offsets cached by a previous get or ROM load.
+        CfruPickupLayout layout = resolveCfruDpePickupLayout();
+        requireCfruPickup(pickupItems != null && pickupItems.size() == 29, "expected 29 physical Pickup slots");
+        int[] plan = new int[29], original = new int[29];
+        for (int slot = 0; slot < plan.length; slot++) {
+            PickupItem replacement = pickupItems.get(slot);
+            requireCfruPickup(replacement != null && replacement.getItem() != null, "missing replacement item");
+            int id = replacement.getItem().getId();
+            Integer internal = Gen3Constants.itemIDToInternalMap.get(id);
+            if (id >= ItemIDs.UNIQUE_OFFSET) {
+                internal = id - ItemIDs.UNIQUE_OFFSET;
+            }
+            requireCfruPickup(internal != null && cfruPickupItem(internal).getId() == id,
+                    "unmapped or incompatible replacement item ID");
+            requireCfruPickup(Arrays.equals(replacement.getProbabilities(), cfruPickupProbabilities(slot)),
+                    "replacement changes the level-window probabilities");
+            plan[slot] = internal;
+            original[slot] = IOFunctions.read2ByteInt(rom, layout.slotOffset(slot));
+        }
+        // Every failure above precedes mutation; commit only the two u16 ranges.
+        try {
+            for (int slot = 0; slot < plan.length; slot++) {
+                IOFunctions.write2ByteInt(rom, layout.slotOffset(slot), plan[slot]);
+            }
+            for (int slot = 0; slot < plan.length; slot++) {
+                requireCfruPickup(IOFunctions.read2ByteInt(rom, layout.slotOffset(slot)) == plan[slot],
+                        "Pickup write/readback mismatch");
+            }
+        } catch (RuntimeException failure) {
+            for (int slot = 0; slot < original.length; slot++) {
+                IOFunctions.write2ByteInt(rom, layout.slotOffset(slot), original[slot]);
+            }
+            throw failure;
         }
     }
 
