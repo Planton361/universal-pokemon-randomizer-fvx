@@ -498,6 +498,26 @@ class Gen3CfruDpeEvolutionPreservationTest {
         assertEquals(0, word(f, 1, 1, 0));
     }
 
+    @Test
+    void fullPhysicalWitnessAcceptsBoundedModelWithoutPostPecharuntSlot() throws Exception {
+        var f = new WitnessFixture();
+        Species[] bounded = Arrays.copyOf(f.species, 1440);
+        setField(f, "pokes", bounded); setField(f, "pokesInternal", bounded);
+        f.entry(1439, 0, 4, 80, 1, 0);
+        f.attest(220); f.bind();
+        byte[] before = f.memory.clone();
+        f.condenseLevelEvolutions(40); f.write();
+        assertEquals(40, f.word(1439, 0, 2));
+        assertEquals(1440, bounded.length); assertNull(bounded[0]);
+        assertEquals(160, f.memory[WitnessFixture.RECORD + 28] & 255);
+        int parameter = CfruDpeEvolutionFixture.offset(1439, 0) + 2;
+        for (int i = 0; i < before.length; i++) {
+            if (i != parameter && i != parameter + 1 && i != WitnessFixture.RECORD + 28) {
+                assertEquals(before[i], f.memory[i], "unowned byte " + i);
+            }
+        }
+    }
+
     /** Entire witness and input are constructed in memory. No filesystem ingress in source tests. */
     private static class WitnessFixture extends CfruDpeEvolutionFixture {
         static final int RECORD = 0x48200;
