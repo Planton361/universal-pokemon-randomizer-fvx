@@ -72,6 +72,142 @@ class DeterministicPaletteReplayTest {
         }
     }
 
+    @Test
+    void selectedFollowTypesReplaysAcrossFreshJvmsAndLeavesGameplayRngUntouched() throws Exception {
+        for (long seed : SEEDS) {
+            String first = process(seed, "cfru-types");
+            assertEquals(first, process(seed, "cfru-types"), "seed=" + seed);
+        }
+    }
+
+    @Test
+    void selectedTypesSeedRoundTripsAndReplayWithSkippedParentsAndAssets() throws Exception {
+        for (long seed : SEEDS) assertEquals(selectedReplay(seed), selectedReplay(seed));
+    }
+
+    @Test
+    void fiveCandidateIntegrationReplaysInFreshJvmsForEachIndependentImprovementAndPalette() throws Exception {
+        for(long seed : SEEDS) assertEquals(process(seed,"integration"),process(seed,"integration"),"combined seed="+seed);
+    }
+
+    // Kept here because the existing standalone probe is read-only under #724.
+    public static void main(String[] args) throws Exception {
+        if (args[1].equals("integration")) {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            for(int improvement : new int[]{0,1,2}) for(int palette : new int[]{2,4})
+                digest.update(CfruDpeEvolutionTargetTest.combinedReplay(Long.parseLong(args[0]),improvement,palette,true));
+            System.out.println("SYNTHETIC_INTEGRATION="+HexFormat.of().formatHex(digest.digest()));
+            return;
+        }
+        if (args[1].startsWith("gfx004")) { gfx004Main(args); return; }
+        System.out.println("SYNTHETIC_PALETTE=" + selectedReplay(Long.parseLong(args[0])));
+    }
+
+    private static String selectedReplay(long seed) throws Exception {
+        var digest = java.security.MessageDigest.getInstance("SHA-256");
+        var source = new RandomSource();
+        source.seed(seed);
+        for (boolean evolutions : new boolean[]{false, true}) {
+            var species = Gen3to5PaletteBoundsTest.chain();
+            var parent = species.stream().filter(sp -> sp.getNumber() == 1).findFirst().orElseThrow();
+            parent.setNormalPalette(null);
+            var child = species.stream().filter(sp -> sp.getNumber() == 2).findFirst().orElseThrow();
+            child.setPrimaryType(com.uprfvx.romio.gamedata.Type.FAIRY);
+            child.setSecondaryType(com.uprfvx.romio.gamedata.Type.WATER);
+            var expanded = Gen3to5PaletteBoundsTest.speciesWithPalette(388);
+            var expandedBefore = expanded.getNormalPalette().toBytes();
+            species.add(expanded);
+            var settings = Gen3to5PaletteBoundsTest.paletteSettings(true, evolutions);
+            settings.setRomName("SYNTHETIC");
+            settings.setSelectedEXPCurve(com.uprfvx.romio.gamedata.ExpCurve.MEDIUM_FAST);
+            var restored = com.uprfvx.random.Settings.fromString(settings.toString());
+            assertTrue(restored.isPokemonPalettesFollowTypes());
+            assertFalse(restored.isPokemonPalettesShinyFromNormal());
+            assertEquals(evolutions, restored.isPokemonPalettesFollowEvolutions());
+            var handler = new Gen3to5PaletteBoundsTest.SyntheticGen3(species, true, "FRLG");
+            var shinies = new HashMap<com.uprfvx.romio.gamedata.Species, byte[]>();
+            species.forEach(sp -> shinies.put(sp, sp.getShinyPalette().toBytes()));
+            var randomizer = new Gen3to5PaletteRandomizer(handler, restored, source.getCosmetic());
+            randomizer.randomizePokemonPalettes();
+            assertTrue(randomizer.isChangesMade());
+            assertNull(parent.getNormalPalette());
+            assertArrayEquals(expandedBefore, expanded.getNormalPalette().toBytes());
+            for (var sp : species.stream().sorted(Comparator.comparingInt(
+                    com.uprfvx.romio.gamedata.Species::getNumber)).toList()) {
+                assertArrayEquals(shinies.get(sp), sp.getShinyPalette().toBytes());
+                if (sp.getNormalPalette() != null) digest.update(sp.getNormalPalette().toBytes());
+            }
+        }
+        assertEquals(0, source.callsSinceSeedNonCosmetic());
+        Random gameplay = new Random(seed);
+        for (int i = 0; i < 100; i++) assertEquals(gameplay.nextInt(), source.getNonCosmetic().nextInt());
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    @Test
+    void selectedGfx004LoadedPairsReplayAcrossFreshJvmsInBothFollowModes() throws Exception {
+        for (long seed : SEEDS) for (String mode : List.of("gfx004", "gfx004-follow")) {
+            String first = process(seed, mode);
+            assertEquals(first, process(seed, mode), "seed=" + seed + " mode=" + mode);
+        }
+    }
+
+    @Test
+    void actualGfx004ConsumesOnlyCosmeticStreamAndKeepsHundredGameplayDraws() {
+        for (long seed : SEEDS) for (boolean follow : new boolean[]{false, true}) {
+            RandomSource source = new RandomSource(); source.seed(seed);
+            loadedPairReplay(source.getCosmetic(), follow);
+            assertTrue(source.callsSinceSeedCosmetic() > 0);
+            assertEquals(0, source.callsSinceSeedNonCosmetic());
+            Random expected = new Random(seed);
+            for (int i = 0; i < 100; i++) assertEquals(expected.nextInt(), source.getNonCosmetic().nextInt());
+        }
+    }
+
+    private static String loadedPairReplay(Random cosmetic, boolean follow) {
+        var a = Gen3to5PaletteBoundsTest.speciesWithPalette(4);
+        var b = Gen3to5PaletteBoundsTest.speciesWithPalette(5);
+        var c = Gen3to5PaletteBoundsTest.speciesWithPalette(6);
+        a.setPrimaryType(com.uprfvx.romio.gamedata.Type.FIRE);
+        b.setPrimaryType(com.uprfvx.romio.gamedata.Type.WATER);
+        b.setSecondaryType(com.uprfvx.romio.gamedata.Type.FLYING);
+        c.setPrimaryType(com.uprfvx.romio.gamedata.Type.FAIRY);
+        Gen3to5PaletteBoundsTest.link(a, b); Gen3to5PaletteBoundsTest.link(a, c);
+        var species = List.of(a, b, c);
+        var handler = new Gen3to5PaletteBoundsTest.SelectedHandler(new com.uprfvx.romio.gamedata.SpeciesSet(species));
+        var originals = species.stream().map(sp -> sp.getNormalPalette().toBytes()).toList();
+        var randomizer = new Gen3to5PaletteRandomizer(handler, Gen3to5PaletteBoundsTest.gfx004(follow), cosmetic);
+        randomizer.randomizePokemonPalettes();
+        if (!randomizer.isChangesMade()) throw new AssertionError("GFX004 made no changes");
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < species.size(); i++) {
+            var sp = species.get(i);
+            if (!Arrays.equals(originals.get(i), sp.getShinyPalette().toBytes())
+                    || Arrays.equals(originals.get(i), sp.getNormalPalette().toBytes())) {
+                throw new AssertionError("Synthetic original-normal/shiny order");
+            }
+            result.append(Base64.getEncoder().encodeToString(sp.getNormalPalette().toBytes()))
+                    .append(':').append(Base64.getEncoder().encodeToString(sp.getShinyPalette().toBytes())).append(';');
+        }
+        return result.toString();
+    }
+
+    // Same-file ROM-free fresh-JVM entry point; the existing PaletteReplayProcessProbe stays untouched.
+    private static void gfx004Main(String[] args) {
+        long seed = Long.parseLong(args[0]);
+        RandomSource source = new RandomSource(); source.seed(seed);
+        String palettes = loadedPairReplay(source.getCosmetic(), args[1].equals("gfx004-follow"));
+        StringBuilder gameplay = new StringBuilder();
+        Random expected = new Random(seed);
+        for (int i = 0; i < 100; i++) {
+            int draw = source.getNonCosmetic().nextInt();
+            if (draw != expected.nextInt()) throw new AssertionError("Gameplay RNG changed");
+            gameplay.append(draw).append(',');
+        }
+        System.out.println("SYNTHETIC_GFX004=" + palettes + " COSMETIC_CALLS=" + source.callsSinceSeedCosmetic()
+                + " GAMEPLAY=" + gameplay);
+    }
+
     private static String process(long seed, String composition) throws Exception {
         Set<String> classpath = new LinkedHashSet<>();
         classpath.addAll(Arrays.asList(System.getProperty("java.class.path").split(File.pathSeparator)));
@@ -79,7 +215,7 @@ class DeterministicPaletteReplayTest {
             if (loader instanceof URLClassLoader urls) for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
         }
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-            "-cp", String.join(File.pathSeparator, classpath), PaletteReplayProcessProbe.class.getName(), Long.toString(seed), composition)
+            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("cfru-types") || composition.startsWith("gfx004") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
             .redirectErrorStream(true).start();
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly();
@@ -88,7 +224,7 @@ class DeterministicPaletteReplayTest {
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         assertEquals(0, process.exitValue(), output);
         // Only synthetic model fingerprints, never ROM data or hashes.
-        String fingerprints = output.lines().filter(line -> line.startsWith("COMPOSITION=") || line.startsWith("SYNTHETIC_PALETTE=")).reduce("", (a,b) -> a + b + "\n");
+        String fingerprints = output.lines().filter(line -> line.startsWith("COMPOSITION=") || line.startsWith("SYNTHETIC_PALETTE=") || line.startsWith("SYNTHETIC_GFX004=") || line.startsWith("SYNTHETIC_INTEGRATION=")).reduce("", (a,b) -> a + b + "\n");
         assertFalse(fingerprints.isEmpty(), output);
         return fingerprints;
     }

@@ -23,6 +23,7 @@ package com.uprfvx.random;
 /*----------------------------------------------------------------------------*/
 
 import com.uprfvx.random.log.RandomizationLogger;
+import com.uprfvx.random.exceptions.RandomizationException;
 import com.uprfvx.random.random.RandomSource;
 import com.uprfvx.random.random.SeedPicker;
 import com.uprfvx.random.randomizers.*;
@@ -33,6 +34,7 @@ import com.uprfvx.random.updaters.Updater;
 import com.uprfvx.romio.MiscTweak;
 import com.uprfvx.romio.graphics.packs.CustomPlayerGraphics;
 import com.uprfvx.romio.romhandlers.Gen1RomHandler;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 import com.uprfvx.romio.services.SpecialFormExclusionOptions;
 
@@ -205,6 +207,19 @@ public class GameRandomizer {
             final long startTime = System.currentTimeMillis();
             randomSource.seed(seed);
 
+            if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+                gen3.preflightCfruEvolutionOptions(settings.isMakeEvolutionsEasier(), settings.isRemoveTimeBasedEvolutions());
+                if (settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.RANDOM
+                        && settings.isPokemonPalettesFollowTypes() && settings.isPokemonPalettesShinyFromNormal()) {
+                    throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires separate approval.");
+                }
+            }
+            if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3) {
+                gen3.preflightCfruEvolutionEasier(settings.getMakeEvolutionsEasierLvl());
+            }
+            if (settings.isRemoveTimeBasedEvolutions() && romHandler instanceof Gen3RomHandler gen3) {
+                gen3.preflightCfruDpeTimeEvolutions();
+            }
             setupSpeciesRestrictions();
             applyUpdaters();
             applyRandomizers();
