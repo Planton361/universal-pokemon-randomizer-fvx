@@ -241,6 +241,78 @@ class Gen3CfruDpePaletteFormOwnerTest {
         byte[] before = f.bytes().clone(); f.savePokemonPalettes(); assertArrayEquals(before, f.bytes());
     }
 
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void namedZeroDexOgerponTerastalRowsPreserveOtherOwnersChangedPalette(boolean shiny) throws Exception {
+        Fixture f = ogerponFixture(); Species valid = f.owners.getFirst();
+        f.loadPokemonPalettes();
+        for (Species excluded : f.owners.subList(1, 5)) {
+            assertEquals("Ogerpon", excluded.getName()); assertEquals(0, excluded.getNumber());
+            assertEquals(0, f.dex[excluded.getSpeciesSetIdentityNumber()]);
+            assertNull(excluded.getNormalPalette()); assertNull(excluded.getShinyPalette());
+            assertFalse(snapshots(f, false).containsKey(excluded));
+            assertFalse(snapshots(f, true).containsKey(excluded));
+            assertFalse(f.getCfruDpePalettePairEligibility(excluded).eligible());
+        }
+        byte[] before = f.bytes().clone();
+        byte[] changed = palette(valid, shiny).toBytes(); changed[12] ^= 7;
+        replace(valid, shiny, new Palette(changed));
+        f.savePokemonPalettes();
+        int entry = table(shiny) + valid.getSpeciesSetIdentityNumber() * 8;
+        assertArrayEquals(changed, f.decode(entry)); assertBudget(f, before, Set.of(entry));
+        for (Species excluded : f.owners.subList(1, 5)) for (boolean channel : new boolean[]{false, true}) {
+            int excludedEntry = table(channel) + excluded.getSpeciesSetIdentityNumber() * 8;
+            assertArrayEquals(Arrays.copyOfRange(before, excludedEntry, excludedEntry + 8),
+                    Arrays.copyOfRange(f.bytes(), excludedEntry, excludedEntry + 8));
+            assertArrayEquals(raw(excluded.getSpeciesSetIdentityNumber(), channel), f.decode(excludedEntry));
+        }
+        f.loadPokemonPalettes(); assertArrayEquals(changed, palette(valid, shiny).toBytes());
+        for (Species excluded : f.owners.subList(1, 5)) {
+            assertNull(excluded.getNormalPalette()); assertNull(excluded.getShinyPalette());
+        }
+        byte[] afterReload = f.bytes().clone(); f.savePokemonPalettes(); assertArrayEquals(afterReload, f.bytes());
+    }
+
+    @ParameterizedTest @ValueSource(ints = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+    void malformedOrChangedZeroDexRowsRejectBeforeAnOtherwiseValidWrite(int kind) throws Exception {
+        for (int index = 1; index <= 4; index++) {
+            Fixture f = ogerponFixture(); f.loadPokemonPalettes();
+            Species valid = f.owners.getFirst(), excluded = f.owners.get(index);
+            int id = excluded.getSpeciesSetIdentityNumber();
+            switch (kind) {
+                case 0 -> excluded.setNormalPalette(new Palette(raw(id, false)));
+                case 1 -> excluded.setShinyPalette(new Palette(raw(id, true)));
+                case 2 -> snapshots(f, false).put(excluded, raw(id, false));
+                case 3 -> { List<Species> duplicated = new ArrayList<>(f.owners); duplicated.add(excluded); f.select(duplicated); }
+                case 4 -> { List<Species> duplicated = new ArrayList<>(f.owners); duplicated.add(species(0, id)); f.select(duplicated); }
+                case 5 -> f.internal[id] = species(0, id);
+                case 6 -> f.dex[id] = 1017;
+                case 7 -> { excluded.setSpeciesSetIdentityNumber(0x591); f.internal[0x591] = excluded; f.dex[0x591] = 0; }
+                case 8 -> f.entry.putIntValue("PokemonCount", 1439);
+                case 9 -> { List<Species> conflicting = new ArrayList<>(f.owners); conflicting.add(species(1017, id)); f.select(conflicting); }
+            }
+            byte[] changed = valid.getNormalPalette().toBytes(); changed[14] ^= 7;
+            valid.setNormalPalette(new Palette(changed)); byte[] before = f.bytes().clone();
+            assertThrows(RomIOException.class, f::savePokemonPalettes, "kind=" + kind + " id=" + id);
+            assertArrayEquals(before, f.bytes()); // Includes the earlier valid owner and all allocator bytes.
+        }
+    }
+
+    private static Fixture ogerponFixture() throws Exception {
+        List<Species> selected = new ArrayList<>(); selected.add(species(1, 1));
+        for (int id = 0x592; id <= 0x595; id++) {
+            Species excluded = species(0, id); excluded.setName("Ogerpon"); selected.add(excluded);
+        }
+        Fixture f = new Fixture(selected);
+        // Real DPE struct tags; payloads exist, while the independent Dex table omits these four rows.
+        for (Species sp : selected) for (boolean shiny : new boolean[]{false, true}) {
+            int entry = table(shiny) + sp.getSpeciesSetIdentityNumber() * 8;
+            int tag = sp.getSpeciesSetIdentityNumber() + (shiny ? 1440 : 0);
+            f.bytes()[entry + 4] = (byte) tag; f.bytes()[entry + 5] = (byte) (tag >> 8);
+            f.bytes()[entry + 6] = 0; f.bytes()[entry + 7] = 0;
+        }
+        assertEquals(0, f.reverse[0]); return f;
+    }
+
     @Test void nonSelectedLoaderRetainsLegacyDexProjection() throws Exception {
         Fixture f = fixture(); set(f, "useCfruDpeGen9SpeciesCount", false); f.loadPokemonPalettes();
         Species base = f.owners.get(1), form = f.owners.get(2);
@@ -307,7 +379,7 @@ class Gen3CfruDpePaletteFormOwnerTest {
             Arrays.fill(internal, null); Arrays.fill(dex, 0); Arrays.fill(reverse, 0);
             for (Species sp : selected) {
                 int id = sp.getSpeciesSetIdentityNumber(); internal[id] = sp; dex[id] = sp.getNumber();
-                if (reverse[sp.getNumber()] == 0) reverse[sp.getNumber()] = id;
+                if (sp.getNumber() > 0 && reverse[sp.getNumber()] == 0) reverse[sp.getNumber()] = id;
                 for (boolean shiny : new boolean[]{false, true}) {
                     int source = 0x10000 + id * 128 + (shiny ? 64 : 0);
                     byte[] compressed = DSCmp.compressLZ10(raw(id, shiny));

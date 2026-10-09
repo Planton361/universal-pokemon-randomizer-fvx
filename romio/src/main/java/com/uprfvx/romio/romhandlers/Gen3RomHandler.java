@@ -10509,7 +10509,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         for (Species pk : owners) {
             int owner = getCfruDpePaletteTableIndexForSave(pk);
-            if (owner < 0) throw new RomIOException("CFRU/DPE palette owner is invalid or duplicated");
+            if (owner < 0) {
+                if (canPreserveUnmappedCfruDpeOgerponPaletteOwner(pk, owners)) continue;
+                throw new RomIOException("CFRU/DPE palette owner is invalid or duplicated");
+            }
             validateChangedCfruDpePaletteSource(pk, pk.getNormalPalette(),
                     originalCfruDpeNormalPaletteBytes.get(pk), normalPaletteTableOffset + owner * 8);
             validateChangedCfruDpePaletteSource(pk, pk.getShinyPalette(),
@@ -10579,6 +10582,23 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 + " skippedMissingPalettePointers=" + skippedMissingPalettePointers
                 + " skippedDecodeFailedPalettes=" + skippedDecodeFailedPalettes
                 + " skippedUncertainFormePalettes=" + skippedUncertainFormePalettes);
+    }
+
+    /** DPE d887185 omits Dex mappings for these four named, unsupported Terastal rows. */
+    private boolean canPreserveUnmappedCfruDpeOgerponPaletteOwner(Species pk, List<Species> owners) {
+        int id = pk.getSpeciesSetIdentityNumber();
+        return id >= 0x592 && id <= 0x595
+                && romEntry.getIntValue("PokemonCount") == CFRU_DPE_SPECIES_COUNT
+                && pokesInternal != null && id < pokesInternal.length && pokesInternal[id] == pk
+                && internalToPokedex != null && id < internalToPokedex.length
+                && pk.getNumber() == 0 && internalToPokedex[id] == 0
+                && SpecialFormPredicates.cfruDpePoolCategory(pk)
+                    == SpecialFormPredicates.CfruDpePoolCategory.TERA_TRANSFORMATION
+                && owners.stream().filter(other -> other.getSpeciesSetIdentityNumber() == id).count() == 1
+                // They remain unloaded and unwritable; do not accept fabricated or changed channels.
+                && pk.getNormalPalette() == null && pk.getShinyPalette() == null
+                && !originalCfruDpeNormalPaletteBytes.containsKey(pk)
+                && !originalCfruDpeShinyPaletteBytes.containsKey(pk);
     }
 
     /** Native tables own one 8-byte entry per internal ID, including same-Dex forms. */
