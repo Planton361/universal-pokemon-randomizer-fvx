@@ -190,6 +190,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private final Map<Integer, CfruDpeEvolutionRow> originalCfruDpeEvolutionRows = new HashMap<>();
     private final Map<Integer, CfruDpeEvolutionRow> plannedCfruDpeEvolutionRows = new HashMap<>();
     private final Set<Integer> plannedCfruDpeTimeRows = new HashSet<>();
+    private final Set<Integer> plannedCfruDpeImpossibleRows = new HashSet<>();
+    private byte[] cfruDpeImpossibleEvolutionTableSnapshot;
+    private int cfruDpeImpossibleEvolutionTableBase = -1;
+
+    private record CfruDpeImpossibleChange(Evolution edge, Evolution converted) {}
+    private record CfruDpeImpossiblePlan(Map<Integer, CfruDpeEvolutionRow> rows,
+                                        List<CfruDpeImpossibleChange> changes) {}
 
     private record CfruDpeTargetSlot(int index, int method, int parameter, int target, int auxiliary, boolean randomizable) {}
 
@@ -7925,7 +7932,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         originalCfruDpeEvolutionRows.clear();
         plannedCfruDpeEvolutionRows.clear();
         plannedCfruDpeTimeRows.clear();
-        for (Species pkmn : pokes) {
+        plannedCfruDpeImpossibleRows.clear();
+        cfruDpeImpossibleEvolutionTableSnapshot = null;
+        cfruDpeImpossibleEvolutionTableBase = -1;
+        for (Species pkmn : useCfruDpeGen9SpeciesCount ? pokesInternal : pokes) {
             if (pkmn != null) {
                 pkmn.getEvolutionsFrom().clear();
                 pkmn.getEvolutionsTo().clear();
@@ -7933,6 +7943,12 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
 
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+        int nativeTableSize = CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize();
+        if (useCfruDpeGen9SpeciesCount && baseOffset >= 0
+                && (long) baseOffset + nativeTableSize <= rom.length) {
+            cfruDpeImpossibleEvolutionTableSnapshot = Arrays.copyOfRange(rom, baseOffset, baseOffset + nativeTableSize);
+            cfruDpeImpossibleEvolutionTableBase = baseOffset;
+        }
         int numInternalPokes = useCfruDpeGen9SpeciesCount ? CFRU_DPE_MAX_INTERNAL_SPECIES_ID
                 : romEntry.getIntValue("PokemonCount");
         int evolutionSlotsPerSpecies = getEvolutionSlotsPerSpecies();
@@ -8023,6 +8039,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             });
             plannedCfruDpeEvolutionRows.clear();
             plannedCfruDpeTimeRows.clear();
+            plannedCfruDpeImpossibleRows.clear();
+            if (cfruDpeImpossibleEvolutionTableSnapshot != null) {
+                cfruDpeImpossibleEvolutionTableSnapshot = Arrays.copyOfRange(rom, baseOffset,
+                        baseOffset + CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize());
+            }
             return;
         }
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
@@ -8079,6 +8100,17 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private Map<Integer, byte[]> prepareCfruDpeEvolutionRows() {
         Map<Integer, byte[]> rows = new LinkedHashMap<>();
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+        if (!plannedCfruDpeImpossibleRows.isEmpty()) {
+            cfruDpeImpossibleEvolutionOwners(); // Recheck canonical owners/targets at commit time.
+            int size = CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize();
+            if (baseOffset < 0 || baseOffset != cfruDpeImpossibleEvolutionTableBase
+                    || (long) baseOffset + size > rom.length
+                    || !Arrays.equals(cfruDpeImpossibleEvolutionTableSnapshot,
+                        Arrays.copyOfRange(rom, baseOffset, baseOffset + size))) {
+                throw new RomIOException("CFRU/DPE impossible evolution source table changed before write");
+            }
+            if (evolutionOwnershipWitness != null) validateEvolutionOwnership(evolutionOwnershipWitness, true);
+        }
         for (int i = 1; i <= numRealPokemon; i++) {
             Species pk = speciesList.get(i);
             if (pk == null) {
@@ -8100,6 +8132,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             CfruDpeEvolutionRow planned = plannedCfruDpeEvolutionRows.get(id);
             List<CfruDpeModeledEvolution> current = snapshotCfruDpeEvolutions(pk);
             if (planned != null && !planned.modeled().equals(current)) {
+                if (plannedCfruDpeImpossibleRows.contains(id)) {
+                    throw unsafeCfruDpeEvolutionChange(pk, "graph changed outside the validated impossible-evolution plan");
+                }
                 if (plannedCfruDpeTimeRows.contains(id)) {
                     throw unsafeCfruDpeEvolutionChange(pk, "graph changed outside the validated time plan");
                 }
@@ -8130,6 +8165,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             if (rows.put(id, row) != null) {
                 throw unsafeCfruDpeEvolutionChange(pk, "duplicate internal species row");
             }
+        }
+        if (!plannedCfruDpeImpossibleRows.isEmpty()
+                && !rows.keySet().containsAll(plannedCfruDpeEvolutionRows.keySet())) {
+            throw new RomIOException("CFRU/DPE impossible evolution plan lost a loaded source row");
         }
         return rows;
     }
@@ -8189,58 +8228,245 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return pokedexToInternal[species.getNumber()];
     }
 
+    /** Read-only F05 gate before restrictions/updaters; no F06 composition is authorized. */
+    public void preflightCfruDpeImpossibleEvolutions(boolean easier, boolean removeTime) {
+        if (!useCfruDpeGen9SpeciesCount) return;
+        if (easier || removeTime || cfruEvolutionEasierApplied || cfruEvolutionTimeApplied) {
+            throw new RomIOException("CFRU/DPE Change Impossible + Make Easier/Remove Time requires a separately validated shared plan");
+        }
+        // Level hints are populated by existing updaters later; this early pass
+        // validates source ownership using the unchanged default conversion policy.
+        planCfruDpeImpossibleEvolutions(false);
+    }
+
+    private List<Species> cfruDpeImpossibleEvolutionOwners() {
+        // The Dex projection keeps only the last same-Dex form. Validate the
+        // loaded native owners before touching any edge, then visit by ID.
+        if (!isCfruDpeGen9BpreProfile()
+                || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT
+                || pokesInternal == null || pokesInternal.length != CFRU_DPE_SPECIES_COUNT
+                || internalToPokedex == null || internalToPokedex.length < CFRU_DPE_SPECIES_COUNT
+                || speciesList == null) {
+            throw new RomIOException("CFRU/DPE impossible evolutions require the selected native owner model");
+        }
+        Set<Species> loaded = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Species owner : speciesList) {
+            if (owner == null || !SpecialFormPredicates.cfruDpePoolCategory(owner).eligible()
+                    || owner.getNumber() <= 0) continue;
+            int id = owner.getSpeciesSetIdentityNumber();
+            if (pokesInternal[id] != owner || internalToPokedex[id] != owner.getNumber()
+                    || !loaded.add(owner)) {
+                throw unsafeCfruDpeEvolutionChange(owner, "conflicting or duplicate native owner");
+            }
+        }
+        List<Species> owners = new ArrayList<>();
+        for (int id = 1; id <= CFRU_DPE_MAX_INTERNAL_SPECIES_ID; id++) {
+            Species owner = pokesInternal[id];
+            if (owner == null || !loaded.contains(owner)) continue;
+            if (owner.getSpeciesSetIdentityNumber() != id) {
+                throw unsafeCfruDpeEvolutionChange(owner, "native owner in the wrong slot");
+            }
+            for (Evolution edge : owner.getEvolutionsFrom()) {
+                Species target = edge.getTo();
+                int targetId = target == null ? 0 : target.getSpeciesSetIdentityNumber();
+                if (edge.getFrom() != owner || targetId <= 0
+                        || targetId > CFRU_DPE_MAX_INTERNAL_SPECIES_ID
+                        || pokesInternal[targetId] != target
+                        || target.getNumber() <= 0 || internalToPokedex[targetId] != target.getNumber()) {
+                    throw unsafeCfruDpeEvolutionChange(owner, "conflicting native edge owner or target");
+                }
+            }
+            owners.add(owner);
+        }
+        // An eligible named native owner cannot disappear from the loaded owner list.
+        for (int id = 1; id <= CFRU_DPE_MAX_INTERNAL_SPECIES_ID; id++) {
+            Species owner = pokesInternal[id];
+            if (owner != null && owner.getNumber() > 0
+                    && SpecialFormPredicates.cfruDpePoolCategory(owner).eligible()
+                    && owner.getName() != null && !owner.getName().equals("?")
+                    && !owner.getName().toLowerCase(Locale.ROOT).contains("unused")
+                    && !loaded.contains(owner)) {
+                throw unsafeCfruDpeEvolutionChange(owner, "missing loaded native owner");
+            }
+        }
+        return owners;
+    }
+
+    private CfruDpeImpossiblePlan planCfruDpeImpossibleEvolutions(boolean useEstimatedLevels) {
+        List<Species> owners = cfruDpeImpossibleEvolutionOwners();
+        if (cfruEvolutionEasierApplied || cfruEvolutionTimeApplied || !plannedCfruDpeTimeRows.isEmpty()) {
+            throw new RomIOException("CFRU/DPE Change Impossible requires an independent raw-slot plan");
+        }
+        int base = romEntry.getIntValue("PokemonEvolutions");
+        int size = CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize();
+        if (base < 0 || base != cfruDpeImpossibleEvolutionTableBase
+                || (long) base + size > rom.length || cfruDpeImpossibleEvolutionTableSnapshot == null
+                || !Arrays.equals(cfruDpeImpossibleEvolutionTableSnapshot,
+                    Arrays.copyOfRange(rom, base, base + size))) {
+            throw new RomIOException("CFRU/DPE impossible evolution table extent or original snapshot changed");
+        }
+        if (evolutionOwnershipWitness != null) validateEvolutionOwnership(evolutionOwnershipWitness, true);
+        Map<Integer, byte[]> currentRows = prepareCfruDpeEvolutionRows();
+        Map<Integer, CfruDpeEvolutionRow> rows = new LinkedHashMap<>();
+        List<CfruDpeImpossibleChange> changes = new ArrayList<>();
+        for (Species owner : owners) {
+            int id = owner.getSpeciesSetIdentityNumber();
+            CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(id);
+            CfruDpeEvolutionRow staged = plannedCfruDpeEvolutionRows.get(id);
+            byte[] current = currentRows.get(id);
+            if (original == null || current == null
+                    || !(staged == null ? original : staged).modeled().equals(snapshotCfruDpeEvolutions(owner))
+                    || !snapshotCfruDpeEvolutions(decodeCfruDpeEvolutionRow(owner, current))
+                        .equals(snapshotCfruDpeEvolutions(owner))) {
+                throw unsafeCfruDpeEvolutionChange(owner, "graph drift outside a validated slot plan");
+            }
+            // A previously accepted target-only plan may contribute only target words.
+            // Repeated F05 calls instead require the exact immutable staged F05 graph.
+            if (staged != null && !plannedCfruDpeImpossibleRows.contains(id)) {
+                for (int o = 0; o < current.length; o++) {
+                    if (current[o] != original.raw()[o] && o % GEN3_EVOLUTION_ENTRY_SIZE != 4
+                            && o % GEN3_EVOLUTION_ENTRY_SIZE != 5) {
+                        throw unsafeCfruDpeEvolutionChange(owner, "staged plan exceeds target-only ownership");
+                    }
+                }
+            }
+            byte[] raw = current.clone();
+            List<Evolution> expected = new ArrayList<>();
+            Set<Integer> triggerSlots = new LinkedHashSet<>();
+            boolean changed = false;
+            for (Evolution edge : owner.getEvolutionsFrom()) {
+                Evolution converted = new Evolution(edge);
+                if (shouldUpdateImpossibleEvolution(edge, true)) {
+                    int method = Gen3Constants.evolutionTypeToIndex(edge.getType());
+                    int parameter = edge.getType().usesItem()
+                            ? Gen3Constants.itemIDToInternal(edge.getExtraInfo()) : edge.getExtraInfo();
+                    int target = getEvolutionInternalSpeciesId(edge.getTo());
+                    int match = -1;
+                    for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                        int o = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+                        if (IOFunctions.read2ByteInt(current, o) == method
+                                && IOFunctions.read2ByteInt(current, o + 2) == parameter
+                                && IOFunctions.read2ByteInt(current, o + 4) == target) {
+                            if (match != -1 || IOFunctions.read2ByteInt(current, o + 6) != 0) {
+                                throw unsafeCfruDpeEvolutionChange(owner, "ambiguous slot or unowned auxiliary field");
+                            }
+                            match = o;
+                        }
+                    }
+                    if (match < 0 || edge.getForme() != 0
+                            || IOFunctions.read2ByteInt(original.raw(), match) != method
+                            || IOFunctions.read2ByteInt(original.raw(), match + 2) != parameter
+                            || IOFunctions.read2ByteInt(original.raw(), match + 6) != 0) {
+                        throw unsafeCfruDpeEvolutionChange(owner, "missing original impossible-evolution slot");
+                    }
+                    triggerSlots.add(match);
+                    int itemAlternative = method == 6
+                            ? cfruDpeIdenticalItemAlternative(owner, original.raw(), current, match) : -1;
+                    if (itemAlternative >= 0) {
+                        // The source already provides this exact no-trade route. Preserve
+                        // both slots, including a separately validated common target edit.
+                        triggerSlots.add(itemAlternative);
+                    } else {
+                        updateImpossibleEvolution(converted, true, useEstimatedLevels);
+                        int newMethod = Gen3Constants.evolutionTypeToIndex(converted.getType());
+                        int newParameter = converted.getType().usesItem()
+                                ? Gen3Constants.itemIDToInternal(converted.getExtraInfo()) : converted.getExtraInfo();
+                        if ((newMethod != 4 && newMethod != 7) || newParameter < 1 || newParameter > 0xFFFF
+                                || (newMethod == 4 && newParameter > 100)) {
+                            throw unsafeCfruDpeEvolutionChange(owner, "converted fields outside supported method/parameter bounds");
+                        }
+                        // No shifts, packing or auxiliary/target normalization: exactly two words.
+                        IOFunctions.write2ByteInt(raw, match, newMethod);
+                        IOFunctions.write2ByteInt(raw, match + 2, newParameter);
+                        changes.add(new CfruDpeImpossibleChange(edge, converted)); changed = true;
+                    }
+                }
+                expected.add(converted);
+            }
+            if (changed || !triggerSlots.isEmpty()) {
+                validateCfruDpeImpossibleTriggers(owner, raw, triggerSlots);
+                List<CfruDpeModeledEvolution> modeled = snapshotCfruDpeEvolutions(expected);
+                if (!modeled.equals(snapshotCfruDpeEvolutions(decodeCfruDpeEvolutionRow(owner, raw)))) {
+                    throw unsafeCfruDpeEvolutionChange(owner, "emitted slot graph differs or collapses relationships");
+                }
+                rows.put(id, new CfruDpeEvolutionRow(raw, modeled, original.fullyModeled()));
+            }
+        }
+        return new CfruDpeImpossiblePlan(rows, changes);
+    }
+
+    private int cfruDpeIdenticalItemAlternative(Species owner, byte[] original, byte[] current, int trade) {
+        int parameter = IOFunctions.read2ByteInt(original, trade + 2);
+        int target = IOFunctions.read2ByteInt(original, trade + 4);
+        int alternative = -1;
+        for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+            int o = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+            if (o == trade || IOFunctions.read2ByteInt(original, o) != 7
+                    || IOFunctions.read2ByteInt(original, o + 2) != parameter
+                    || IOFunctions.read2ByteInt(original, o + 4) != target) continue;
+            // Selected DPE ITEM_DAWN_STONE=101 is gender-gated even with auxiliary zero.
+            if (alternative >= 0 || IOFunctions.read2ByteInt(original, o + 6) != 0
+                    || parameter == 101) {
+                throw unsafeCfruDpeEvolutionChange(owner, "ambiguous or conditional item alternative for slot "
+                        + trade / GEN3_EVOLUTION_ENTRY_SIZE);
+            }
+            if (IOFunctions.read2ByteInt(current, o) != 7
+                    || IOFunctions.read2ByteInt(current, o + 2) != parameter
+                    || IOFunctions.read2ByteInt(current, o + 4) != IOFunctions.read2ByteInt(current, trade + 4)
+                    || IOFunctions.read2ByteInt(current, o + 6) != 0) {
+                throw unsafeCfruDpeEvolutionChange(owner, "item alternative drift for source/slot "
+                        + getEvolutionInternalSpeciesId(owner) + "/" + slot);
+            }
+            alternative = o;
+        }
+        return alternative;
+    }
+
+    // GetEvolutionTargetSpecies EVO_MODE_NORMAL at the selected CFRU #77 source.
+    // Every listed predicate can coincide with an unconditional level conversion.
+    // Shedinja (14), inactive damage-location (33), transformations and unknown
+    // methods do not assign the ordinary consumer's target in this mode.
+    private static final Set<Integer> CFRU_DPE_IMPOSSIBLE_NORMAL_METHODS = Set.of(
+            1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 35, 37, 38, 40, 41, 42);
+
+    private void validateCfruDpeImpossibleTriggers(Species owner, byte[] row, Set<Integer> triggerSlots) {
+        for (int o : triggerSlots) {
+            int method = IOFunctions.read2ByteInt(row, o);
+            int parameter = IOFunctions.read2ByteInt(row, o + 2);
+            int target = IOFunctions.read2ByteInt(row, o + 4);
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                int other = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+                if (other == o || IOFunctions.read2ByteInt(row, other + 4) == target) continue;
+                int otherMethod = IOFunctions.read2ByteInt(row, other);
+                int otherParameter = IOFunctions.read2ByteInt(row, other + 2);
+                boolean conflict = (method == 4 && CFRU_DPE_IMPOSSIBLE_NORMAL_METHODS.contains(otherMethod))
+                        || (method == 7 && CFRU_DPE_ITEM_USE_METHODS.contains(otherMethod)
+                            && parameter == otherParameter)
+                        || (method == 6 && (otherMethod == 5
+                            || (otherMethod == 6 && parameter == otherParameter)));
+                if (conflict) {
+                    throw unsafeCfruDpeEvolutionChange(owner, "conflicting final triggers at source/slot "
+                            + getEvolutionInternalSpeciesId(owner) + "/" + o / GEN3_EVOLUTION_ENTRY_SIZE
+                            + " with slot " + slot + " (methods " + method + "/" + otherMethod + ")");
+                }
+            }
+        }
+    }
+
     @Override
     public void removeImpossibleEvolutions(boolean changeMoveEvos, boolean useEstimatedLevels) {
         if (useCfruDpeGen9SpeciesCount) {
-            // The Dex projection keeps only the last same-Dex form. Validate the
-            // loaded native owners before touching any edge, then visit by ID.
-            if (!isCfruDpeGen9BpreProfile()
-                    || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT
-                    || pokesInternal == null || pokesInternal.length != CFRU_DPE_SPECIES_COUNT
-                    || internalToPokedex == null || internalToPokedex.length < CFRU_DPE_SPECIES_COUNT
-                    || speciesList == null) {
-                throw new RomIOException("CFRU/DPE impossible evolutions require the selected native owner model");
-            }
-            Set<Species> loaded = Collections.newSetFromMap(new IdentityHashMap<>());
-            for (Species owner : speciesList) {
-                if (owner == null || !SpecialFormPredicates.cfruDpePoolCategory(owner).eligible()
-                        || owner.getNumber() <= 0) continue;
-                int id = owner.getSpeciesSetIdentityNumber();
-                if (pokesInternal[id] != owner || internalToPokedex[id] != owner.getNumber()
-                        || !loaded.add(owner)) {
-                    throw unsafeCfruDpeEvolutionChange(owner, "conflicting or duplicate native owner");
-                }
-            }
-            List<Species> owners = new ArrayList<>();
-            for (int id = 1; id <= CFRU_DPE_MAX_INTERNAL_SPECIES_ID; id++) {
-                Species owner = pokesInternal[id];
-                if (owner == null || !loaded.contains(owner)) continue;
-                if (owner.getSpeciesSetIdentityNumber() != id) {
-                    throw unsafeCfruDpeEvolutionChange(owner, "native owner in the wrong slot");
-                }
-                for (Evolution edge : owner.getEvolutionsFrom()) {
-                    Species target = edge.getTo();
-                    int targetId = target == null ? 0 : target.getSpeciesSetIdentityNumber();
-                    if (edge.getFrom() != owner || targetId <= 0
-                            || targetId > CFRU_DPE_MAX_INTERNAL_SPECIES_ID
-                            || pokesInternal[targetId] != target
-                            || target.getNumber() <= 0 || internalToPokedex[targetId] != target.getNumber()) {
-                        throw unsafeCfruDpeEvolutionChange(owner, "conflicting native edge owner or target");
-                    }
-                }
-                owners.add(owner);
-            }
+            CfruDpeImpossiblePlan plan = planCfruDpeImpossibleEvolutions(useEstimatedLevels);
+            // Every owner, slot, opaque byte and emitted graph was checked before publication.
             attemptObedienceEvolutionPatches();
-            for (Species owner : owners) {
-                for (Evolution edge : owner.getEvolutionsFrom()) {
-                    if (shouldUpdateImpossibleEvolution(edge, true)) {
-                        markImprovedEvolutions(owner);
-                        updateImpossibleEvolution(edge, true, useEstimatedLevels);
-                    }
-                }
+            for (CfruDpeImpossibleChange change : plan.changes()) {
+                Evolution edge = change.edge(), converted = change.converted();
+                markImprovedEvolutions(edge.getFrom());
+                edge.updateEvolutionMethod(converted.getType(), converted.getExtraInfo());
             }
-            // Raw-row encoding remains with the strict existing writer. Opaque
-            // rows must still reject a changed graph rather than being repacked.
+            plannedCfruDpeEvolutionRows.putAll(plan.rows());
+            plannedCfruDpeImpossibleRows.addAll(plan.rows().keySet());
             return;
         }
         attemptObedienceEvolutionPatches();

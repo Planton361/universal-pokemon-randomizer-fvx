@@ -216,6 +216,42 @@ class GameRandomizerEvolutionIsolationTest {
         }
     }
 
+    @Test
+    void impossibleRawSlotPreflightRejectsBothF06PairsBeforeAnyRestrictionsOrUpdaters() throws Exception {
+        for (boolean easier : new boolean[]{false,true}) for(long seed : new long[]{0,1,677,20261005658L}) {
+            var f = new EarlyGateFixture(); f.populateExactSource(); f.rejectRestrictions=true;
+            var settings=new Settings(); settings.setChangeImpossibleEvolutions(true);
+            settings.setMakeEvolutionsEasier(easier); settings.setRemoveTimeBasedEvolutions(!easier);
+            settings.setUpdateBaseStats(true); settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
+            byte[] before=f.memory.clone();
+            var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),seed);
+            assertFalse(result.wasSaveSuccessful());
+            assertTrue(result.getException().getMessage().contains("Change Impossible + Make Easier/Remove Time"));
+            assertEquals(0,f.restrictions); assertEquals(0,f.preflights); assertEquals(0,f.removals);
+            assertEquals(50,f.species[1].getHp()); assertArrayEquals(before,f.memory);
+            assertTrue(f.getPreImprovedEvolutions().isEmpty());
+        }
+    }
+
+    @Test
+    void malformedImpossibleSlotFailsBeforeUnrelatedUpdaterOrRandomizerAndValidGateIsReadOnly() throws Exception {
+        for(boolean malformed:new boolean[]{false,true}) {
+            var f=new EarlyGateFixture();
+            f.setField("pokesInternal",Arrays.copyOf(f.species,1440));
+            int[] map=new int[1440]; for(int id=1;id<1440;id++) map[id]=id;
+            f.setField("internalToPokedex",map); f.entry(133,0,2,0,196,malformed?0xBEEF:0); f.loadEvolutions();
+            f.rejectRestrictions=true; var settings=new Settings(); settings.setChangeImpossibleEvolutions(true);
+            settings.setUpdateBaseStats(true); settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
+            byte[] before=f.memory.clone();
+            var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),732);
+            assertFalse(result.wasSaveSuccessful());
+            assertEquals(malformed?0:1,f.restrictions);
+            assertTrue(result.getException().getMessage().contains(malformed?"auxiliary":"synthetic stop at restrictions"));
+            assertEquals(EvolutionType.HAPPINESS_DAY,f.species[133].getEvolutionsFrom().getFirst().getType());
+            assertEquals(50,f.species[1].getHp()); assertArrayEquals(before,f.memory); assertTrue(f.getPreImprovedEvolutions().isEmpty());
+        }
+    }
+
     private static Settings withSerializationDefaults(Settings settings) {
         settings.setRomName("SYNTHETIC"); settings.setSelectedEXPCurve(ExpCurve.MEDIUM_FAST); return settings;
     }
