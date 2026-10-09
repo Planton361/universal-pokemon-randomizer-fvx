@@ -24,6 +24,10 @@ package com.uprfvx.random.randomizers;
 import com.uprfvx.random.Settings;
 import com.uprfvx.random.exceptions.RandomizationException;
 import com.uprfvx.romio.gamedata.Species;
+import com.uprfvx.romio.gamedata.SpeciesSet;
+import com.uprfvx.romio.gamedata.Evolution;
+import com.uprfvx.romio.gamedata.cueh.CopyUpEvolutionsHelper;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.gamedata.cueh.BasicSpeciesAction;
 import com.uprfvx.romio.gamedata.cueh.EvolvedSpeciesAction;
 import com.uprfvx.romio.graphics.palettes.*;
@@ -74,6 +78,19 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
 		this.shinyFromNormal = settings.isPokemonPalettesShinyFromNormal();
 		boolean evolutionSanity = settings.isPokemonPalettesFollowEvolutions();
 
+        if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()
+                && shinyFromNormal) {
+            changesMade = false;
+            if (settings.getPokemonPalettesMod() != Settings.PokemonPalettesMod.RANDOM) {
+                return;
+            }
+            if (typeSanity) {
+                throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires separate approval.");
+            }
+            randomizeCfruDpePalettePairs(gen3, evolutionSanity);
+            return;
+        }
+
 		this.typeBaseColorLists = new HashMap<>();
 
 		if (paletteFilesID == null) {
@@ -95,6 +112,176 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
 		changesMade = !typeBaseColorLists.isEmpty();
 
 	}
+
+    private record PalettePairPlan(Palette normal, Palette shiny) { }
+
+    private void randomizeCfruDpePalettePairs(Gen3RomHandler handler, boolean followEvolutions) {
+        if (!"FRLG".equals(paletteFilesID)) {
+            throw new RandomizationException("CFRU/DPE Shiny From Normal requires FRLG palette descriptions.");
+        }
+        List<Species> species = new ArrayList<>(romHandler.getSpeciesSetInclFormes());
+        species.sort(Comparator.comparingInt(Species::getSpeciesSetIdentityNumber));
+        Map<String, Integer> skipped = new TreeMap<>();
+        Map<Species, PalettePartDescription[]> parts = new IdentityHashMap<>();
+        List<PaletteDescription> descriptions = getPaletteDescriptions("pokePalettes");
+        for (Species pk : species) {
+            var eligibility = handler.getCfruDpePalettePairEligibility(pk);
+            String reason = eligibility.eligible() ? null : eligibility.reason();
+            if (reason == null && pk.getPrimaryType(false) == null) {
+                reason = "invalid primary type";
+            }
+            if (reason == null) {
+                PalettePartDescription[] bounded = boundedCfruDpeParts(pk, descriptions);
+                if (bounded == null) {
+                    reason = "missing/invalid recolor description";
+                } else {
+                    parts.put(pk, bounded);
+                }
+            }
+            if (reason != null) {
+                skipped.merge(reason, 1, Integer::sum);
+            }
+        }
+        if (followEvolutions) {
+            validateCfruDpePaletteGraph(species);
+            // Preserve an entire connected chain if any member cannot prove the pair contract.
+            // No child or sibling inherits colors from an unloaded/skipped parent.
+            boolean removed;
+            do {
+                removed = false;
+                for (Species pk : species) {
+                    if (parts.containsKey(pk) && (pk.getEvolutionsTo().stream().anyMatch(e -> !parts.containsKey(e.getFrom()))
+                            || pk.getEvolutionsFrom().stream().anyMatch(e -> !parts.containsKey(e.getTo())))) {
+                        parts.remove(pk);
+                        skipped.merge("ineligible evolution component", 1, Integer::sum);
+                        removed = true;
+                    }
+                }
+            } while (removed);
+        }
+        SpeciesSet eligible = new SpeciesSet(species.stream().filter(parts::containsKey).toList());
+        Map<Species, TypeBaseColorList> colors = new IdentityHashMap<>();
+        new CopyUpEvolutionsHelper<Species>(eligible).apply(followEvolutions, true,
+                pk -> colors.put(pk, new TypeBaseColorList(pk, false, random)),
+                (from, to, last) -> colors.put(to, new TypeBaseColorList(to, colors.get(from), false, random)));
+        Map<Species, PalettePairPlan> plan = new IdentityHashMap<>();
+        PalettePopulator populator = new PalettePopulator(random);
+        boolean anyChanged = false;
+        for (Species pk : species) {
+            if (!parts.containsKey(pk)) {
+                continue;
+            }
+            // Eligibility proved that the live normal still equals the original load snapshot.
+            Palette shiny = new Palette(pk.getNormalPalette());
+            Palette normal = new Palette(pk.getNormalPalette());
+            populatePalette(normal, populator, colors.get(pk), parts.get(pk));
+            anyChanged |= !Arrays.equals(normal.toBytes(), pk.getNormalPalette().toBytes())
+                    || !Arrays.equals(shiny.toBytes(), pk.getShinyPalette().toBytes());
+            plan.put(pk, new PalettePairPlan(normal, shiny));
+        }
+        // No field is published before every scratch pair has completed, including late failures.
+        for (Species pk : species) {
+            PalettePairPlan pair = plan.get(pk);
+            if (pair != null) {
+                pk.setNormalPalette(pair.normal());
+                pk.setShinyPalette(pair.shiny());
+            }
+        }
+        changesMade = anyChanged;
+        System.err.println("CFRU/DPE GFX-004: plannedPairs=" + plan.size()
+                + " changed=" + changesMade + " skipped=" + skipped);
+    }
+
+    private PalettePartDescription[] boundedCfruDpeParts(Species pk, List<PaletteDescription> descriptions) {
+        int index = pk.getNumber() - 1;
+        if (descriptions == null || index < 0 || index >= descriptions.size()
+                || descriptions.get(index) == null || descriptions.get(index).getBody().isBlank()) {
+            return null;
+        }
+        PalettePartDescription[] parts;
+        try {
+            parts = getPalettePartDescriptions(pk, descriptions);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+        // The existing TypeBaseColorList basic loop supplies eight indexed colors, including
+        // blank/average positions. Do not extend its algorithm to support a speculative ninth.
+        if (parts.length > 8) {
+            return null;
+        }
+        boolean recolors = false;
+        for (PalettePartDescription part : parts) {
+            if (part.isBlank()) {
+                continue;
+            }
+            if (part.isAverageDescription()) {
+                if (!validPaletteSlot(part.getAverageToSlot(), false)
+                        || part.getAverageFromSlots().length == 0
+                        || Arrays.stream(part.getAverageFromSlots()).anyMatch(i -> !validPaletteSlot(i, false))) {
+                    return null;
+                }
+            } else {
+                if (part.length() == 0 || Arrays.stream(part.getSlots()).anyMatch(i -> !validPaletteSlot(i, true))) {
+                    return null;
+                }
+                recolors |= Arrays.stream(part.getSlots()).anyMatch(i -> i >= 0);
+                if (part.hasSibling()) {
+                    int shared = part.getSharedSlot();
+                    if (!validPaletteSlot(shared, false)
+                            || Arrays.stream(part.getSiblingSlots()).noneMatch(i -> i == shared)
+                            || Arrays.stream(part.getSiblingSlots()).anyMatch(i -> !validPaletteSlot(i, true))) {
+                        return null;
+                    }
+                }
+            }
+        }
+        return recolors ? parts : null;
+    }
+
+    private boolean validPaletteSlot(int slot, boolean allowUnusedShade) {
+        return slot >= (allowUnusedShade ? -1 : 0) && slot < 16;
+    }
+
+    private void validateCfruDpePaletteGraph(List<Species> species) {
+        Set<Species> selected = Collections.newSetFromMap(new IdentityHashMap<>());
+        selected.addAll(species);
+        for (Species pk : species) {
+            Species parent = null;
+            for (Evolution edge : pk.getEvolutionsTo()) {
+                if (edge == null || edge.getTo() != pk || !selected.contains(edge.getFrom())
+                        || edge.getType() == null || !edge.getFrom().getEvolutionsFrom().contains(edge)) {
+                    throw new RandomizationException("CFRU/DPE GFX-004: invalid incoming evolution.");
+                }
+                // Two methods from the same parent (e.g. Feebas) have the same color owner.
+                if (parent != null && parent != edge.getFrom()) {
+                    throw new RandomizationException("CFRU/DPE GFX-004: ambiguous evolution parents.");
+                }
+                parent = edge.getFrom();
+            }
+            for (Evolution edge : pk.getEvolutionsFrom()) {
+                if (edge == null || edge.getFrom() != pk || !selected.contains(edge.getTo())
+                        || edge.getType() == null || !edge.getTo().getEvolutionsTo().contains(edge)) {
+                    throw new RandomizationException("CFRU/DPE GFX-004: invalid outgoing evolution.");
+                }
+            }
+        }
+        // Iterative bounded cycle detection, before the legacy helper follows any parent chain.
+        Set<Species> complete = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Species pk : species) {
+            Set<Species> path = Collections.newSetFromMap(new IdentityHashMap<>());
+            Species cursor = pk;
+            while (!complete.contains(cursor)) {
+                if (!path.add(cursor)) {
+                    throw new RandomizationException("CFRU/DPE GFX-004: cyclic evolution graph.");
+                }
+                if (cursor.getEvolutionsTo().isEmpty()) {
+                    break;
+                }
+                cursor = cursor.getEvolutionsTo().get(0).getFrom();
+            }
+            complete.addAll(path);
+        }
+    }
 
 	private void populatePokemonPalettes(List<PaletteDescription> paletteDescriptions) {
 

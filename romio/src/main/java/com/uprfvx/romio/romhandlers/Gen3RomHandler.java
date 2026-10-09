@@ -9305,6 +9305,142 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /** Immutable decision only: no palettes, snapshots or ROM addresses escape this query. */
+    public record CfruDpePalettePairEligibility(boolean eligible, String reason) { }
+
+    /**
+     * Read-only preflight for GFX-004. Both current channels must still match their trusted
+     * load snapshots and their source-owned save entries. This is not an allocation guarantee
+     * or a ROM-writer transaction; the existing copy writer remains responsible for saving.
+     */
+    public CfruDpePalettePairEligibility getCfruDpePalettePairEligibility(Species species) {
+        if (!useCfruDpeGen9SpeciesCount || !isRomHack || romEntry == null
+                || !"BPRE".equals(romEntry.getRomCode())
+                || romEntry.getRomType() != Gen3Constants.RomType_FRLG || rom == null) {
+            return palettePairRejected("invalid selected profile");
+        }
+        if (species == null || species.getNumber() == SpeciesIDs.unown
+                || !species.isBaseForme() || species.getFormeNumber() != 0
+                || species.isActuallyCosmetic()
+                || SpecialFormPredicates.cfruDpePoolCategory(species)
+                    != SpecialFormPredicates.CfruDpePoolCategory.ORDINARY) {
+            return palettePairRejected("uncertain species/form");
+        }
+        int dex = species.getNumber();
+        if (pokedexToInternal == null || dex <= 0 || dex >= pokedexToInternal.length) {
+            return palettePairRejected("invalid Dex owner");
+        }
+        int owner = getCfruDpePaletteTableIndexForSave(species);
+        int count = romEntry.getIntValue("PokemonCount");
+        if (owner <= 0 || owner > count || owner != species.getSpeciesSetIdentityNumber()
+                || pokesInternal == null || owner >= pokesInternal.length || pokesInternal[owner] != species
+                || internalToPokedex == null || owner >= internalToPokedex.length
+                || internalToPokedex[owner] != dex) {
+            return palettePairRejected("mismatched source/save owner");
+        }
+        Palette normal = species.getNormalPalette(), shiny = species.getShinyPalette();
+        if (!isCompleteCfruDpePairPalette(normal) || !isCompleteCfruDpePairPalette(shiny)) {
+            return palettePairRejected("missing/incomplete current pair");
+        }
+        byte[] originalNormal = originalCfruDpeNormalPaletteBytes.get(species);
+        byte[] originalShiny = originalCfruDpeShinyPaletteBytes.get(species);
+        if (originalNormal == null || originalShiny == null
+                || originalNormal.length != 32 || originalShiny.length != 32) {
+            return palettePairRejected("missing original pair snapshots");
+        }
+        if (!Arrays.equals(normal.toBytes(), originalNormal) || !Arrays.equals(shiny.toBytes(), originalShiny)) {
+            return palettePairRejected("stale current pair");
+        }
+        int normalTable = romEntry.getIntValue("PokemonNormalPalettes");
+        int shinyTable = romEntry.getIntValue("PokemonShinyPalettes");
+        long tableLength = ((long) count + 1) * 8;
+        if (!isCfruDpePairTableInBounds(normalTable, tableLength)
+                || !isCfruDpePairTableInBounds(shinyTable, tableLength)
+                || ((long) normalTable < (long) shinyTable + tableLength
+                    && (long) shinyTable < (long) normalTable + tableLength)) {
+            return palettePairRejected("invalid/overlapping palette tables");
+        }
+        boolean selectedOwner = false;
+        // These are the actual writer's species, including owners that will be skipped by GFX-004.
+        for (Species other : getSpeciesSet()) {
+            if (other == species) {
+                selectedOwner = true;
+            } else if (other == null || other.getNumber() <= 0
+                    || other.getNumber() >= pokedexToInternal.length) {
+                return palettePairRejected("unresolved selected owner");
+            } else if (getCfruDpePaletteTableIndexForSave(other) == owner) {
+                return palettePairRejected("duplicate save-table owner");
+            }
+        }
+        if (!selectedOwner) {
+            return palettePairRejected("not a selected save owner");
+        }
+        if (normal == shiny) {
+            return palettePairRejected("shared Java palette");
+        }
+        for (Species other : getSpeciesSetInclFormes()) {
+            if (other != species && (normal == other.getNormalPalette() || normal == other.getShinyPalette()
+                    || shiny == other.getNormalPalette() || shiny == other.getShinyPalette())) {
+                return palettePairRejected("shared Java palette");
+            }
+        }
+        // Entry arithmetic is long until full-table bounds have established that narrowing is safe.
+        int normalEntry = (int) ((long) normalTable + (long) owner * 8);
+        int shinyEntry = (int) ((long) shinyTable + (long) owner * 8);
+        if (!matchesCfruDpePairSource(normalEntry, originalNormal, normalTable, shinyTable, tableLength)
+                || !matchesCfruDpePairSource(shinyEntry, originalShiny, normalTable, shinyTable, tableLength)) {
+            return palettePairRejected("invalid/stale original palette pointer");
+        }
+        // Equal original payload pointers are harmless here: writeCompressedPaletteCopy allocates
+        // NEW data and repoints only this owner's entry; it never overwrites that shared payload.
+        // Table-entry collisions above are different and cannot be authorized by payload equality.
+        return new CfruDpePalettePairEligibility(true, "loaded pair with unique save-table owner");
+    }
+
+    private CfruDpePalettePairEligibility palettePairRejected(String reason) {
+        return new CfruDpePalettePairEligibility(false, reason);
+    }
+
+    private boolean isCompleteCfruDpePairPalette(Palette palette) {
+        if (palette == null || palette.size() != 16) {
+            return false;
+        }
+        for (int i = 0; i < 16; i++) {
+            if (palette.get(i) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isCfruDpePairTableInBounds(int table, long length) {
+        return table > 0 && table % 4 == 0 && length > 0 && (long) table + length <= rom.length;
+    }
+
+    private boolean matchesCfruDpePairSource(int entry, byte[] snapshot,
+                                           int normalTable, int shinyTable, long tableLength) {
+        int pointer = readPointer(entry, true);
+        if (pointer <= 0 || (long) pointer + 4 > rom.length
+                || (pointer >= normalTable && (long) pointer < normalTable + tableLength)
+                || (pointer >= shinyTable && (long) pointer < shinyTable + tableLength)
+                || (rom[pointer] != 0x10 && rom[pointer] != 0x11)
+                || (rom[pointer + 1] & 0xFF) != 32 || rom[pointer + 2] != 0 || rom[pointer + 3] != 0) {
+            return false;
+        }
+        // Bound the read as well as its 32-byte output. Even the legacy LZ10 decoder's
+        // trailing flag group fits within 64 bytes. Never decode through a pointer table.
+        long end = Math.min((long) rom.length, (long) pointer + 64);
+        if (pointer < normalTable) end = Math.min(end, normalTable);
+        if (pointer < shinyTable) end = Math.min(end, shinyTable);
+        try {
+            byte[] source = Arrays.copyOfRange(rom, pointer, (int) end);
+            return Arrays.equals(new Palette(DSDecmp.Decompress(source)).toBytes(), snapshot);
+        } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
+            // Malformed synthetic or source data is an expected rejection; no private diagnostics.
+            return false;
+        }
+    }
+
     private void rememberLoadedCfruDpePokemonPalette(Species pk, Palette normalPalette, Palette shinyPalette) {
         if (normalPalette != null) {
             originalCfruDpeNormalPaletteBytes.put(pk, normalPalette.toBytes());
