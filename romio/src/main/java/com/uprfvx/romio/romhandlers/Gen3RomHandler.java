@@ -8191,6 +8191,58 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void removeImpossibleEvolutions(boolean changeMoveEvos, boolean useEstimatedLevels) {
+        if (useCfruDpeGen9SpeciesCount) {
+            // The Dex projection keeps only the last same-Dex form. Validate the
+            // loaded native owners before touching any edge, then visit by ID.
+            if (!isCfruDpeGen9BpreProfile()
+                    || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT
+                    || pokesInternal == null || pokesInternal.length != CFRU_DPE_SPECIES_COUNT
+                    || internalToPokedex == null || internalToPokedex.length < CFRU_DPE_SPECIES_COUNT
+                    || speciesList == null) {
+                throw new RomIOException("CFRU/DPE impossible evolutions require the selected native owner model");
+            }
+            Set<Species> loaded = Collections.newSetFromMap(new IdentityHashMap<>());
+            for (Species owner : speciesList) {
+                if (owner == null || !SpecialFormPredicates.cfruDpePoolCategory(owner).eligible()
+                        || owner.getNumber() <= 0) continue;
+                int id = owner.getSpeciesSetIdentityNumber();
+                if (pokesInternal[id] != owner || internalToPokedex[id] != owner.getNumber()
+                        || !loaded.add(owner)) {
+                    throw unsafeCfruDpeEvolutionChange(owner, "conflicting or duplicate native owner");
+                }
+            }
+            List<Species> owners = new ArrayList<>();
+            for (int id = 1; id <= CFRU_DPE_MAX_INTERNAL_SPECIES_ID; id++) {
+                Species owner = pokesInternal[id];
+                if (owner == null || !loaded.contains(owner)) continue;
+                if (owner.getSpeciesSetIdentityNumber() != id) {
+                    throw unsafeCfruDpeEvolutionChange(owner, "native owner in the wrong slot");
+                }
+                for (Evolution edge : owner.getEvolutionsFrom()) {
+                    Species target = edge.getTo();
+                    int targetId = target == null ? 0 : target.getSpeciesSetIdentityNumber();
+                    if (edge.getFrom() != owner || targetId <= 0
+                            || targetId > CFRU_DPE_MAX_INTERNAL_SPECIES_ID
+                            || pokesInternal[targetId] != target
+                            || target.getNumber() <= 0 || internalToPokedex[targetId] != target.getNumber()) {
+                        throw unsafeCfruDpeEvolutionChange(owner, "conflicting native edge owner or target");
+                    }
+                }
+                owners.add(owner);
+            }
+            attemptObedienceEvolutionPatches();
+            for (Species owner : owners) {
+                for (Evolution edge : owner.getEvolutionsFrom()) {
+                    if (shouldUpdateImpossibleEvolution(edge, true)) {
+                        markImprovedEvolutions(owner);
+                        updateImpossibleEvolution(edge, true, useEstimatedLevels);
+                    }
+                }
+            }
+            // Raw-row encoding remains with the strict existing writer. Opaque
+            // rows must still reject a changed graph rather than being repacked.
+            return;
+        }
         attemptObedienceEvolutionPatches();
 
         // no move evos, so no need to check for those
