@@ -187,6 +187,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private final Map<Integer, CfruDpeEvolutionRow> originalCfruDpeEvolutionRows = new HashMap<>();
     private final Map<Integer, CfruDpeEvolutionRow> plannedCfruDpeEvolutionRows = new HashMap<>();
+    private final Set<Integer> plannedCfruDpeTimeRows = new HashSet<>();
 
     private record CfruDpeTargetSlot(int index, int method, int parameter, int target, int auxiliary, boolean randomizable) {}
 
@@ -7107,6 +7108,195 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 hex.charAt(3), hex.charAt(0), hex.charAt(1) });
     }
 
+    // DPE d887185..., Evolution Table.c / include/evolution.h; CFRU e68a701..., evolution.c.
+    // Source/slot ownership deliberately does not depend on the (possibly randomized) target.
+    private record CfruDpeTimeSlot(int source, int slot, int method, int parameter, int auxiliary,
+                                   int timelessMethod, int timelessParameter, int timelessAuxiliary) {}
+    private static final Set<Integer> CFRU_DPE_TIME_METHODS = Set.of(2, 3, 22, 23, 24, 25, 28, 39);
+    private static final Set<Integer> CFRU_DPE_ITEM_USE_METHODS = Set.of(7, 34, 36, 39);
+    private static final List<CfruDpeTimeSlot> CFRU_DPE_TIME_SLOTS = List.of(
+            new CfruDpeTimeSlot(104, 0, 23, 28, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(104, 1, 22, 28, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(133, 0, 2, 0, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(133, 1, 3, 0, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(207, 0, 24, 120, 0, 35, 1, 120),
+            new CfruDpeTimeSlot(215, 0, 24, 119, 0, 35, 1, 119),
+            new CfruDpeTimeSlot(217, 0, 39, 734, 0, 7, 734, 0),
+            new CfruDpeTimeSlot(459, 0, 2, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(486, 0, 3, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(493, 0, 25, 118, 0, 35, 1, 118),
+            new CfruDpeTimeSlot(500, 0, 2, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(804, 0, 23, 39, 0, 4, 39, 0),
+            new CfruDpeTimeSlot(806, 0, 22, 39, 0, 4, 39, 0),
+            new CfruDpeTimeSlot(951, 0, 23, 20, 0, 4, 20, 0),
+            new CfruDpeTimeSlot(961, 0, 23, 25, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(961, 1, 22, 25, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(961, 2, 28, 25, 0x1114, 7, 100, 0),
+            new CfruDpeTimeSlot(970, 0, 23, 34, 0, 4, 34, 0),
+            new CfruDpeTimeSlot(1007, 0, 23, 53, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(1007, 1, 22, 53, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(1020, 0, 22, 20, 0, 4, 20, 0),
+            new CfruDpeTimeSlot(1038, 0, 22, 28, 0, 4, 28, 0),
+            new CfruDpeTimeSlot(1164, 0, 3, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(1227, 0, 22, 35, 0, 4, 35, 0),
+            new CfruDpeTimeSlot(1240, 0, 25, 119, 0, 35, 1, 119),
+            new CfruDpeTimeSlot(1365, 0, 22, 30, 0, 4, 30, 0));
+
+    /** Read-only early gate, called only when Remove Time-Based Evolutions is enabled. */
+    public void preflightCfruDpeTimeEvolutions() {
+        if (useCfruDpeGen9SpeciesCount) planCfruDpeTimeEvolutions();
+    }
+
+    private RomIOException unsafeCfruDpeTimeEvolution(String reason) {
+        return new RomIOException("CFRU_DPE_TIME_EVOLUTION_SEMANTICS_BLOCKER: " + reason);
+    }
+
+    private Map<Integer, byte[]> planCfruDpeTimeEvolutions() {
+        if (!isCfruDpeGen9BpreProfile() || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT) {
+            throw unsafeCfruDpeTimeEvolution("requires the selected BPRE 1440-species profile");
+        }
+        Map<Integer, byte[]> rows = prepareCfruDpeEvolutionRows();
+        Map<Integer, byte[]> result = new LinkedHashMap<>();
+        for (CfruDpeTimeSlot owner : CFRU_DPE_TIME_SLOTS) {
+            byte[] row = rows.get(owner.source());
+            if (row == null) throw unsafeCfruDpeTimeEvolution("missing source row " + owner.source());
+            byte[] planned = result.computeIfAbsent(owner.source(), id -> row.clone());
+            int o = owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE;
+            int method = IOFunctions.read2ByteInt(row, o);
+            int parameter = IOFunctions.read2ByteInt(row, o + 2);
+            int auxiliary = IOFunctions.read2ByteInt(row, o + 6);
+            boolean original = method == owner.method() && parameter == owner.parameter()
+                    && auxiliary == owner.auxiliary();
+            boolean converted = method == owner.timelessMethod() && parameter == owner.timelessParameter()
+                    && auxiliary == owner.timelessAuxiliary();
+            if (!original && !converted) {
+                throw unsafeCfruDpeTimeEvolution("unexpected shape at source/slot " + owner.source() + "/" + owner.slot());
+            }
+            int target = IOFunctions.read2ByteInt(row, o + 4);
+            if (target <= 0 || target >= pokesInternal.length || pokesInternal[target] == null
+                    || getEvolutionInternalSpeciesId(pokesInternal[target]) != target || target == owner.source()) {
+                throw unsafeCfruDpeTimeEvolution("invalid target at source/slot " + owner.source() + "/" + owner.slot());
+            }
+            IOFunctions.write2ByteInt(planned, o, owner.timelessMethod());
+            IOFunctions.write2ByteInt(planned, o + 2, owner.timelessParameter());
+            IOFunctions.write2ByteInt(planned, o + 6, owner.timelessAuxiliary());
+        }
+        int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+        if (baseOffset < 0 || (long) baseOffset + CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize() > rom.length) {
+            throw unsafeCfruDpeTimeEvolution("source-owned evolution table outside memory");
+        }
+        // Include source zero and rows omitted by the species/name loader. Only the
+        // selected table is inspected; never search surrounding memory for a table.
+        for (int id = 0; id < CFRU_DPE_SPECIES_COUNT; id++) {
+            int offset = baseOffset + id * getEvolutionRowSize();
+            byte[] row = rows.get(id);
+            if (row == null) row = Arrays.copyOfRange(rom, offset, offset + getEvolutionRowSize());
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                int method = IOFunctions.read2ByteInt(row, slot * GEN3_EVOLUTION_ENTRY_SIZE);
+                if (CFRU_DPE_TIME_METHODS.contains(method)) {
+                    int sourceId = id, index = slot;
+                    if (CFRU_DPE_TIME_SLOTS.stream().noneMatch(owner -> owner.source() == sourceId
+                            && owner.slot() == index && owner.method() == method)) {
+                        throw unsafeCfruDpeTimeEvolution("unowned time method at source/slot " + id + "/" + slot);
+                    }
+                }
+            }
+        }
+        // CFRU iterates all sixteen slots; a later match overrides an earlier target.
+        // Reject collisions even with conditional item-use methods, never guess a priority.
+        for (CfruDpeTimeSlot owner : CFRU_DPE_TIME_SLOTS) {
+            byte[] row = result.get(owner.source());
+            int target = IOFunctions.read2ByteInt(row, owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4);
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                if (slot == owner.slot()) continue;
+                int o = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+                int method = IOFunctions.read2ByteInt(row, o);
+                if (method >= 1 && method <= 42 && IOFunctions.read2ByteInt(row, o + 4) == target) {
+                    throw unsafeCfruDpeTimeEvolution("duplicate branch target in source " + owner.source());
+                }
+                if ((owner.timelessMethod() == 1 && method == 1)
+                        || (owner.timelessMethod() == 4 && method == 4)
+                        || (owner.timelessMethod() == 35 && method == 35
+                            && IOFunctions.read2ByteInt(row, o + 6) == owner.timelessAuxiliary())) {
+                    throw unsafeCfruDpeTimeEvolution("ambiguous level-up trigger in source " + owner.source());
+                }
+                if (owner.timelessMethod() == 7 && CFRU_DPE_ITEM_USE_METHODS.contains(method)
+                        && IOFunctions.read2ByteInt(row, o + 2) == owner.timelessParameter()) {
+                    throw unsafeCfruDpeTimeEvolution("ambiguous item trigger in source " + owner.source());
+                }
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void removeTimeBasedEvolutions() {
+        if (!useCfruDpeGen9SpeciesCount) {
+            super.removeTimeBasedEvolutions();
+            return;
+        }
+        Map<Integer, byte[]> rows = planCfruDpeTimeEvolutions();
+        Map<Integer, List<Evolution>> modeled = new LinkedHashMap<>();
+        Map<Integer, CfruDpeEvolutionRow> planned = new LinkedHashMap<>();
+        for (var entry : rows.entrySet()) {
+            Species source = pokesInternal[entry.getKey()];
+            List<Evolution> edges = decodeCfruDpeEvolutionRow(source, entry.getValue());
+            for (Evolution edge : edges) {
+                if (edge.getType().usesLevelThreshold()) continue;
+                boolean timeBranch = CFRU_DPE_TIME_SLOTS.stream().anyMatch(owner -> owner.source() == entry.getKey()
+                        && IOFunctions.read2ByteInt(entry.getValue(), owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4)
+                                == getEvolutionInternalSpeciesId(edge.getTo()));
+                source.getEvolutionsFrom().stream().filter(old -> old.getTo() == edge.getTo()
+                        && (timeBranch || (old.getType() == edge.getType() && old.getExtraInfo() == edge.getExtraInfo())))
+                        .findFirst().ifPresent(old -> edge.setEstimatedEvoLvl(old.getEstimatedEvoLvl()));
+                // Preserve the old level hint when a previously opaque level branch
+                // becomes a stone branch, as the generic UPR time policy does.
+                CFRU_DPE_TIME_SLOTS.stream().filter(owner -> owner.source() == entry.getKey()
+                        && Set.of(22, 23, 28).contains(owner.method())
+                        && IOFunctions.read2ByteInt(entry.getValue(), owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4)
+                                == getEvolutionInternalSpeciesId(edge.getTo()))
+                        .findFirst().ifPresent(owner -> edge.setEstimatedEvoLvl(owner.parameter()));
+            }
+            modeled.put(entry.getKey(), edges);
+            planned.put(entry.getKey(), new CfruDpeEvolutionRow(entry.getValue(), snapshotCfruDpeEvolutions(edges), false));
+        }
+        // Publish only after the entire raw plan and all decoded graphs are valid.
+        for (var entry : modeled.entrySet()) {
+            Species source = pokesInternal[entry.getKey()];
+            markImprovedEvolutions(source);
+            source.getEvolutionsFrom().forEach(edge -> edge.getTo().getEvolutionsTo().remove(edge));
+            source.getEvolutionsFrom().clear();
+            source.getEvolutionsFrom().addAll(entry.getValue());
+            entry.getValue().forEach(edge -> edge.getTo().getEvolutionsTo().add(edge));
+        }
+        plannedCfruDpeEvolutionRows.putAll(planned);
+        plannedCfruDpeTimeRows.addAll(planned.keySet());
+    }
+
+    private List<Evolution> decodeCfruDpeEvolutionRow(Species source, byte[] raw) {
+        List<Evolution> edges = new ArrayList<>();
+        for (int o = 0; o < raw.length; o += GEN3_EVOLUTION_ENTRY_SIZE) {
+            int method = IOFunctions.read2ByteInt(raw, o);
+            int parameter = IOFunctions.read2ByteInt(raw, o + 2);
+            int target = IOFunctions.read2ByteInt(raw, o + 4);
+            int auxiliary = IOFunctions.read2ByteInt(raw, o + 6);
+            // ITEM is UPR's existing time-free held-item/level-up model. Only level=1
+            // is representable with its single parameter; all other 35 rows stay opaque.
+            int slot = o / GEN3_EVOLUTION_ENTRY_SIZE;
+            boolean heldItem = method == 35 && parameter == 1 && CFRU_DPE_TIME_SLOTS.stream().anyMatch(owner ->
+                    owner.source() == getEvolutionInternalSpeciesId(source) && owner.slot() == slot
+                            && owner.timelessMethod() == 35 && owner.timelessAuxiliary() == auxiliary);
+            if ((method < 1 || method > Gen3Constants.evolutionMethodCount) && !heldItem) continue;
+            if (target <= 0 || target >= pokesInternal.length || pokesInternal[target] == null) continue;
+            EvolutionType type = heldItem ? EvolutionType.ITEM : Gen3Constants.evolutionTypeFromIndex(method);
+            int extra = heldItem ? auxiliary : parameter;
+            if (type.usesItem()) extra = Gen3Constants.itemIDToStandard(extra);
+            Evolution edge = new Evolution(source, pokesInternal[target], type, extra);
+            if (!edges.contains(edge)) edges.add(edge);
+        }
+        return edges;
+    }
+
     private List<CfruDpeTargetSlot> ordinaryTopologySlots(Species source,
                                                        Map<Integer, List<MoveLearnt>> movesets) {
         CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(getEvolutionInternalSpeciesId(source));
@@ -7199,8 +7389,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 for (Evolution modeled : source.getEvolutionsFrom()) {
                     int parameter = modeled.getType().usesItem()
                             ? Gen3Constants.itemIDToInternal(modeled.getExtraInfo()) : modeled.getExtraInfo();
-                    if (Gen3Constants.evolutionTypeToIndex(modeled.getType()) == slot.method()
-                            && parameter == slot.parameter()
+                    boolean heldItem = modeled.getType() == EvolutionType.ITEM && slot.method() == 35
+                            && slot.parameter() == 1 && parameter == slot.auxiliary();
+                    if ((heldItem || (Gen3Constants.evolutionTypeToIndex(modeled.getType()) == slot.method()
+                            && parameter == slot.parameter()))
                             && getEvolutionInternalSpeciesId(modeled.getTo()) == slot.target()) {
                         modeledTargets.put(modeled, target);
                     }
@@ -7223,6 +7415,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     public void loadEvolutions() {
         originalCfruDpeEvolutionRows.clear();
         plannedCfruDpeEvolutionRows.clear();
+        plannedCfruDpeTimeRows.clear();
         for (Species pkmn : pokes) {
             if (pkmn != null) {
                 pkmn.getEvolutionsFrom().clear();
@@ -7239,7 +7432,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 continue;
             }
             int evoOffset = getEvolutionRowOffset(baseOffset, pk);
-            for (int j = 0; j < evolutionSlotsPerSpecies; j++) {
+            if (useCfruDpeGen9SpeciesCount) {
+                byte[] raw = Arrays.copyOfRange(rom, evoOffset, evoOffset + getEvolutionRowSize());
+                List<Evolution> edges = decodeCfruDpeEvolutionRow(pk, raw);
+                pk.getEvolutionsFrom().addAll(edges);
+                edges.forEach(edge -> edge.getTo().getEvolutionsTo().add(edge));
+            }
+            for (int j = 0; !useCfruDpeGen9SpeciesCount && j < evolutionSlotsPerSpecies; j++) {
                 int method = readWord(evoOffset + j * 8);
                 int evolvingTo = readWord(evoOffset + j * 8 + 4);
                 if (method >= 1 && method <= Gen3Constants.evolutionMethodCount && evolvingTo >= 1
@@ -7264,7 +7463,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 byte[] raw = Arrays.copyOfRange(rom, evoOffset, evoOffset + getEvolutionRowSize());
                 originalCfruDpeEvolutionRows.put(getEvolutionInternalSpeciesId(pk),
                         new CfruDpeEvolutionRow(raw, snapshotCfruDpeEvolutions(pk),
-                                Arrays.equals(raw, encodeCfruDpeEvolutions(pk))));
+                                pk.getEvolutionsFrom().stream().noneMatch(e -> e.getType() == EvolutionType.ITEM)
+                                        && Arrays.equals(raw, encodeCfruDpeEvolutions(pk))));
             }
         }
     }
@@ -7273,19 +7473,46 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (useCfruDpeGen9SpeciesCount) {
             Map<Integer, byte[]> rows = prepareCfruDpeEvolutionRows();
             int baseOffset = romEntry.getIntValue("PokemonEvolutions");
-            for (int i = 1; i <= numRealPokemon; i++) {
-                Species pk = speciesList.get(i);
-                if (pk == null) {
-                    continue;
+            Map<Integer, byte[]> backups = new LinkedHashMap<>();
+            // Check every destination before the first write; array slicing must never pad
+            // a truncated source table and accidentally authorize a later partial copy.
+            for (var entry : rows.entrySet()) {
+                int offset = getEvolutionRowOffset(baseOffset, pokesInternal[entry.getKey()]);
+                if (offset < 0 || (long) offset + entry.getValue().length > rom.length) {
+                    throw unsafeCfruDpeTimeEvolution("evolution destination outside memory");
                 }
-                int internalId = getEvolutionInternalSpeciesId(pk);
-                byte[] row = rows.get(internalId);
-                System.arraycopy(row, 0, rom, getEvolutionRowOffset(baseOffset, pk), row.length);
-                CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(internalId);
-                originalCfruDpeEvolutionRows.put(internalId,
-                        new CfruDpeEvolutionRow(row, snapshotCfruDpeEvolutions(pk), original.fullyModeled()));
+                backups.put(entry.getKey(), Arrays.copyOfRange(rom, offset, offset + entry.getValue().length));
             }
+            try {
+                for (var entry : rows.entrySet()) {
+                    int offset = getEvolutionRowOffset(baseOffset, pokesInternal[entry.getKey()]);
+                    byte[] row = entry.getValue();
+                    byte[] before = backups.get(entry.getKey());
+                    for (int o = 0; o < row.length; o += 2) {
+                        int value = IOFunctions.read2ByteInt(row, o);
+                        if (value != IOFunctions.read2ByteInt(before, o)) writeWord(offset + o, value);
+                    }
+                }
+                for (var entry : rows.entrySet()) {
+                    int offset = getEvolutionRowOffset(baseOffset, pokesInternal[entry.getKey()]);
+                    if (!Arrays.equals(entry.getValue(), Arrays.copyOfRange(rom, offset, offset + entry.getValue().length))) {
+                        throw unsafeCfruDpeTimeEvolution("evolution write readback mismatch");
+                    }
+                }
+            } catch (RuntimeException error) {
+                backups.forEach((id, raw) -> System.arraycopy(raw, 0, rom,
+                        getEvolutionRowOffset(baseOffset, pokesInternal[id]), raw.length));
+                throw error;
+            }
+            rows.forEach((id, row) -> {
+                CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(id);
+                CfruDpeEvolutionRow planned = plannedCfruDpeEvolutionRows.get(id);
+                originalCfruDpeEvolutionRows.put(id, new CfruDpeEvolutionRow(row,
+                        snapshotCfruDpeEvolutions(pokesInternal[id]),
+                        planned == null ? original.fullyModeled() : planned.fullyModeled()));
+            });
             plannedCfruDpeEvolutionRows.clear();
+            plannedCfruDpeTimeRows.clear();
             return;
         }
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
@@ -7324,7 +7551,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private List<CfruDpeModeledEvolution> snapshotCfruDpeEvolutions(Species species) {
-        return species.getEvolutionsFrom().stream().map(evo -> new CfruDpeModeledEvolution(
+        return snapshotCfruDpeEvolutions(species.getEvolutionsFrom());
+    }
+
+    private List<CfruDpeModeledEvolution> snapshotCfruDpeEvolutions(List<Evolution> edges) {
+        return edges.stream().map(evo -> new CfruDpeModeledEvolution(
                 getEvolutionInternalSpeciesId(evo.getFrom()), getEvolutionInternalSpeciesId(evo.getTo()),
                 evo.getType(), evo.getExtraInfo(), evo.getForme())).toList();
     }
@@ -7349,6 +7580,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 throw unsafeCfruDpeEvolutionChange(pk, "missing loaded raw row");
             }
             int offset = getEvolutionRowOffset(baseOffset, pk);
+            if (baseOffset < 0 || offset < baseOffset || (long) offset + getEvolutionRowSize() > rom.length) {
+                throw unsafeCfruDpeEvolutionChange(pk, "evolution row outside memory");
+            }
             if (!Arrays.equals(original.raw(), Arrays.copyOfRange(rom, offset, offset + getEvolutionRowSize()))) {
                 throw unsafeCfruDpeEvolutionChange(pk, "raw row changed outside the evolution writer");
             }
@@ -7356,6 +7590,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             CfruDpeEvolutionRow planned = plannedCfruDpeEvolutionRows.get(id);
             List<CfruDpeModeledEvolution> current = snapshotCfruDpeEvolutions(pk);
             if (planned != null && !planned.modeled().equals(current)) {
+                if (plannedCfruDpeTimeRows.contains(id)) {
+                    throw unsafeCfruDpeEvolutionChange(pk, "graph changed outside the validated time plan");
+                }
                 if (planned.modeled().size() != current.size()) {
                     throw unsafeCfruDpeEvolutionChange(pk, "target plan relationship count changed");
                 }

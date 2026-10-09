@@ -49,6 +49,71 @@ class CfruDpeEvolutionTargetTest {
         assertTrue(seen.stream().anyMatch(id -> id >= 0x3FC && id <= 0x417), "regional targets");
     }
 
+    @Test
+    void randomForceChangeThenRemoveTimePreservesSlotTargetsAcrossSeedsAndSaveReload() throws Exception {
+        for (long seed : new long[] {0, 1, 723, 20261009, 680, 667}) {
+            var f = new CfruDpeEvolutionFixture(); f.populateExactSource();
+            byte[] before = f.memory.clone();
+            f.preflightCfruDpeTimeEvolutions();
+            new EvolutionRandomizer(f, settings(), new Random(seed)).randomizeEvolutions();
+            f.preflightCfruDpeTimeEvolutions(); f.removeTimeBasedEvolutions();
+            assertArrayEquals(before, f.memory);
+            f.preflightCfruDpeTimeEvolutions(); f.write();
+            Set<Integer> owned = new HashSet<>();
+            for (var slot : CfruDpeEvolutionFixture.inventory()) {
+                int o = CfruDpeEvolutionFixture.offset(slot.source(), slot.slot());
+                if (slot.disposition().equals("ORDINARY_TARGET_RANDOMIZABLE")
+                        && f.getRestrictedSpeciesService().getAll(true).contains(f.species[slot.source()])) {
+                    assertNotEquals(slot.target(), f.word(slot.source(), slot.slot(), 4));
+                    owned.add(o + 4); owned.add(o + 5);
+                }
+                if (Set.of(2, 3, 22, 23, 24, 25, 28, 39).contains(slot.method())) {
+                    for (int field : new int[] {0, 2, 6}) { owned.add(o + field); owned.add(o + field + 1); }
+                    assertFalse(Set.of(2, 3, 22, 23, 24, 25, 28, 39).contains(f.word(slot.source(), slot.slot(), 0)));
+                }
+            }
+            for (int i = 0; i < before.length; i++) if (!owned.contains(i)) assertEquals(before[i], f.memory[i], "unowned byte " + i);
+            for (int id : new int[] {104, 133, 961, 1007}) {
+                assertNotEquals(f.word(id, 0, 4), f.word(id, 1, 4));
+                assertEquals(93, f.word(id, 0, 2)); assertEquals(94, f.word(id, 1, 2));
+            }
+            assertNotEquals(f.word(961, 0, 4), f.word(961, 2, 4));
+            assertNotEquals(f.word(961, 1, 4), f.word(961, 2, 4));
+            assertEquals(100, f.word(961, 2, 2));
+            for (int id : new int[] {207, 215, 493, 1240}) {
+                var edge = f.species[id].getEvolutionsFrom().getFirst();
+                assertEquals(EvolutionType.ITEM, edge.getType());
+                assertEquals(f.word(id, 0, 4), edge.getTo().getSpeciesSetIdentityNumber());
+                assertTrue(edge.getTo().getEvolutionsTo().contains(edge));
+            }
+            byte[] saved = f.memory.clone(); f.loadEvolutions();
+            var graph = f.getTargetOnlyEvolutionGraph(); assertAcyclic(graph, 10);
+            graph.forEach((source, edges) -> edges.forEach(edge -> assertEquals(
+                    edge.getTo().getSpeciesSetIdentityNumber(), f.word(source.getSpeciesSetIdentityNumber(), edge.getExtraInfo(), 4))));
+            f.removeTimeBasedEvolutions(); f.write(); f.write(); assertArrayEquals(saved, f.memory);
+            // A second target randomization after reload also owns the converted ITEM graph.
+            f.loadEvolutions(); new EvolutionRandomizer(f, settings(), new Random(seed + 1)).randomizeEvolutions();
+            f.write();
+            for (int id : new int[] {207, 215, 493, 1240}) {
+                assertEquals(f.word(id, 0, 4), f.species[id].getEvolutionsFrom().getFirst().getTo().getSpeciesSetIdentityNumber());
+            }
+            f.loadEvolutions(); f.write();
+        }
+    }
+
+    @Test
+    void invalidTimePlanAfterStagedRandomTargetsLeavesTheEntireStagedGraphIntact() throws Exception {
+        var f = new CfruDpeEvolutionFixture(); f.populateExactSource();
+        new EvolutionRandomizer(f, settings(), new Random(723)).randomizeEvolutions();
+        // Tampering after planning must fail before publishing even an earlier valid time row.
+        f.entry(1365, 0, 22, 30, 1366, 1);
+        byte[] before = f.memory.clone();
+        var edges = List.copyOf(f.species[133].getEvolutionsFrom());
+        assertThrows(RomIOException.class, f::removeTimeBasedEvolutions);
+        assertEquals(edges, f.species[133].getEvolutionsFrom()); assertArrayEquals(before, f.memory);
+        assertThrows(RomIOException.class, f::write); assertArrayEquals(before, f.memory);
+    }
+
     static CfruDpeEvolutionFixture small() throws Exception {
         var f = new CfruDpeEvolutionFixture();
         f.pool.removeIf(sp -> sp.getSpeciesSetIdentityNumber() > 50);
