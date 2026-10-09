@@ -7053,7 +7053,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public Map<Species, boolean[]> getTMHMCompatibility() {
-        Map<Species, boolean[]> compat = new TreeMap<>();
+        // Native forms may share a Dex number: use identity equality and stable species-list order.
+        Map<Species, boolean[]> compat = useCfruDpeTmHm128Slots() ? new LinkedHashMap<>() : new TreeMap<>();
         if (useCfruDpeTmHm128Slots()) {
             int offset = getCfruDpeTmHmCompatibilityOffset();
             for (int i = 1; i <= numRealPokemon; i++) {
@@ -7324,7 +7325,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private Map<Species, boolean[]> getCfruDpeMoveTutorCompatibility() {
-        Map<Species, boolean[]> compat = new TreeMap<>();
+        // Match the native TM/HM identity semantics and deterministic species-list order.
+        Map<Species, boolean[]> compat = new LinkedHashMap<>();
         int offset = getCfruDpeMoveTutorCompatibilityOffset();
         for (int i = 1; i <= numRealPokemon; i++) {
             Species pkmn = speciesList.get(i);
