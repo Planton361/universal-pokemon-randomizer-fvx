@@ -10226,24 +10226,22 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         List<String> skippedExamples = new ArrayList<>();
         originalCfruDpeNormalPaletteBytes.clear();
         originalCfruDpeShinyPaletteBytes.clear();
-        for (Species pk : getSpeciesSet()) {
-            int pokeNumber = pokedexToInternal[pk.getNumber()];
+        for (Species pk : getCfruDpePaletteOwners()) {
+            int pokeNumber = getCfruDpePaletteTableIndexForSave(pk);
 
             Palette normalPalette = readPaletteDefensively(normalPaletteTableOffset, pokeNumber, pk, "normal",
                     skippedExamples);
             if (normalPalette == null) {
                 skippedNormalPalettes++;
-            } else {
-                pk.setNormalPalette(normalPalette);
             }
+            pk.setNormalPalette(normalPalette);
 
             Palette shinyPalette = readPaletteDefensively(shinyPaletteTableOffset, pokeNumber, pk, "shiny",
                     skippedExamples);
             if (shinyPalette == null) {
                 skippedShinyPalettes++;
-            } else {
-                pk.setShinyPalette(shinyPalette);
             }
+            pk.setShinyPalette(shinyPalette);
 
             rememberLoadedCfruDpePokemonPalette(pk, normalPalette, shinyPalette);
         }
@@ -10282,7 +10280,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         int owner = getCfruDpePaletteTableIndexForSave(species);
         int count = romEntry.getIntValue("PokemonCount");
-        if (owner <= 0 || owner > count || owner != species.getSpeciesSetIdentityNumber()
+        if (owner <= 0 || owner > count || owner != pokedexToInternal[dex]
+                || owner != species.getSpeciesSetIdentityNumber()
                 || pokesInternal == null || owner >= pokesInternal.length || pokesInternal[owner] != species
                 || internalToPokedex == null || owner >= internalToPokedex.length
                 || internalToPokedex[owner] != dex) {
@@ -10303,7 +10302,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         int normalTable = romEntry.getIntValue("PokemonNormalPalettes");
         int shinyTable = romEntry.getIntValue("PokemonShinyPalettes");
-        long tableLength = ((long) count + 1) * 8;
+        long tableLength = getCfruDpePaletteTableLength();
         if (!isCfruDpePairTableInBounds(normalTable, tableLength)
                 || !isCfruDpePairTableInBounds(shinyTable, tableLength)
                 || ((long) normalTable < (long) shinyTable + tableLength
@@ -10318,7 +10317,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             } else if (other == null || other.getNumber() <= 0
                     || other.getNumber() >= pokedexToInternal.length) {
                 return palettePairRejected("unresolved selected owner");
-            } else if (getCfruDpePaletteTableIndexForSave(other) == owner) {
+            } else if (getCfruDpePaletteTableIndexForSave(other) == owner
+                    // Keep GFX-004's existing first-Dex selection exclusion; native copy-save
+                    // ownership is independent of this specialized mode's narrower policy.
+                    || pokedexToInternal[other.getNumber()] == owner) {
                 return palettePairRejected("duplicate save-table owner");
             }
         }
@@ -10402,16 +10404,28 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private Palette readPaletteDefensively(int paletteTableOffset, int pokeNumber, Species pk, String paletteKind,
                                            List<String> skippedExamples) {
-        int pointerOffset = paletteTableOffset + pokeNumber * 8;
-        int paletteOffset;
+        long tableLength = getCfruDpePaletteTableLength();
+        int pointerOffset = pokeNumber < 0 ? -1 : paletteTableOffset + pokeNumber * 8;
         try {
-            paletteOffset = readPointer(pointerOffset, true);
-            if (paletteOffset == -1) {
-                recordSkippedPaletteExample(skippedExamples, pk, pokeNumber, pointerOffset, paletteKind,
-                        "invalid pointer");
+            if (pokeNumber <= 0 || !hasValidCfruDpePaletteTables()) {
                 return null;
             }
-            return readPalette(paletteOffset);
+            int paletteOffset = readPointer(pointerOffset, true);
+            int normalTable = romEntry.getIntValue("PokemonNormalPalettes");
+            int shinyTable = romEntry.getIntValue("PokemonShinyPalettes");
+            if (paletteOffset <= 0 || (long) paletteOffset + 4 > rom.length
+                    || (paletteOffset >= normalTable && (long) paletteOffset < normalTable + tableLength)
+                    || (paletteOffset >= shinyTable && (long) paletteOffset < shinyTable + tableLength)
+                    || (rom[paletteOffset] != 0x10 && rom[paletteOffset] != 0x11)
+                    || (rom[paletteOffset + 1] & 0xFF) != 32
+                    || rom[paletteOffset + 2] != 0 || rom[paletteOffset + 3] != 0) {
+                return null;
+            }
+            long end = Math.min((long) rom.length, (long) paletteOffset + 64);
+            if (paletteOffset < normalTable) end = Math.min(end, normalTable);
+            if (paletteOffset < shinyTable) end = Math.min(end, shinyTable);
+            Palette palette = new Palette(DSDecmp.Decompress(Arrays.copyOfRange(rom, paletteOffset, (int) end)));
+            return isCompleteCfruDpePairPalette(palette) ? palette : null;
         } catch (RuntimeException ex) {
             recordSkippedPaletteExample(skippedExamples, pk, pokeNumber, pointerOffset, paletteKind,
                     ex.getClass().getSimpleName());
@@ -10487,6 +10501,24 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         int normalPaletteTableOffset = romEntry.getIntValue("PokemonNormalPalettes");
         int shinyPaletteTableOffset = romEntry.getIntValue("PokemonShinyPalettes");
 
+        // Validate every owner and changed source channel before the first allocation/repoint.
+        // This preflight does not make the legacy allocator a transaction (F08 remains separate).
+        List<Species> owners = getCfruDpePaletteOwners();
+        if (!hasValidCfruDpePaletteTables()) {
+            throw new RomIOException("CFRU/DPE palette tables are invalid or overlapping");
+        }
+        for (Species pk : owners) {
+            int owner = getCfruDpePaletteTableIndexForSave(pk);
+            if (owner < 0) {
+                if (canPreserveUnmappedCfruDpeOgerponPaletteOwner(pk, owners)) continue;
+                throw new RomIOException("CFRU/DPE palette owner is invalid or duplicated");
+            }
+            validateChangedCfruDpePaletteSource(pk, pk.getNormalPalette(),
+                    originalCfruDpeNormalPaletteBytes.get(pk), normalPaletteTableOffset + owner * 8);
+            validateChangedCfruDpePaletteSource(pk, pk.getShinyPalette(),
+                    originalCfruDpeShinyPaletteBytes.get(pk), shinyPaletteTableOffset + owner * 8);
+        }
+
         int normalPaletteWriteAttempts = 0;
         int shinyPaletteWriteAttempts = 0;
         int skippedUnchangedNormalPalettes = 0;
@@ -10495,7 +10527,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         int skippedDecodeFailedPalettes = 0;
         int skippedUncertainFormePalettes = 0;
 
-        for (Species pk : getSpeciesSet()) {
+        for (Species pk : owners) {
             int pokeNumber = getCfruDpePaletteTableIndexForSave(pk);
             if (pokeNumber < 0) {
                 skippedMissingPalettePointers += 2;
@@ -10552,11 +10584,77 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 + " skippedUncertainFormePalettes=" + skippedUncertainFormePalettes);
     }
 
+    /** DPE d887185 omits Dex mappings for these four named, unsupported Terastal rows. */
+    private boolean canPreserveUnmappedCfruDpeOgerponPaletteOwner(Species pk, List<Species> owners) {
+        int id = pk.getSpeciesSetIdentityNumber();
+        return id >= 0x592 && id <= 0x595
+                && romEntry.getIntValue("PokemonCount") == CFRU_DPE_SPECIES_COUNT
+                && pokesInternal != null && id < pokesInternal.length && pokesInternal[id] == pk
+                && internalToPokedex != null && id < internalToPokedex.length
+                && pk.getNumber() == 0 && internalToPokedex[id] == 0
+                && SpecialFormPredicates.cfruDpePoolCategory(pk)
+                    == SpecialFormPredicates.CfruDpePoolCategory.TERA_TRANSFORMATION
+                && owners.stream().filter(other -> other.getSpeciesSetIdentityNumber() == id).count() == 1
+                // They remain unloaded and unwritable; do not accept fabricated or changed channels.
+                && pk.getNormalPalette() == null && pk.getShinyPalette() == null
+                && !originalCfruDpeNormalPaletteBytes.containsKey(pk)
+                && !originalCfruDpeShinyPaletteBytes.containsKey(pk);
+    }
+
+    /** Native tables own one 8-byte entry per internal ID, including same-Dex forms. */
     private int getCfruDpePaletteTableIndexForSave(Species pk) {
-        if (pk == null || pk.getNumber() < 0 || pk.getNumber() >= pokedexToInternal.length) {
-            return -1;
+        if (pk == null || romEntry == null || pokesInternal == null || internalToPokedex == null) return -1;
+        int owner = pk.getSpeciesSetIdentityNumber();
+        if (romEntry.getIntValue("PokemonCount") <= 0
+                || romEntry.getIntValue("PokemonCount") > CFRU_DPE_SPECIES_COUNT
+                || owner <= 0 || owner > CFRU_DPE_MAX_INTERNAL_SPECIES_ID
+                || owner > romEntry.getIntValue("PokemonCount")
+                || owner >= pokesInternal.length || pokesInternal[owner] != pk
+                || owner >= internalToPokedex.length || pk.getNumber() <= 0
+                || internalToPokedex[owner] != pk.getNumber()) return -1;
+        // Inspect the list before SpeciesSet equality can collapse conflicting native IDs.
+        if (speciesList != null) {
+            int occurrences = 0;
+            for (Species other : speciesList) {
+                if (other != null && other.getSpeciesSetIdentityNumber() == owner && ++occurrences > 1) return -1;
+            }
         }
-        return pokedexToInternal[pk.getNumber()];
+        return owner;
+    }
+
+    private List<Species> getCfruDpePaletteOwners() {
+        Collection<Species> selected = speciesList == null ? getSpeciesSet() : speciesList;
+        return selected.stream().filter(Objects::nonNull)
+                .sorted(Comparator.comparingInt(Species::getSpeciesSetIdentityNumber)).toList();
+    }
+
+    private long getCfruDpePaletteTableLength() {
+        int count = romEntry.getIntValue("PokemonCount");
+        // Native capacity includes slot zero; reduced max-ID profiles retain their existing bounds.
+        return (count == CFRU_DPE_SPECIES_COUNT ? (long) count : (long) count + 1) * 8;
+    }
+
+    private boolean hasValidCfruDpePaletteTables() {
+        int normal = romEntry.getIntValue("PokemonNormalPalettes");
+        int shiny = romEntry.getIntValue("PokemonShinyPalettes");
+        long length = getCfruDpePaletteTableLength();
+        return isCfruDpePairTableInBounds(normal, length) && isCfruDpePairTableInBounds(shiny, length)
+                && !((long) normal < shiny + length && (long) shiny < normal + length);
+    }
+
+    private void validateChangedCfruDpePaletteSource(Species pk, Palette current, byte[] original, int entry) {
+        if (!hasChangedCfruDpePokemonPalette(current, original)
+                || !canWriteCfruDpePaletteCopy(pk, current, original)) return;
+        int normal = romEntry.getIntValue("PokemonNormalPalettes");
+        int shiny = romEntry.getIntValue("PokemonShinyPalettes");
+        long length = getCfruDpePaletteTableLength();
+        // A repeated save may already point at the current copy. Original load snapshots stay
+        // immutable for GFX-002/004 provenance; this does not authorize a different owner entry.
+        if (!isCompleteCfruDpePairPalette(current)
+                || (!matchesCfruDpePairSource(entry, original, normal, shiny, length)
+                    && !matchesCfruDpePairSource(entry, current.toBytes(), normal, shiny, length))) {
+            throw new RomIOException("CFRU/DPE changed palette has invalid or stale source ownership");
+        }
     }
 
     private boolean canWriteCfruDpePaletteCopy(Species pk, Palette currentPalette, byte[] originalBytes) {
