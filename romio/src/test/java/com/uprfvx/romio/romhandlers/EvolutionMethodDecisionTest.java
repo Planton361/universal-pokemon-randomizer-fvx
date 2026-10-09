@@ -121,6 +121,19 @@ public class EvolutionMethodDecisionTest {
         assertMethod(level, EvolutionType.LEVEL, 16);
     }
 
+    @Test
+    public void vanillaHandlerStillDispatchesTheExistingGenericTimePolicy() throws Exception {
+        var f = new CfruDpeEvolutionFixture();
+        f.setField("useCfruDpeGen9SpeciesCount", false);
+        Species source = f.species[133];
+        source.getEvolutionsFrom().add(new Evolution(source, f.species[196], EvolutionType.HAPPINESS_DAY, 0));
+        source.getEvolutionsFrom().add(new Evolution(source, f.species[197], EvolutionType.HAPPINESS_NIGHT, 0));
+        byte[] before = f.memory.clone(); f.preflightCfruDpeTimeEvolutions(); f.removeTimeBasedEvolutions();
+        assertMethod(source.getEvolutionsFrom().get(0), EvolutionType.STONE, ItemIDs.sunStone);
+        assertMethod(source.getEvolutionsFrom().get(1), EvolutionType.STONE, ItemIDs.moonStone);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(before, f.memory);
+    }
+
     private static Evolution evolution(int fromNumber, EvolutionType type, int extraInfo, int estimatedLevel) {
         Species from = new Species(fromNumber);
         Species to = new Species(10000 + fromNumber);

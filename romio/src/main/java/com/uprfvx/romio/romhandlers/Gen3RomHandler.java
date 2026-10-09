@@ -49,6 +49,8 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import com.uprfvx.romio.services.SpecialFormPredicates;
@@ -187,6 +189,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private final Map<Integer, CfruDpeEvolutionRow> originalCfruDpeEvolutionRows = new HashMap<>();
     private final Map<Integer, CfruDpeEvolutionRow> plannedCfruDpeEvolutionRows = new HashMap<>();
+    private final Set<Integer> plannedCfruDpeTimeRows = new HashSet<>();
 
     private record CfruDpeTargetSlot(int index, int method, int parameter, int target, int auxiliary, boolean randomizable) {}
 
@@ -195,6 +198,449 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private record CfruDpeModeledEvolution(int from, int to, EvolutionType type, int parameter, int forme) {}
     private record CfruDpeEvolutionRow(byte[] raw, List<CfruDpeModeledEvolution> modeled,
                                      boolean fullyModeled) {}
+
+    static final String CFRU_EVOLUTION_OWNERSHIP_PROPERTY = "uprfvx.cfruEvolutionOwnership";
+    private static final int CFRU_EVOLUTION_HOOK = 0x42EC4;
+    private static final int CFRU_EVOLUTION_TABLE_POINTER = 0x42F6C;
+    // GetEvolutionTargetSpecies uses these param thresholds; method 14's minimum
+    // is also consumed by GetMinimumLevel alongside the method-13 Shedinja trigger.
+    // Method 40 is coins; 18/35 have additional, unowned type/item data in +6.
+    private static final Set<Integer> CFRU_PARAM_LEVEL_METHODS = Set.of(
+            4, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 21, 22, 23, 28, 31, 32, 35, 41, 42);
+    private EvolutionOwnershipWitness evolutionOwnershipWitness;
+    private boolean cfruEvolutionEasierApplied;
+    private boolean cfruEvolutionTimeApplied;
+    private Integer cfruEasierHighestLevel;
+
+    private static RomIOException evolutionOwnershipError(String reason) {
+        // Never include a local path, manifest value, input digest or nested IO exception.
+        return new RomIOException("CFRU Make Evolutions Easier: " + reason
+                + ". Requires an independently user-validated OWNERSHIP_WITNESS_V1");
+    }
+
+    private record EvolutionOwner(String type, int start, int end) {
+        boolean contains(int offset, int length) { return offset >= start && (long) offset + length <= end; }
+        boolean overlaps(EvolutionOwner other) { return start < other.end && other.start < end; }
+    }
+
+    /**
+     * Pilot trust premise: the user independently accepts the exact fresh build/link/output.
+     * Parsing this witness does not prove that premise. All offsets are ROM-relative,
+     * half-open intervals. No private witness or ROM identity is logged or serialized.
+     */
+    static final class EvolutionOwnershipWitness {
+        final String inputSha256, buildId, configId, configSha256;
+        final int inputSize, recordOffset;
+        final EvolutionOwner consumer, table;
+        final List<EvolutionOwner> insertions, protectedOwners;
+
+        private EvolutionOwnershipWitness(Properties p) {
+            Set<String> keys = new HashSet<>(Set.of("schema", "version", "cfru.sha", "dpe.sha",
+                    "build.id", "config.id", "config.sha256", "input.size", "input.sha256",
+                    "record.offset", "consumer.start", "consumer.end", "table.start", "table.end",
+                    "table.rows", "table.slots", "table.entryBytes", "insertions.count", "protected.count"));
+            if (!"OWNERSHIP_WITNESS_V1".equals(p.getProperty("schema")) || number(p, "version") != 1
+                    || !"e27e2113e4d59dc76cf5da8d4c43b067addae348".equals(p.getProperty("cfru.sha"))
+                    || !"d887185de1f6ae6a78e85c4311bbadde17041d00".equals(p.getProperty("dpe.sha"))) {
+                throw evolutionOwnershipError("unsupported schema or public source revision");
+            }
+            for (String key : List.of("build.id", "config.id")) {
+                String value = p.getProperty(key, "");
+                if (!value.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) {
+                    throw evolutionOwnershipError("missing or invalid declared build/config identity");
+                }
+            }
+            for (String key : List.of("config.sha256", "input.sha256")) {
+                if (!p.getProperty(key, "").matches("[0-9a-f]{64}")) {
+                    throw evolutionOwnershipError("missing or invalid identity digest");
+                }
+            }
+            buildId = p.getProperty("build.id");
+            configId = p.getProperty("config.id");
+            configSha256 = p.getProperty("config.sha256");
+            inputSha256 = p.getProperty("input.sha256");
+            inputSize = number(p, "input.size");
+            if (inputSize <= CFRU_EVOLUTION_TABLE_POINTER + 4 || inputSize > 0x2000000) {
+                throw evolutionOwnershipError("invalid input size");
+            }
+            consumer = owner(p, "consumer", "EVOLUTION_CODE", inputSize, 2);
+            table = owner(p, "table", "EVOLUTION_DATA", inputSize, 4);
+            recordOffset = number(p, "record.offset");
+            if ((recordOffset & 3) != 0 || (long) recordOffset + 32 > inputSize
+                    || number(p, "table.rows") != CFRU_DPE_SPECIES_COUNT
+                    || number(p, "table.slots") != 16 || number(p, "table.entryBytes") != 8
+                    || table.end - table.start != CFRU_DPE_SPECIES_COUNT * 128) {
+                throw evolutionOwnershipError("invalid record/table layout");
+            }
+            int insertionCount = number(p, "insertions.count");
+            int protectedCount = number(p, "protected.count");
+            if (insertionCount < 1 || insertionCount > 8 || protectedCount < 4 || protectedCount > 64) {
+                throw evolutionOwnershipError("missing or excessive ownership intervals");
+            }
+            List<EvolutionOwner> envelopes = new ArrayList<>();
+            for (int i = 0; i < insertionCount; i++) {
+                String prefix = "insertions." + i;
+                keys.add(prefix + ".start"); keys.add(prefix + ".end");
+                envelopes.add(owner(p, prefix, "INSERTION", inputSize, 4));
+            }
+            List<EvolutionOwner> protectedRanges = new ArrayList<>();
+            Set<String> required = new HashSet<>(Set.of("PICKUP_CODE", "PICKUP_DATA", "OTHER_CODE", "OTHER_DATA"));
+            for (int i = 0; i < protectedCount; i++) {
+                String prefix = "protected." + i;
+                keys.add(prefix + ".type"); keys.add(prefix + ".start"); keys.add(prefix + ".end");
+                String type = p.getProperty(prefix + ".type", "");
+                if (!Set.of("PICKUP_CODE", "PICKUP_DATA", "OTHER_CODE", "OTHER_DATA").contains(type)) {
+                    throw evolutionOwnershipError("unsupported protected owner type");
+                }
+                required.remove(type);
+                protectedRanges.add(owner(p, prefix, type, inputSize, type.endsWith("CODE") ? 2 : 1));
+            }
+            if (!required.isEmpty() || !p.stringPropertyNames().equals(keys) || p.size() != keys.size()) {
+                throw evolutionOwnershipError("incomplete or unknown witness fields/owners");
+            }
+            for (int i = 0; i < envelopes.size(); i++) for (int j = 0; j < i; j++) {
+                if (envelopes.get(i).overlaps(envelopes.get(j))) {
+                    throw evolutionOwnershipError("ambiguous insertion envelopes");
+                }
+            }
+            EvolutionOwner record = new EvolutionOwner("RECORD", recordOffset, recordOffset + 32);
+            for (EvolutionOwner child : List.of(consumer, record, table)) {
+                if (envelopes.stream().filter(e -> e.contains(child.start, child.end - child.start)).count() != 1) {
+                    throw evolutionOwnershipError("code/data outside accepted insertion envelopes");
+                }
+            }
+            List<EvolutionOwner> children = new ArrayList<>(protectedRanges);
+            children.addAll(List.of(consumer, record, table,
+                    new EvolutionOwner("HOOK", CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8),
+                    new EvolutionOwner("TABLE_POINTER", CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4),
+                    new EvolutionOwner("HEADER", 0xA0, 0xC0)));
+            for (int i = 0; i < children.size(); i++) for (int j = 0; j < i; j++) {
+                if (children.get(i).overlaps(children.get(j))) {
+                    throw evolutionOwnershipError("overlapping typed code/data owners");
+                }
+            }
+            insertions = List.copyOf(envelopes);
+            protectedOwners = List.copyOf(protectedRanges);
+        }
+
+        static EvolutionOwnershipWitness parse(Properties properties) {
+            // Defensive snapshot: caller changes cannot alter this per-loaded-input witness.
+            Properties snapshot = new Properties(); snapshot.putAll(properties);
+            return new EvolutionOwnershipWitness(snapshot);
+        }
+
+        static EvolutionOwnershipWitness read(InputStream input) {
+            try {
+                byte[] text = input.readNBytes(65537);
+                if (text.length > 65536) throw evolutionOwnershipError("witness exceeds size limit");
+                Properties p = new Properties() {
+                    @Override public synchronized Object put(Object key, Object value) {
+                        if (containsKey(key)) throw evolutionOwnershipError("duplicate witness field");
+                        return super.put(key, value);
+                    }
+                };
+                p.load(new java.io.ByteArrayInputStream(text));
+                return parse(p);
+            } catch (IOException | IllegalArgumentException e) {
+                throw evolutionOwnershipError("cannot read witness");
+            }
+        }
+
+        private static int number(Properties p, String key) {
+            String value = p.getProperty(key, "");
+            if (!value.matches("(?:0|[1-9][0-9]{0,9}|0x[0-9a-fA-F]{1,8})")) {
+                throw evolutionOwnershipError("invalid numeric witness field");
+            }
+            try {
+                long n = value.startsWith("0x") ? Long.parseLong(value.substring(2), 16) : Long.parseLong(value);
+                if (n > Integer.MAX_VALUE) throw evolutionOwnershipError("numeric witness overflow");
+                return (int) n;
+            } catch (NumberFormatException e) {
+                throw evolutionOwnershipError("numeric witness overflow");
+            }
+        }
+
+        private static EvolutionOwner owner(Properties p, String prefix, String type, int size, int alignment) {
+            int start = number(p, prefix + ".start"), end = number(p, prefix + ".end");
+            if (start >= end || end > size || start % alignment != 0 || end % alignment != 0) {
+                throw evolutionOwnershipError("invalid ownership interval bounds/alignment");
+            }
+            return new EvolutionOwner(type, start, end);
+        }
+    }
+
+    /** No shared raw-field/graph plan is authorized for these two transformations. */
+    public void preflightCfruEvolutionOptions(boolean easier, boolean removeTime) {
+        if (useCfruDpeGen9SpeciesCount && easier && removeTime) {
+            throw evolutionOwnershipError("Make Easier + Remove Time is unsupported: time-slot source parameters and easier level caps require a shared validated plan");
+        }
+    }
+
+    /** Called before restrictions, updaters or randomizers. Vanilla is deliberately a no-op. */
+    public void preflightCfruEvolutionEasier(int maxLevel) {
+        if (!useCfruDpeGen9SpeciesCount) return;
+        preflightCfruEvolutionOptions(true, cfruEvolutionTimeApplied);
+        if (maxLevel < 1 || maxLevel > 100) throw evolutionOwnershipError("invalid level cap");
+        if (evolutionOwnershipWitness == null) {
+            String path = System.getProperty(CFRU_EVOLUTION_OWNERSHIP_PROPERTY);
+            if (path == null || path.isBlank()) throw evolutionOwnershipError("explicit JVM opt-in missing");
+            EvolutionOwnershipWitness candidate;
+            try (InputStream input = Files.newInputStream(Path.of(path))) {
+                candidate = EvolutionOwnershipWitness.read(input);
+            } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
+                throw evolutionOwnershipError("cannot read explicitly selected witness");
+            }
+            validateEvolutionOwnership(candidate, true);
+            validatePristineEvolutionOwners(candidate);
+            evolutionOwnershipWitness = candidate;
+        }
+        validateEvolutionOwnership(evolutionOwnershipWitness, true);
+        validateCfruEvolutionMethods(prepareCfruDpeEvolutionRows());
+    }
+
+    // Package-only seam for synthetic in-memory source tests; no public runtime bypass.
+    void acceptSyntheticEvolutionWitness(Properties properties) {
+        EvolutionOwnershipWitness candidate = EvolutionOwnershipWitness.parse(properties);
+        validateEvolutionOwnership(candidate, true);
+        validatePristineEvolutionOwners(candidate);
+        evolutionOwnershipWitness = candidate;
+    }
+
+    private void validatePristineEvolutionOwners(EvolutionOwnershipWitness w) {
+        List<EvolutionOwner> owners = new ArrayList<>(w.protectedOwners);
+        owners.add(w.table);
+        for (EvolutionOwner owner : owners) {
+            if (!Arrays.equals(originalRom, owner.start, owner.end, rom, owner.start, owner.end)) {
+                throw evolutionOwnershipError("attested input owners changed before opt-in");
+            }
+        }
+    }
+
+    private void validateEvolutionOwnership(EvolutionOwnershipWitness w, boolean checkLoadedTable) {
+        if (originalRom == null || rom == null || originalRom.length != w.inputSize || rom.length != w.inputSize
+                || !HexFormat.of().formatHex(sha256(originalRom)).equals(w.inputSha256)) {
+            throw evolutionOwnershipError("pristine input identity mismatch");
+        }
+        if (!useCfruDpeGen9SpeciesCount || !"BPRE".equals(romEntry.getRomCode()) || romEntry.getVersion() != 0
+                || !romCode(originalRom, "BPRE") || originalRom[Gen3Constants.romVersionOffset] != 0
+                || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT
+                || romEntry.getIntValue("PokemonEvolutions") != w.table.start
+                || gbaPointer(originalRom, CFRU_EVOLUTION_TABLE_POINTER, false) != w.table.start) {
+            throw evolutionOwnershipError("selected profile/table mismatch");
+        }
+        validateEvolutionRecord(w, originalRom);
+        validateEvolutionRecord(w, rom);
+        if (!Arrays.equals(originalRom, w.consumer.start, w.consumer.end, rom, w.consumer.start, w.consumer.end)
+                || !Arrays.equals(originalRom, CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8,
+                        rom, CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8)
+                || !Arrays.equals(originalRom, w.recordOffset, w.recordOffset + 28,
+                        rom, w.recordOffset, w.recordOffset + 28)
+                || !Arrays.equals(originalRom, CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4,
+                        rom, CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4)) {
+            throw evolutionOwnershipError("live immutable consumer/record changed");
+        }
+        if (!Arrays.equals(originalRom, w.table.start, w.table.start + 128, rom, w.table.start, w.table.start + 128)) {
+            throw evolutionOwnershipError("reserved evolution row changed");
+        }
+        if (checkLoadedTable) {
+            for (int id = 1; id < CFRU_DPE_SPECIES_COUNT; id++) {
+                CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(id);
+                int offset = w.table.start + id * 128;
+                if (row == null) {
+                    // The production loader omits unused/name-placeholder species. They grant
+                    // no parameter ownership; never silently omit an active ordinary evolution.
+                    if (!Arrays.equals(originalRom, offset, offset + 128, rom, offset, offset + 128)) {
+                        throw evolutionOwnershipError("unloaded evolution row changed");
+                    }
+                    for (int o = offset; o < offset + 128; o += 8) {
+                        int method = IOFunctions.read2ByteInt(rom, o), target = IOFunctions.read2ByteInt(rom, o + 4);
+                        if (method != 0 && method != 0xFD && method != 0xFE && target != 0) {
+                            throw evolutionOwnershipError("unloaded active evolution row");
+                        }
+                    }
+                } else if (!Arrays.equals(row.raw(), 0, 128, rom, offset, offset + 128)) {
+                    throw evolutionOwnershipError("stale loaded evolution table");
+                }
+            }
+        }
+    }
+
+    private static byte[] sha256(byte[] bytes) {
+        try { return MessageDigest.getInstance("SHA-256").digest(bytes); }
+        catch (NoSuchAlgorithmException e) { throw new IllegalStateException("SHA-256 unavailable"); }
+    }
+
+    private static int gbaPointer(byte[] bytes, int offset, boolean thumb) {
+        long pointer = Integer.toUnsignedLong(IOFunctions.readFullInt(bytes, offset));
+        if ((pointer & (thumb ? 1 : 3)) != (thumb ? 1 : 0)
+                || pointer < 0x08000000L || pointer >= 0x08000000L + bytes.length) {
+            throw evolutionOwnershipError("invalid ROM pointer/alignment");
+        }
+        return (int) (pointer - 0x08000000L) & ~1;
+    }
+
+    private static void validateEvolutionRecord(EvolutionOwnershipWitness w, byte[] bytes) {
+        int hook = CFRU_EVOLUTION_HOOK, r = w.recordOffset;
+        if (bytes[hook] != 0 || bytes[hook + 1] != 0x4B || bytes[hook + 2] != 0x18 || bytes[hook + 3] != 0x47) {
+            throw evolutionOwnershipError("live evolution hook mismatch");
+        }
+        int consumer = gbaPointer(bytes, hook + 4, true);
+        if (!w.consumer.contains(consumer, 2) || gbaPointer(bytes, r + 8, false) != r
+                || gbaPointer(bytes, r + 12, true) != consumer) {
+            throw evolutionOwnershipError("record self/consumer ownership mismatch");
+        }
+        byte[] magic = "CFRUEVO1".getBytes(StandardCharsets.US_ASCII);
+        if (!Arrays.equals(bytes, r, r + 8, magic, 0, 8)) throw evolutionOwnershipError("record identity missing");
+        int[] fields = {1, 32, 28, 1, 220, 160};
+        for (int i = 0; i < fields.length; i++) {
+            if (IOFunctions.read2ByteInt(bytes, r + 16 + i * 2) != fields[i]) {
+                throw evolutionOwnershipError("record immutable field mismatch");
+            }
+        }
+        if ((bytes[r + 28] & 255) != 220 && (bytes[r + 28] & 255) != 160) {
+            throw evolutionOwnershipError("unsupported live friendship threshold");
+        }
+        if (bytes[r + 29] != 0 || bytes[r + 30] != 0 || bytes[r + 31] != 0) {
+            throw evolutionOwnershipError("record reserved bytes nonzero");
+        }
+        // Bounded ambiguity check, never a signature-based provenance/discovery fallback.
+        int matches = 0;
+        for (EvolutionOwner envelope : w.insertions) {
+            for (int at = envelope.start; at <= envelope.end - 8; at++) {
+                if (Arrays.equals(bytes, at, at + 8, magic, 0, 8)) matches++;
+            }
+        }
+        if (matches != 1) throw evolutionOwnershipError("ambiguous record identity inside accepted insertions");
+    }
+
+    private void validateCfruEvolutionMethods(Map<Integer, byte[]> rows) {
+        for (byte[] row : rows.values()) for (int slot = 0; slot < 16; slot++) {
+            int o = slot * 8, method = IOFunctions.read2ByteInt(row, o), target = IOFunctions.read2ByteInt(row, o + 4);
+            if (method == 0 || target == 0 || method == 0xFD || method == 0xFE) continue;
+            if (method > 42 || method == 33) {
+                throw evolutionOwnershipError("NOT_SUPPORTED_FOR_SELECTED_METHOD " + method);
+            }
+            if (CFRU_PARAM_LEVEL_METHODS.contains(method)
+                    && (target >= CFRU_DPE_SPECIES_COUNT || pokesInternal[target] == null
+                    || IOFunctions.read2ByteInt(row, o + 2) > 100)) {
+                throw evolutionOwnershipError("invalid applicable level evolution");
+            }
+        }
+    }
+
+    private record EvolutionBytePatch(int offset, byte[] before, byte[] after) {}
+
+    @Override
+    public void condenseLevelEvolutions(int maxLevel) {
+        if (!useCfruDpeGen9SpeciesCount) { super.condenseLevelEvolutions(maxLevel); return; }
+        applyCfruEvolutionEasier(maxLevel);
+    }
+
+    @Override
+    public int getHighestEvoLvl() {
+        return cfruEasierHighestLevel == null ? super.getHighestEvoLvl() : cfruEasierHighestLevel;
+    }
+
+    private void applyCfruEvolutionEasier(int maxLevel) {
+        preflightCfruEvolutionEasier(maxLevel);
+        EvolutionOwnershipWitness w = evolutionOwnershipWitness;
+        Map<Integer, byte[]> currentRows = prepareCfruDpeEvolutionRows();
+        validateCfruEvolutionMethods(currentRows);
+        // Use every ordinary raw edge (including extended/fixed duplicates) for middle-stage detection.
+        Set<Integer> hasOutgoing = new HashSet<>();
+        for (var entry : currentRows.entrySet()) for (int o = 0; o < 128; o += 8) {
+            int method = IOFunctions.read2ByteInt(entry.getValue(), o), target = IOFunctions.read2ByteInt(entry.getValue(), o + 4);
+            if (method >= 1 && method <= 42 && target > 0 && target < CFRU_DPE_SPECIES_COUNT) hasOutgoing.add(entry.getKey());
+        }
+        int highest = getHighestEvoLvl();
+        for (byte[] row : currentRows.values()) for (int o = 0; o < 128; o += 8) {
+            if (CFRU_PARAM_LEVEL_METHODS.contains(IOFunctions.read2ByteInt(row, o))
+                    && IOFunctions.read2ByteInt(row, o + 4) != 0) {
+                highest = Math.max(highest, IOFunctions.read2ByteInt(row, o + 2));
+            }
+        }
+        boolean condense = maxLevel < highest;
+        Map<Evolution, Integer> estimates = new IdentityHashMap<>();
+        Map<Integer, CfruDpeEvolutionRow> committed = new HashMap<>();
+        Map<Evolution, Integer> parameters = new IdentityHashMap<>();
+        List<EvolutionBytePatch> patches = new ArrayList<>();
+        int intermediateCap = (3 * maxLevel + 3) / 4;
+        for (var entry : currentRows.entrySet()) {
+            int id = entry.getKey();
+            byte[] raw = entry.getValue().clone();
+            Species source = pokesInternal[id];
+            for (int o = 0; o < 128; o += 8) {
+                int method = IOFunctions.read2ByteInt(raw, o), target = IOFunctions.read2ByteInt(raw, o + 4);
+                int oldLevel = IOFunctions.read2ByteInt(raw, o + 2);
+                if (!CFRU_PARAM_LEVEL_METHODS.contains(method) || target == 0) continue;
+                int level = condense ? Math.min(oldLevel, hasOutgoing.contains(target) ? intermediateCap : maxLevel) : oldLevel;
+                IOFunctions.write2ByteInt(raw, o + 2, level);
+                for (Evolution evo : source.getEvolutionsFrom()) {
+                    if (Gen3Constants.evolutionTypeToIndex(evo.getType()) == method
+                            && getEvolutionInternalSpeciesId(evo.getTo()) == target && evo.getExtraInfo() == oldLevel) {
+                        parameters.put(evo, level);
+                    }
+                }
+            }
+            if (condense) for (Evolution evo : source.getEvolutionsFrom()) {
+                if (!evo.getType().usesLevelThreshold()) {
+                    estimates.put(evo, Math.min(evo.getEstimatedEvoLvl(),
+                            hasOutgoing.contains(getEvolutionInternalSpeciesId(evo.getTo())) ? intermediateCap : maxLevel));
+                }
+            }
+            List<CfruDpeModeledEvolution> modeled = source.getEvolutionsFrom().stream().map(evo ->
+                    new CfruDpeModeledEvolution(id, getEvolutionInternalSpeciesId(evo.getTo()), evo.getType(),
+                            parameters.getOrDefault(evo, evo.getExtraInfo()), evo.getForme())).toList();
+            committed.put(id, new CfruDpeEvolutionRow(raw, modeled, originalCfruDpeEvolutionRows.get(id).fullyModeled()));
+            int rowOffset = w.table.start + id * 128;
+            for (int o = 0; o < 128; o += 2) {
+                if (rom[rowOffset + o] == raw[o] && rom[rowOffset + o + 1] == raw[o + 1]) continue;
+                // Existing target plan owns only +4. This new plan owns only source-proven +2.
+                boolean ownedParameter = o % 8 == 2 && CFRU_PARAM_LEVEL_METHODS.contains(IOFunctions.read2ByteInt(raw, o - 2));
+                boolean ownedTarget = o % 8 == 4 && plannedCfruDpeEvolutionRows.containsKey(id);
+                if ((!ownedParameter && !ownedTarget) || !w.table.contains(rowOffset + o, 2)) {
+                    throw evolutionOwnershipError("write plan escapes owned evolution fields");
+                }
+                patches.add(new EvolutionBytePatch(rowOffset + o,
+                        Arrays.copyOfRange(rom, rowOffset + o, rowOffset + o + 2), Arrays.copyOfRange(raw, o, o + 2)));
+            }
+        }
+        patches.add(new EvolutionBytePatch(w.recordOffset + 28, new byte[]{rom[w.recordOffset + 28]}, new byte[]{(byte) 160}));
+        // Complete plan, ranges and old bytes validated before the first write. The existing raw-row
+        // guard remains the authority for all prior target-only plans and generic fully-owned tweaks.
+        validateEvolutionOwnership(w, true);
+        for (EvolutionBytePatch patch : patches) {
+            if (!Arrays.equals(patch.before, 0, patch.before.length, rom, patch.offset, patch.offset + patch.before.length)) {
+                throw evolutionOwnershipError("stale evolution write plan");
+            }
+        }
+        try {
+            for (EvolutionBytePatch patch : patches) {
+                if (patch.after.length == 2) writeWord(patch.offset, IOFunctions.read2ByteInt(patch.after, 0));
+                else writeByte(patch.offset, patch.after[0]);
+            }
+            for (EvolutionBytePatch patch : patches) {
+                if (!Arrays.equals(patch.after, 0, patch.after.length, rom, patch.offset, patch.offset + patch.after.length)) {
+                    throw evolutionOwnershipError("evolution write readback mismatch");
+                }
+            }
+            validateEvolutionOwnership(w, false);
+        } catch (RuntimeException e) {
+            for (EvolutionBytePatch patch : patches) System.arraycopy(patch.before, 0, rom, patch.offset, patch.before.length);
+            throw evolutionOwnershipError("evolution write failed; touched bytes restored");
+        }
+        // Publish graph/snapshots only after byte commit + readback; no state to roll back on write failure.
+        parameters.forEach((evo, level) -> {
+            if (evo.getExtraInfo() != level) { markImprovedEvolutions(evo.getFrom()); evo.updateEvolutionMethod(evo.getType(), level); }
+        });
+        originalCfruDpeEvolutionRows.putAll(committed);
+        plannedCfruDpeEvolutionRows.clear();
+        estimates.forEach((evo, level) -> {
+            if (evo.getEstimatedEvoLvl() != level) { markImprovedEvolutions(evo.getFrom()); evo.setEstimatedEvoLvl(level); }
+        });
+        cfruEasierHighestLevel = condense ? maxLevel : highest;
+        cfruEvolutionEasierApplied = true;
+    }
 
     private final Map<Species, byte[]> originalCfruDpeNormalPaletteBytes = new IdentityHashMap<>();
     private final Map<Species, byte[]> originalCfruDpeShinyPaletteBytes = new IdentityHashMap<>();
@@ -308,6 +754,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public void midLoadingSetUp() {
         super.midLoadingSetUp();
+        evolutionOwnershipWitness = null;
+        cfruEvolutionEasierApplied = false;
+        cfruEvolutionTimeApplied = false;
+        cfruEasierHighestLevel = null;
         isRomHack = false;
         jamboMovesetHack = false;
         useCfruDpeGen9SpeciesCount = false;
@@ -7107,6 +7557,200 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 hex.charAt(3), hex.charAt(0), hex.charAt(1) });
     }
 
+    // DPE d887185..., Evolution Table.c / include/evolution.h; CFRU e68a701..., evolution.c.
+    // Source/slot ownership deliberately does not depend on the (possibly randomized) target.
+    private record CfruDpeTimeSlot(int source, int slot, int method, int parameter, int auxiliary,
+                                   int timelessMethod, int timelessParameter, int timelessAuxiliary) {}
+    private static final Set<Integer> CFRU_DPE_TIME_METHODS = Set.of(2, 3, 22, 23, 24, 25, 28, 39);
+    private static final Set<Integer> CFRU_DPE_ITEM_USE_METHODS = Set.of(7, 34, 36, 39);
+    private static final List<CfruDpeTimeSlot> CFRU_DPE_TIME_SLOTS = List.of(
+            new CfruDpeTimeSlot(104, 0, 23, 28, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(104, 1, 22, 28, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(133, 0, 2, 0, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(133, 1, 3, 0, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(207, 0, 24, 120, 0, 35, 1, 120),
+            new CfruDpeTimeSlot(215, 0, 24, 119, 0, 35, 1, 119),
+            new CfruDpeTimeSlot(217, 0, 39, 734, 0, 7, 734, 0),
+            new CfruDpeTimeSlot(459, 0, 2, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(486, 0, 3, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(493, 0, 25, 118, 0, 35, 1, 118),
+            new CfruDpeTimeSlot(500, 0, 2, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(804, 0, 23, 39, 0, 4, 39, 0),
+            new CfruDpeTimeSlot(806, 0, 22, 39, 0, 4, 39, 0),
+            new CfruDpeTimeSlot(951, 0, 23, 20, 0, 4, 20, 0),
+            new CfruDpeTimeSlot(961, 0, 23, 25, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(961, 1, 22, 25, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(961, 2, 28, 25, 0x1114, 7, 100, 0),
+            new CfruDpeTimeSlot(970, 0, 23, 34, 0, 4, 34, 0),
+            new CfruDpeTimeSlot(1007, 0, 23, 53, 0, 7, 93, 0),
+            new CfruDpeTimeSlot(1007, 1, 22, 53, 0, 7, 94, 0),
+            new CfruDpeTimeSlot(1020, 0, 22, 20, 0, 4, 20, 0),
+            new CfruDpeTimeSlot(1038, 0, 22, 28, 0, 4, 28, 0),
+            new CfruDpeTimeSlot(1164, 0, 3, 0, 0, 1, 0, 0),
+            new CfruDpeTimeSlot(1227, 0, 22, 35, 0, 4, 35, 0),
+            new CfruDpeTimeSlot(1240, 0, 25, 119, 0, 35, 1, 119),
+            new CfruDpeTimeSlot(1365, 0, 22, 30, 0, 4, 30, 0));
+
+    /** Read-only early gate, called only when Remove Time-Based Evolutions is enabled. */
+    public void preflightCfruDpeTimeEvolutions() {
+        if (useCfruDpeGen9SpeciesCount) {
+            preflightCfruEvolutionOptions(cfruEvolutionEasierApplied, true);
+            planCfruDpeTimeEvolutions();
+        }
+    }
+
+    private RomIOException unsafeCfruDpeTimeEvolution(String reason) {
+        return new RomIOException("CFRU_DPE_TIME_EVOLUTION_SEMANTICS_BLOCKER: " + reason);
+    }
+
+    private Map<Integer, byte[]> planCfruDpeTimeEvolutions() {
+        preflightCfruEvolutionOptions(cfruEvolutionEasierApplied, true);
+        if (!isCfruDpeGen9BpreProfile() || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT) {
+            throw unsafeCfruDpeTimeEvolution("requires the selected BPRE 1440-species profile");
+        }
+        Map<Integer, byte[]> rows = prepareCfruDpeEvolutionRows();
+        Map<Integer, byte[]> result = new LinkedHashMap<>();
+        for (CfruDpeTimeSlot owner : CFRU_DPE_TIME_SLOTS) {
+            byte[] row = rows.get(owner.source());
+            if (row == null) throw unsafeCfruDpeTimeEvolution("missing source row " + owner.source());
+            byte[] planned = result.computeIfAbsent(owner.source(), id -> row.clone());
+            int o = owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE;
+            int method = IOFunctions.read2ByteInt(row, o);
+            int parameter = IOFunctions.read2ByteInt(row, o + 2);
+            int auxiliary = IOFunctions.read2ByteInt(row, o + 6);
+            boolean original = method == owner.method() && parameter == owner.parameter()
+                    && auxiliary == owner.auxiliary();
+            boolean converted = method == owner.timelessMethod() && parameter == owner.timelessParameter()
+                    && auxiliary == owner.timelessAuxiliary();
+            if (!original && !converted) {
+                throw unsafeCfruDpeTimeEvolution("unexpected shape at source/slot " + owner.source() + "/" + owner.slot());
+            }
+            int target = IOFunctions.read2ByteInt(row, o + 4);
+            if (target <= 0 || target >= pokesInternal.length || pokesInternal[target] == null
+                    || getEvolutionInternalSpeciesId(pokesInternal[target]) != target || target == owner.source()) {
+                throw unsafeCfruDpeTimeEvolution("invalid target at source/slot " + owner.source() + "/" + owner.slot());
+            }
+            IOFunctions.write2ByteInt(planned, o, owner.timelessMethod());
+            IOFunctions.write2ByteInt(planned, o + 2, owner.timelessParameter());
+            IOFunctions.write2ByteInt(planned, o + 6, owner.timelessAuxiliary());
+        }
+        int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+        if (baseOffset < 0 || (long) baseOffset + CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize() > rom.length) {
+            throw unsafeCfruDpeTimeEvolution("source-owned evolution table outside memory");
+        }
+        // Include source zero and rows omitted by the species/name loader. Only the
+        // selected table is inspected; never search surrounding memory for a table.
+        for (int id = 0; id < CFRU_DPE_SPECIES_COUNT; id++) {
+            int offset = baseOffset + id * getEvolutionRowSize();
+            byte[] row = rows.get(id);
+            if (row == null) row = Arrays.copyOfRange(rom, offset, offset + getEvolutionRowSize());
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                int method = IOFunctions.read2ByteInt(row, slot * GEN3_EVOLUTION_ENTRY_SIZE);
+                if (CFRU_DPE_TIME_METHODS.contains(method)) {
+                    int sourceId = id, index = slot;
+                    if (CFRU_DPE_TIME_SLOTS.stream().noneMatch(owner -> owner.source() == sourceId
+                            && owner.slot() == index && owner.method() == method)) {
+                        throw unsafeCfruDpeTimeEvolution("unowned time method at source/slot " + id + "/" + slot);
+                    }
+                }
+            }
+        }
+        // CFRU iterates all sixteen slots; a later match overrides an earlier target.
+        // Reject collisions even with conditional item-use methods, never guess a priority.
+        for (CfruDpeTimeSlot owner : CFRU_DPE_TIME_SLOTS) {
+            byte[] row = result.get(owner.source());
+            int target = IOFunctions.read2ByteInt(row, owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4);
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                if (slot == owner.slot()) continue;
+                int o = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+                int method = IOFunctions.read2ByteInt(row, o);
+                if (method >= 1 && method <= 42 && IOFunctions.read2ByteInt(row, o + 4) == target) {
+                    throw unsafeCfruDpeTimeEvolution("duplicate branch target in source " + owner.source());
+                }
+                if ((owner.timelessMethod() == 1 && method == 1)
+                        || (owner.timelessMethod() == 4 && method == 4)
+                        || (owner.timelessMethod() == 35 && method == 35
+                            && IOFunctions.read2ByteInt(row, o + 6) == owner.timelessAuxiliary())) {
+                    throw unsafeCfruDpeTimeEvolution("ambiguous level-up trigger in source " + owner.source());
+                }
+                if (owner.timelessMethod() == 7 && CFRU_DPE_ITEM_USE_METHODS.contains(method)
+                        && IOFunctions.read2ByteInt(row, o + 2) == owner.timelessParameter()) {
+                    throw unsafeCfruDpeTimeEvolution("ambiguous item trigger in source " + owner.source());
+                }
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void removeTimeBasedEvolutions() {
+        if (!useCfruDpeGen9SpeciesCount) {
+            super.removeTimeBasedEvolutions();
+            return;
+        }
+        Map<Integer, byte[]> rows = planCfruDpeTimeEvolutions();
+        Map<Integer, List<Evolution>> modeled = new LinkedHashMap<>();
+        Map<Integer, CfruDpeEvolutionRow> planned = new LinkedHashMap<>();
+        for (var entry : rows.entrySet()) {
+            Species source = pokesInternal[entry.getKey()];
+            List<Evolution> edges = decodeCfruDpeEvolutionRow(source, entry.getValue());
+            for (Evolution edge : edges) {
+                if (edge.getType().usesLevelThreshold()) continue;
+                boolean timeBranch = CFRU_DPE_TIME_SLOTS.stream().anyMatch(owner -> owner.source() == entry.getKey()
+                        && IOFunctions.read2ByteInt(entry.getValue(), owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4)
+                                == getEvolutionInternalSpeciesId(edge.getTo()));
+                source.getEvolutionsFrom().stream().filter(old -> old.getTo() == edge.getTo()
+                        && (timeBranch || (old.getType() == edge.getType() && old.getExtraInfo() == edge.getExtraInfo())))
+                        .findFirst().ifPresent(old -> edge.setEstimatedEvoLvl(old.getEstimatedEvoLvl()));
+                // Preserve the old level hint when a previously opaque level branch
+                // becomes a stone branch, as the generic UPR time policy does.
+                CFRU_DPE_TIME_SLOTS.stream().filter(owner -> owner.source() == entry.getKey()
+                        && Set.of(22, 23, 28).contains(owner.method())
+                        && IOFunctions.read2ByteInt(entry.getValue(), owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4)
+                                == getEvolutionInternalSpeciesId(edge.getTo()))
+                        .findFirst().ifPresent(owner -> edge.setEstimatedEvoLvl(owner.parameter()));
+            }
+            modeled.put(entry.getKey(), edges);
+            planned.put(entry.getKey(), new CfruDpeEvolutionRow(entry.getValue(), snapshotCfruDpeEvolutions(edges), false));
+        }
+        // Publish only after the entire raw plan and all decoded graphs are valid.
+        for (var entry : modeled.entrySet()) {
+            Species source = pokesInternal[entry.getKey()];
+            markImprovedEvolutions(source);
+            source.getEvolutionsFrom().forEach(edge -> edge.getTo().getEvolutionsTo().remove(edge));
+            source.getEvolutionsFrom().clear();
+            source.getEvolutionsFrom().addAll(entry.getValue());
+            entry.getValue().forEach(edge -> edge.getTo().getEvolutionsTo().add(edge));
+        }
+        plannedCfruDpeEvolutionRows.putAll(planned);
+        plannedCfruDpeTimeRows.addAll(planned.keySet());
+        cfruEvolutionTimeApplied = true;
+    }
+
+    private List<Evolution> decodeCfruDpeEvolutionRow(Species source, byte[] raw) {
+        List<Evolution> edges = new ArrayList<>();
+        for (int o = 0; o < raw.length; o += GEN3_EVOLUTION_ENTRY_SIZE) {
+            int method = IOFunctions.read2ByteInt(raw, o);
+            int parameter = IOFunctions.read2ByteInt(raw, o + 2);
+            int target = IOFunctions.read2ByteInt(raw, o + 4);
+            int auxiliary = IOFunctions.read2ByteInt(raw, o + 6);
+            // ITEM is UPR's existing time-free held-item/level-up model. Only level=1
+            // is representable with its single parameter; all other 35 rows stay opaque.
+            int slot = o / GEN3_EVOLUTION_ENTRY_SIZE;
+            boolean heldItem = method == 35 && parameter == 1 && CFRU_DPE_TIME_SLOTS.stream().anyMatch(owner ->
+                    owner.source() == getEvolutionInternalSpeciesId(source) && owner.slot() == slot
+                            && owner.timelessMethod() == 35 && owner.timelessAuxiliary() == auxiliary);
+            if ((method < 1 || method > Gen3Constants.evolutionMethodCount) && !heldItem) continue;
+            if (target <= 0 || target >= pokesInternal.length || pokesInternal[target] == null) continue;
+            EvolutionType type = heldItem ? EvolutionType.ITEM : Gen3Constants.evolutionTypeFromIndex(method);
+            int extra = heldItem ? auxiliary : parameter;
+            if (type.usesItem()) extra = Gen3Constants.itemIDToStandard(extra);
+            Evolution edge = new Evolution(source, pokesInternal[target], type, extra);
+            if (!edges.contains(edge)) edges.add(edge);
+        }
+        return edges;
+    }
+
     private List<CfruDpeTargetSlot> ordinaryTopologySlots(Species source,
                                                        Map<Integer, List<MoveLearnt>> movesets) {
         CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(getEvolutionInternalSpeciesId(source));
@@ -7199,8 +7843,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 for (Evolution modeled : source.getEvolutionsFrom()) {
                     int parameter = modeled.getType().usesItem()
                             ? Gen3Constants.itemIDToInternal(modeled.getExtraInfo()) : modeled.getExtraInfo();
-                    if (Gen3Constants.evolutionTypeToIndex(modeled.getType()) == slot.method()
-                            && parameter == slot.parameter()
+                    boolean heldItem = modeled.getType() == EvolutionType.ITEM && slot.method() == 35
+                            && slot.parameter() == 1 && parameter == slot.auxiliary();
+                    if ((heldItem || (Gen3Constants.evolutionTypeToIndex(modeled.getType()) == slot.method()
+                            && parameter == slot.parameter()))
                             && getEvolutionInternalSpeciesId(modeled.getTo()) == slot.target()) {
                         modeledTargets.put(modeled, target);
                     }
@@ -7223,6 +7869,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     public void loadEvolutions() {
         originalCfruDpeEvolutionRows.clear();
         plannedCfruDpeEvolutionRows.clear();
+        plannedCfruDpeTimeRows.clear();
         for (Species pkmn : pokes) {
             if (pkmn != null) {
                 pkmn.getEvolutionsFrom().clear();
@@ -7239,7 +7886,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 continue;
             }
             int evoOffset = getEvolutionRowOffset(baseOffset, pk);
-            for (int j = 0; j < evolutionSlotsPerSpecies; j++) {
+            if (useCfruDpeGen9SpeciesCount) {
+                byte[] raw = Arrays.copyOfRange(rom, evoOffset, evoOffset + getEvolutionRowSize());
+                List<Evolution> edges = decodeCfruDpeEvolutionRow(pk, raw);
+                pk.getEvolutionsFrom().addAll(edges);
+                edges.forEach(edge -> edge.getTo().getEvolutionsTo().add(edge));
+            }
+            for (int j = 0; !useCfruDpeGen9SpeciesCount && j < evolutionSlotsPerSpecies; j++) {
                 int method = readWord(evoOffset + j * 8);
                 int evolvingTo = readWord(evoOffset + j * 8 + 4);
                 if (method >= 1 && method <= Gen3Constants.evolutionMethodCount && evolvingTo >= 1
@@ -7264,7 +7917,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 byte[] raw = Arrays.copyOfRange(rom, evoOffset, evoOffset + getEvolutionRowSize());
                 originalCfruDpeEvolutionRows.put(getEvolutionInternalSpeciesId(pk),
                         new CfruDpeEvolutionRow(raw, snapshotCfruDpeEvolutions(pk),
-                                Arrays.equals(raw, encodeCfruDpeEvolutions(pk))));
+                                pk.getEvolutionsFrom().stream().noneMatch(e -> e.getType() == EvolutionType.ITEM)
+                                        && Arrays.equals(raw, encodeCfruDpeEvolutions(pk))));
             }
         }
     }
@@ -7273,19 +7927,46 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (useCfruDpeGen9SpeciesCount) {
             Map<Integer, byte[]> rows = prepareCfruDpeEvolutionRows();
             int baseOffset = romEntry.getIntValue("PokemonEvolutions");
-            for (int i = 1; i <= numRealPokemon; i++) {
-                Species pk = speciesList.get(i);
-                if (pk == null) {
-                    continue;
+            Map<Integer, byte[]> backups = new LinkedHashMap<>();
+            // Check every destination before the first write; array slicing must never pad
+            // a truncated source table and accidentally authorize a later partial copy.
+            for (var entry : rows.entrySet()) {
+                int offset = getEvolutionRowOffset(baseOffset, pokesInternal[entry.getKey()]);
+                if (offset < 0 || (long) offset + entry.getValue().length > rom.length) {
+                    throw unsafeCfruDpeTimeEvolution("evolution destination outside memory");
                 }
-                int internalId = getEvolutionInternalSpeciesId(pk);
-                byte[] row = rows.get(internalId);
-                System.arraycopy(row, 0, rom, getEvolutionRowOffset(baseOffset, pk), row.length);
-                CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(internalId);
-                originalCfruDpeEvolutionRows.put(internalId,
-                        new CfruDpeEvolutionRow(row, snapshotCfruDpeEvolutions(pk), original.fullyModeled()));
+                backups.put(entry.getKey(), Arrays.copyOfRange(rom, offset, offset + entry.getValue().length));
             }
+            try {
+                for (var entry : rows.entrySet()) {
+                    int offset = getEvolutionRowOffset(baseOffset, pokesInternal[entry.getKey()]);
+                    byte[] row = entry.getValue();
+                    byte[] before = backups.get(entry.getKey());
+                    for (int o = 0; o < row.length; o += 2) {
+                        int value = IOFunctions.read2ByteInt(row, o);
+                        if (value != IOFunctions.read2ByteInt(before, o)) writeWord(offset + o, value);
+                    }
+                }
+                for (var entry : rows.entrySet()) {
+                    int offset = getEvolutionRowOffset(baseOffset, pokesInternal[entry.getKey()]);
+                    if (!Arrays.equals(entry.getValue(), Arrays.copyOfRange(rom, offset, offset + entry.getValue().length))) {
+                        throw unsafeCfruDpeTimeEvolution("evolution write readback mismatch");
+                    }
+                }
+            } catch (RuntimeException error) {
+                backups.forEach((id, raw) -> System.arraycopy(raw, 0, rom,
+                        getEvolutionRowOffset(baseOffset, pokesInternal[id]), raw.length));
+                throw error;
+            }
+            rows.forEach((id, row) -> {
+                CfruDpeEvolutionRow original = originalCfruDpeEvolutionRows.get(id);
+                CfruDpeEvolutionRow planned = plannedCfruDpeEvolutionRows.get(id);
+                originalCfruDpeEvolutionRows.put(id, new CfruDpeEvolutionRow(row,
+                        snapshotCfruDpeEvolutions(pokesInternal[id]),
+                        planned == null ? original.fullyModeled() : planned.fullyModeled()));
+            });
             plannedCfruDpeEvolutionRows.clear();
+            plannedCfruDpeTimeRows.clear();
             return;
         }
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
@@ -7324,7 +8005,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private List<CfruDpeModeledEvolution> snapshotCfruDpeEvolutions(Species species) {
-        return species.getEvolutionsFrom().stream().map(evo -> new CfruDpeModeledEvolution(
+        return snapshotCfruDpeEvolutions(species.getEvolutionsFrom());
+    }
+
+    private List<CfruDpeModeledEvolution> snapshotCfruDpeEvolutions(List<Evolution> edges) {
+        return edges.stream().map(evo -> new CfruDpeModeledEvolution(
                 getEvolutionInternalSpeciesId(evo.getFrom()), getEvolutionInternalSpeciesId(evo.getTo()),
                 evo.getType(), evo.getExtraInfo(), evo.getForme())).toList();
     }
@@ -7349,6 +8034,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 throw unsafeCfruDpeEvolutionChange(pk, "missing loaded raw row");
             }
             int offset = getEvolutionRowOffset(baseOffset, pk);
+            if (baseOffset < 0 || offset < baseOffset || (long) offset + getEvolutionRowSize() > rom.length) {
+                throw unsafeCfruDpeEvolutionChange(pk, "evolution row outside memory");
+            }
             if (!Arrays.equals(original.raw(), Arrays.copyOfRange(rom, offset, offset + getEvolutionRowSize()))) {
                 throw unsafeCfruDpeEvolutionChange(pk, "raw row changed outside the evolution writer");
             }
@@ -7356,6 +8044,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             CfruDpeEvolutionRow planned = plannedCfruDpeEvolutionRows.get(id);
             List<CfruDpeModeledEvolution> current = snapshotCfruDpeEvolutions(pk);
             if (planned != null && !planned.modeled().equals(current)) {
+                if (plannedCfruDpeTimeRows.contains(id)) {
+                    throw unsafeCfruDpeEvolutionChange(pk, "graph changed outside the validated time plan");
+                }
                 if (planned.modeled().size() != current.size()) {
                     throw unsafeCfruDpeEvolutionChange(pk, "target plan relationship count changed");
                 }
@@ -7498,6 +8189,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void makeEvolutionsEasier(boolean changeWithOtherEvos, boolean useEstimatedLevels) {
+        if (useCfruDpeGen9SpeciesCount) {
+            if (!cfruEvolutionEasierApplied || evolutionOwnershipWitness == null) {
+                throw evolutionOwnershipError("complete level/friendship plan has not been applied");
+            }
+            validateEvolutionOwnership(evolutionOwnershipWitness, true);
+            return;
+        }
         // Reduce the amount of happiness required to evolve.
         int offset = find(rom, Gen3Constants.friendshipValueForEvoLocator);
         if (offset > 0) {
@@ -7620,7 +8318,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public List<PickupItem> getPickupItems() {
-        rejectUnsupportedCfruDpePickup();
+        if (useCfruDpeGen9SpeciesCount) {
+            return getCfruDpePickupItems(resolveCfruDpePickupLayout());
+        }
         List<PickupItem> pickupItems = new ArrayList<>();
         int pickupItemCount = romEntry.getIntValue("PickupItemCount");
         int sizeOfPickupEntry = romEntry.getRomType() == Gen3Constants.RomType_Em ? 2 : 4;
@@ -7682,7 +8382,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void setPickupItems(List<PickupItem> pickupItems) {
-        rejectUnsupportedCfruDpePickup();
+        if (useCfruDpeGen9SpeciesCount) {
+            setCfruDpePickupItems(pickupItems);
+            return;
+        }
         int sizeOfPickupEntry = romEntry.getRomType() == Gen3Constants.RomType_Em ? 2 : 4;
         if (pickupItemsTableOffset > 0) {
             for (int i = 0; i < pickupItems.size(); i++) {
@@ -7693,12 +8396,199 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
-    private void rejectUnsupportedCfruDpePickup() {
-        if (useCfruDpeGen9SpeciesCount) {
-            // CFRU's ChoosePickupItem uses separate level-dependent common/rare
-            // arrays. The vanilla FRLG locator below does not identify them.
-            throw new RomIOException("Pickup randomization is unsupported for this CFRU/DPE profile. "
-                    + "Set Pickup Items to Unchanged; the engine's active tables are preserved.");
+    // Reviewed #75 ABI retained source-identically in combined CFRU #77,
+    // e27e2113e4d59dc76cf5da8d4c43b067addae348. The user must freshly validate
+    // this same combined output's full Pickup code/data owners before real writes;
+    // this rooted ABI reader alone does not attest linked executable extents.
+    // Resolve from the live dispatch, never by scanning for descriptor/table bytes.
+    private static final int[] CFRU_PICKUP_REPOINTS = {0x14C1C, 0x15A28, 0x15C6C, 0x15C98, 0x1D054};
+    private static final int[] CFRU_PICKUP_BRIDGE = {
+            0xB510, 0x4804, 0x4B04, 0xF000, 0xF803, 0xBC10, 0xBC01, 0x4700, 0x4718, 0x46C0};
+    private static final int[] CFRU_PICKUP_CEILINGS = {
+            19661, 26214, 32768, 39322, 45875, 52429, 58982, 61604, 64225, 64881, 65536};
+    // PickupItem exposes integer percentages; these are the nominal UI weights.
+    // Exact u16-draw partition remains in the untouched eleven u32 ceilings.
+    private static final int[] CFRU_PICKUP_WEIGHTS = {30, 10, 10, 10, 10, 10, 10, 4, 4, 1, 1};
+    private static final int CFRU_PICKUP_ITEM_COUNT = 779;
+
+    private record CfruPickupLayout(int common, int rare) {
+        int slotOffset(int slot) {
+            return slot < 18 ? common + slot * 2 : rare + (slot - 18) * 2;
+        }
+    }
+
+    private static RomIOException cfruPickupFailure(String reason) {
+        return new RomIOException("Pickup Random requires the supported CFRU/DPE E5 descriptor v1: "
+                + reason + ". Set Pickup Items to Unchanged for this unsupported output.");
+    }
+
+    private void requireCfruPickup(boolean condition, String reason) {
+        if (!condition) {
+            throw cfruPickupFailure(reason);
+        }
+    }
+
+    private long cfruPickupWord(int offset) {
+        requireCfruPickup(rom != null && offset >= 0 && offset <= rom.length - 4,
+                "missing or truncated Pickup data");
+        return Integer.toUnsignedLong(IOFunctions.readFullInt(rom, offset));
+    }
+
+    private int cfruPickupRegion(long pointer, int size, int alignment) {
+        long offset = pointer - 0x08000000L;
+        requireCfruPickup(pointer >= 0x08000000L && pointer < 0x0A000000L
+                        && pointer % alignment == 0 && rom != null
+                        && offset <= rom.length - (long) size && offset + size <= 0x02000000L,
+                "invalid, misaligned or out-of-bounds Pickup pointer");
+        return (int) offset;
+    }
+
+    private CfruPickupLayout resolveCfruDpePickupLayout() {
+        requireCfruPickup(rom != null && romEntry != null && items != null, "ROM/item data not loaded");
+        requireCfruPickup("BPRE".equals(romEntry.getRomCode())
+                        && romEntry.getRomType() == Gen3Constants.RomType_FRLG,
+                "unsupported game profile");
+        long tablePointer = cfruPickupWord(CFRU_PICKUP_REPOINTS[0]);
+        for (int site : CFRU_PICKUP_REPOINTS) {
+            requireCfruPickup(cfruPickupWord(site) == tablePointer, "missing or ambiguous E5 dispatch root");
+        }
+        int commandTable = cfruPickupRegion(tablePointer, 256 * 4, 4);
+        long anchorPointer = cfruPickupWord(commandTable + 0xE5 * 4);
+        requireCfruPickup((anchorPointer & 1) == 1, "E5 anchor is not Thumb");
+        int bridge = cfruPickupRegion(anchorPointer & ~1L, 28, 4);
+        for (int i = 0; i < CFRU_PICKUP_BRIDGE.length; i++) {
+            requireCfruPickup(IOFunctions.read2ByteInt(rom, bridge + i * 2) == CFRU_PICKUP_BRIDGE[i],
+                    "missing or incompatible E5 bridge");
+        }
+        int descriptor = cfruPickupRegion(cfruPickupWord(bridge + 20), 64, 4);
+        long consumerPointer = cfruPickupWord(bridge + 24);
+        requireCfruPickup((consumerPointer & 1) == 1, "Pickup consumer is not Thumb");
+        int consumer = cfruPickupRegion(consumerPointer & ~1L, 2, 2);
+        requireCfruPickup(cfruPickupWord(descriptor) == 0x31555043L
+                        && IOFunctions.read2ByteInt(rom, descriptor + 4) == 1
+                        && IOFunctions.read2ByteInt(rom, descriptor + 6) == 64,
+                "unknown descriptor magic/version/size");
+        requireCfruPickup(cfruPickupWord(descriptor + 8) == 6,
+                "unsupported config (requires non-UNBOUND, straight-to-bag and knocked-off)");
+        requireCfruPickup(cfruPickupWord(descriptor + 12) == 1
+                        && cfruPickupWord(descriptor + 52) == CFRU_PICKUP_ITEM_COUNT,
+                "unsupported item schema/count");
+        requireCfruPickup(cfruPickupWord(descriptor + 56) == consumerPointer
+                        && cfruPickupWord(descriptor + 60) == anchorPointer,
+                "descriptor is not coupled to the live E5 anchor/consumer");
+        int[] counts = {18, 11, 9, 2};
+        for (int i = 0; i < counts.length; i++) {
+            requireCfruPickup(IOFunctions.read2ByteInt(rom, descriptor + 32 + i * 2) == counts[i],
+                    "incompatible table counts");
+        }
+        int[] shape = {4, 2, 4, 10, 10, 9, 2, 1, 100, 0, 0, 0};
+        for (int i = 0; i < shape.length; i++) {
+            requireCfruPickup((rom[descriptor + 40 + i] & 0xFF) == shape[i],
+                    "incompatible pointer/item/ceiling widths, level windows or reserved fields");
+        }
+        int[] sizes = {36, 22, 36, 8};
+        int[] tables = new int[4];
+        List<int[]> regions = new ArrayList<>();
+        regions.add(new int[]{commandTable, 1024});
+        regions.add(new int[]{bridge, 28});
+        regions.add(new int[]{descriptor, 64});
+        regions.add(new int[]{consumer, 2});
+        for (int site : CFRU_PICKUP_REPOINTS) {
+            regions.add(new int[]{site, 4});
+        }
+        // The header contains the profile identity; no table may alias it.
+        regions.add(new int[]{0, 0xC0});
+        for (int i = 0; i < tables.length; i++) {
+            tables[i] = cfruPickupRegion(cfruPickupWord(descriptor + 16 + i * 4), sizes[i], i < 2 ? 2 : 4);
+            regions.add(new int[]{tables[i], sizes[i]});
+        }
+        for (int i = 0; i < regions.size(); i++) {
+            for (int j = i + 1; j < regions.size(); j++) {
+                int[] first = regions.get(i), second = regions.get(j);
+                requireCfruPickup(first[0] + first[1] <= second[0] || second[0] + second[1] <= first[0],
+                        "overlapping or aliased Pickup/dispatch regions");
+            }
+        }
+        for (int i = 0; i < CFRU_PICKUP_CEILINGS.length; i++) {
+            int offset = i < 9 ? tables[2] + i * 4 : tables[3] + (i - 9) * 4;
+            requireCfruPickup(cfruPickupWord(offset) == CFRU_PICKUP_CEILINGS[i],
+                    "incompatible common/rare probability ceilings");
+        }
+        CfruPickupLayout layout = new CfruPickupLayout(tables[0], tables[1]);
+        for (int slot = 0; slot < 29; slot++) {
+            cfruPickupItem(IOFunctions.read2ByteInt(rom, layout.slotOffset(slot)));
+        }
+        return layout;
+    }
+
+    private Item cfruPickupItem(int internal) {
+        requireCfruPickup(internal > 0 && internal < CFRU_PICKUP_ITEM_COUNT, "invalid raw Pickup item ID");
+        int id = Gen3Constants.itemIDToStandard(internal);
+        Item item = id < items.size() ? items.get(id) : null;
+        requireCfruPickup(item != null && item.getId() == id && item.isAllowed() && !item.isTM()
+                        && !isCfruDpeItemNameFallback(item.getName())
+                        && !CfruDpeItemPoolPolicy.isBannedFromNormalItemPools(item),
+                "unknown or ineligible Pickup item");
+        requireCfruPickup(Gen3Constants.itemIDToInternal(id) == internal, "non-roundtripping Pickup item ID");
+        return item;
+    }
+
+    private int[] cfruPickupProbabilities(int slot) {
+        int[] probabilities = new int[PickupItem.PROBABILITY_SLOTS];
+        for (int row = 0; row < probabilities.length; row++) {
+            int index = slot < 18 ? slot - row : slot - 18 - row;
+            int window = slot < 18 ? 9 : 2;
+            if (index >= 0 && index < window) {
+                probabilities[row] = CFRU_PICKUP_WEIGHTS[index + (slot < 18 ? 0 : 9)];
+            }
+        }
+        return probabilities;
+    }
+
+    private List<PickupItem> getCfruDpePickupItems(CfruPickupLayout layout) {
+        List<PickupItem> result = new ArrayList<>(29);
+        for (int slot = 0; slot < 29; slot++) {
+            PickupItem item = new PickupItem(cfruPickupItem(IOFunctions.read2ByteInt(rom, layout.slotOffset(slot))));
+            System.arraycopy(cfruPickupProbabilities(slot), 0, item.getProbabilities(), 0, PickupItem.PROBABILITY_SLOTS);
+            result.add(item);
+        }
+        return result;
+    }
+
+    private void setCfruDpePickupItems(List<PickupItem> pickupItems) {
+        // Resolve anew: never trust offsets cached by a previous get or ROM load.
+        CfruPickupLayout layout = resolveCfruDpePickupLayout();
+        requireCfruPickup(pickupItems != null && pickupItems.size() == 29, "expected 29 physical Pickup slots");
+        int[] plan = new int[29], original = new int[29];
+        for (int slot = 0; slot < plan.length; slot++) {
+            PickupItem replacement = pickupItems.get(slot);
+            requireCfruPickup(replacement != null && replacement.getItem() != null, "missing replacement item");
+            int id = replacement.getItem().getId();
+            Integer internal = Gen3Constants.itemIDToInternalMap.get(id);
+            if (id >= ItemIDs.UNIQUE_OFFSET) {
+                internal = id - ItemIDs.UNIQUE_OFFSET;
+            }
+            requireCfruPickup(internal != null && cfruPickupItem(internal).getId() == id,
+                    "unmapped or incompatible replacement item ID");
+            requireCfruPickup(Arrays.equals(replacement.getProbabilities(), cfruPickupProbabilities(slot)),
+                    "replacement changes the level-window probabilities");
+            plan[slot] = internal;
+            original[slot] = IOFunctions.read2ByteInt(rom, layout.slotOffset(slot));
+        }
+        // Every failure above precedes mutation; commit only the two u16 ranges.
+        try {
+            for (int slot = 0; slot < plan.length; slot++) {
+                IOFunctions.write2ByteInt(rom, layout.slotOffset(slot), plan[slot]);
+            }
+            for (int slot = 0; slot < plan.length; slot++) {
+                requireCfruPickup(IOFunctions.read2ByteInt(rom, layout.slotOffset(slot)) == plan[slot],
+                        "Pickup write/readback mismatch");
+            }
+        } catch (RuntimeException failure) {
+            for (int slot = 0; slot < original.length; slot++) {
+                IOFunctions.write2ByteInt(rom, layout.slotOffset(slot), original[slot]);
+            }
+            throw failure;
         }
     }
 
@@ -9302,6 +10192,142 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     + "skipped invalid pokemon palettes during load: normal=" + skippedNormalPalettes
                     + " shiny=" + skippedShinyPalettes
                     + " examples=" + skippedExamples);
+        }
+    }
+
+    /** Immutable decision only: no palettes, snapshots or ROM addresses escape this query. */
+    public record CfruDpePalettePairEligibility(boolean eligible, String reason) { }
+
+    /**
+     * Read-only preflight for GFX-004. Both current channels must still match their trusted
+     * load snapshots and their source-owned save entries. This is not an allocation guarantee
+     * or a ROM-writer transaction; the existing copy writer remains responsible for saving.
+     */
+    public CfruDpePalettePairEligibility getCfruDpePalettePairEligibility(Species species) {
+        if (!useCfruDpeGen9SpeciesCount || !isRomHack || romEntry == null
+                || !"BPRE".equals(romEntry.getRomCode())
+                || romEntry.getRomType() != Gen3Constants.RomType_FRLG || rom == null) {
+            return palettePairRejected("invalid selected profile");
+        }
+        if (species == null || species.getNumber() == SpeciesIDs.unown
+                || !species.isBaseForme() || species.getFormeNumber() != 0
+                || species.isActuallyCosmetic()
+                || SpecialFormPredicates.cfruDpePoolCategory(species)
+                    != SpecialFormPredicates.CfruDpePoolCategory.ORDINARY) {
+            return palettePairRejected("uncertain species/form");
+        }
+        int dex = species.getNumber();
+        if (pokedexToInternal == null || dex <= 0 || dex >= pokedexToInternal.length) {
+            return palettePairRejected("invalid Dex owner");
+        }
+        int owner = getCfruDpePaletteTableIndexForSave(species);
+        int count = romEntry.getIntValue("PokemonCount");
+        if (owner <= 0 || owner > count || owner != species.getSpeciesSetIdentityNumber()
+                || pokesInternal == null || owner >= pokesInternal.length || pokesInternal[owner] != species
+                || internalToPokedex == null || owner >= internalToPokedex.length
+                || internalToPokedex[owner] != dex) {
+            return palettePairRejected("mismatched source/save owner");
+        }
+        Palette normal = species.getNormalPalette(), shiny = species.getShinyPalette();
+        if (!isCompleteCfruDpePairPalette(normal) || !isCompleteCfruDpePairPalette(shiny)) {
+            return palettePairRejected("missing/incomplete current pair");
+        }
+        byte[] originalNormal = originalCfruDpeNormalPaletteBytes.get(species);
+        byte[] originalShiny = originalCfruDpeShinyPaletteBytes.get(species);
+        if (originalNormal == null || originalShiny == null
+                || originalNormal.length != 32 || originalShiny.length != 32) {
+            return palettePairRejected("missing original pair snapshots");
+        }
+        if (!Arrays.equals(normal.toBytes(), originalNormal) || !Arrays.equals(shiny.toBytes(), originalShiny)) {
+            return palettePairRejected("stale current pair");
+        }
+        int normalTable = romEntry.getIntValue("PokemonNormalPalettes");
+        int shinyTable = romEntry.getIntValue("PokemonShinyPalettes");
+        long tableLength = ((long) count + 1) * 8;
+        if (!isCfruDpePairTableInBounds(normalTable, tableLength)
+                || !isCfruDpePairTableInBounds(shinyTable, tableLength)
+                || ((long) normalTable < (long) shinyTable + tableLength
+                    && (long) shinyTable < (long) normalTable + tableLength)) {
+            return palettePairRejected("invalid/overlapping palette tables");
+        }
+        boolean selectedOwner = false;
+        // These are the actual writer's species, including owners that will be skipped by GFX-004.
+        for (Species other : getSpeciesSet()) {
+            if (other == species) {
+                selectedOwner = true;
+            } else if (other == null || other.getNumber() <= 0
+                    || other.getNumber() >= pokedexToInternal.length) {
+                return palettePairRejected("unresolved selected owner");
+            } else if (getCfruDpePaletteTableIndexForSave(other) == owner) {
+                return palettePairRejected("duplicate save-table owner");
+            }
+        }
+        if (!selectedOwner) {
+            return palettePairRejected("not a selected save owner");
+        }
+        if (normal == shiny) {
+            return palettePairRejected("shared Java palette");
+        }
+        for (Species other : getSpeciesSetInclFormes()) {
+            if (other != species && (normal == other.getNormalPalette() || normal == other.getShinyPalette()
+                    || shiny == other.getNormalPalette() || shiny == other.getShinyPalette())) {
+                return palettePairRejected("shared Java palette");
+            }
+        }
+        // Entry arithmetic is long until full-table bounds have established that narrowing is safe.
+        int normalEntry = (int) ((long) normalTable + (long) owner * 8);
+        int shinyEntry = (int) ((long) shinyTable + (long) owner * 8);
+        if (!matchesCfruDpePairSource(normalEntry, originalNormal, normalTable, shinyTable, tableLength)
+                || !matchesCfruDpePairSource(shinyEntry, originalShiny, normalTable, shinyTable, tableLength)) {
+            return palettePairRejected("invalid/stale original palette pointer");
+        }
+        // Equal original payload pointers are harmless here: writeCompressedPaletteCopy allocates
+        // NEW data and repoints only this owner's entry; it never overwrites that shared payload.
+        // Table-entry collisions above are different and cannot be authorized by payload equality.
+        return new CfruDpePalettePairEligibility(true, "loaded pair with unique save-table owner");
+    }
+
+    private CfruDpePalettePairEligibility palettePairRejected(String reason) {
+        return new CfruDpePalettePairEligibility(false, reason);
+    }
+
+    private boolean isCompleteCfruDpePairPalette(Palette palette) {
+        if (palette == null || palette.size() != 16) {
+            return false;
+        }
+        for (int i = 0; i < 16; i++) {
+            if (palette.get(i) == null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isCfruDpePairTableInBounds(int table, long length) {
+        return table > 0 && table % 4 == 0 && length > 0 && (long) table + length <= rom.length;
+    }
+
+    private boolean matchesCfruDpePairSource(int entry, byte[] snapshot,
+                                           int normalTable, int shinyTable, long tableLength) {
+        int pointer = readPointer(entry, true);
+        if (pointer <= 0 || (long) pointer + 4 > rom.length
+                || (pointer >= normalTable && (long) pointer < normalTable + tableLength)
+                || (pointer >= shinyTable && (long) pointer < shinyTable + tableLength)
+                || (rom[pointer] != 0x10 && rom[pointer] != 0x11)
+                || (rom[pointer + 1] & 0xFF) != 32 || rom[pointer + 2] != 0 || rom[pointer + 3] != 0) {
+            return false;
+        }
+        // Bound the read as well as its 32-byte output. Even the legacy LZ10 decoder's
+        // trailing flag group fits within 64 bytes. Never decode through a pointer table.
+        long end = Math.min((long) rom.length, (long) pointer + 64);
+        if (pointer < normalTable) end = Math.min(end, normalTable);
+        if (pointer < shinyTable) end = Math.min(end, shinyTable);
+        try {
+            byte[] source = Arrays.copyOfRange(rom, pointer, (int) end);
+            return Arrays.equals(new Palette(DSDecmp.Decompress(source)).toBytes(), snapshot);
+        } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
+            // Malformed synthetic or source data is an expected rejection; no private diagnostics.
+            return false;
         }
     }
 
