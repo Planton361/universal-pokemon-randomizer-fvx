@@ -8332,6 +8332,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
             byte[] raw = current.clone();
             List<Evolution> expected = new ArrayList<>();
+            Set<Integer> triggerSlots = new LinkedHashSet<>();
             boolean changed = false;
             for (Evolution edge : owner.getEvolutionsFrom()) {
                 Evolution converted = new Evolution(edge);
@@ -8358,22 +8359,32 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                             || IOFunctions.read2ByteInt(original.raw(), match + 6) != 0) {
                         throw unsafeCfruDpeEvolutionChange(owner, "missing original impossible-evolution slot");
                     }
-                    updateImpossibleEvolution(converted, true, useEstimatedLevels);
-                    int newMethod = Gen3Constants.evolutionTypeToIndex(converted.getType());
-                    int newParameter = converted.getType().usesItem()
-                            ? Gen3Constants.itemIDToInternal(converted.getExtraInfo()) : converted.getExtraInfo();
-                    if ((newMethod != 4 && newMethod != 7) || newParameter < 1 || newParameter > 0xFFFF
-                            || (newMethod == 4 && newParameter > 100)) {
-                        throw unsafeCfruDpeEvolutionChange(owner, "converted fields outside supported method/parameter bounds");
+                    triggerSlots.add(match);
+                    int itemAlternative = method == 6
+                            ? cfruDpeIdenticalItemAlternative(owner, original.raw(), current, match) : -1;
+                    if (itemAlternative >= 0) {
+                        // The source already provides this exact no-trade route. Preserve
+                        // both slots, including a separately validated common target edit.
+                        triggerSlots.add(itemAlternative);
+                    } else {
+                        updateImpossibleEvolution(converted, true, useEstimatedLevels);
+                        int newMethod = Gen3Constants.evolutionTypeToIndex(converted.getType());
+                        int newParameter = converted.getType().usesItem()
+                                ? Gen3Constants.itemIDToInternal(converted.getExtraInfo()) : converted.getExtraInfo();
+                        if ((newMethod != 4 && newMethod != 7) || newParameter < 1 || newParameter > 0xFFFF
+                                || (newMethod == 4 && newParameter > 100)) {
+                            throw unsafeCfruDpeEvolutionChange(owner, "converted fields outside supported method/parameter bounds");
+                        }
+                        // No shifts, packing or auxiliary/target normalization: exactly two words.
+                        IOFunctions.write2ByteInt(raw, match, newMethod);
+                        IOFunctions.write2ByteInt(raw, match + 2, newParameter);
+                        changes.add(new CfruDpeImpossibleChange(edge, converted)); changed = true;
                     }
-                    // No shifts, packing or auxiliary/target normalization: exactly two words.
-                    IOFunctions.write2ByteInt(raw, match, newMethod);
-                    IOFunctions.write2ByteInt(raw, match + 2, newParameter);
-                    changes.add(new CfruDpeImpossibleChange(edge, converted)); changed = true;
                 }
                 expected.add(converted);
             }
-            if (changed) {
+            if (changed || !triggerSlots.isEmpty()) {
+                validateCfruDpeImpossibleTriggers(owner, raw, triggerSlots);
                 List<CfruDpeModeledEvolution> modeled = snapshotCfruDpeEvolutions(expected);
                 if (!modeled.equals(snapshotCfruDpeEvolutions(decodeCfruDpeEvolutionRow(owner, raw)))) {
                     throw unsafeCfruDpeEvolutionChange(owner, "emitted slot graph differs or collapses relationships");
@@ -8382,6 +8393,65 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
         }
         return new CfruDpeImpossiblePlan(rows, changes);
+    }
+
+    private int cfruDpeIdenticalItemAlternative(Species owner, byte[] original, byte[] current, int trade) {
+        int parameter = IOFunctions.read2ByteInt(original, trade + 2);
+        int target = IOFunctions.read2ByteInt(original, trade + 4);
+        int alternative = -1;
+        for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+            int o = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+            if (o == trade || IOFunctions.read2ByteInt(original, o) != 7
+                    || IOFunctions.read2ByteInt(original, o + 2) != parameter
+                    || IOFunctions.read2ByteInt(original, o + 4) != target) continue;
+            // Selected DPE ITEM_DAWN_STONE=101 is gender-gated even with auxiliary zero.
+            if (alternative >= 0 || IOFunctions.read2ByteInt(original, o + 6) != 0
+                    || parameter == 101) {
+                throw unsafeCfruDpeEvolutionChange(owner, "ambiguous or conditional item alternative for slot "
+                        + trade / GEN3_EVOLUTION_ENTRY_SIZE);
+            }
+            if (IOFunctions.read2ByteInt(current, o) != 7
+                    || IOFunctions.read2ByteInt(current, o + 2) != parameter
+                    || IOFunctions.read2ByteInt(current, o + 4) != IOFunctions.read2ByteInt(current, trade + 4)
+                    || IOFunctions.read2ByteInt(current, o + 6) != 0) {
+                throw unsafeCfruDpeEvolutionChange(owner, "item alternative drift for source/slot "
+                        + getEvolutionInternalSpeciesId(owner) + "/" + slot);
+            }
+            alternative = o;
+        }
+        return alternative;
+    }
+
+    // GetEvolutionTargetSpecies EVO_MODE_NORMAL at the selected CFRU #77 source.
+    // Every listed predicate can coincide with an unconditional level conversion.
+    // Shedinja (14), inactive damage-location (33), transformations and unknown
+    // methods do not assign the ordinary consumer's target in this mode.
+    private static final Set<Integer> CFRU_DPE_IMPOSSIBLE_NORMAL_METHODS = Set.of(
+            1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31, 32, 35, 37, 38, 40, 41, 42);
+
+    private void validateCfruDpeImpossibleTriggers(Species owner, byte[] row, Set<Integer> triggerSlots) {
+        for (int o : triggerSlots) {
+            int method = IOFunctions.read2ByteInt(row, o);
+            int parameter = IOFunctions.read2ByteInt(row, o + 2);
+            int target = IOFunctions.read2ByteInt(row, o + 4);
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                int other = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+                if (other == o || IOFunctions.read2ByteInt(row, other + 4) == target) continue;
+                int otherMethod = IOFunctions.read2ByteInt(row, other);
+                int otherParameter = IOFunctions.read2ByteInt(row, other + 2);
+                boolean conflict = (method == 4 && CFRU_DPE_IMPOSSIBLE_NORMAL_METHODS.contains(otherMethod))
+                        || (method == 7 && CFRU_DPE_ITEM_USE_METHODS.contains(otherMethod)
+                            && parameter == otherParameter)
+                        || (method == 6 && (otherMethod == 5
+                            || (otherMethod == 6 && parameter == otherParameter)));
+                if (conflict) {
+                    throw unsafeCfruDpeEvolutionChange(owner, "conflicting final triggers at source/slot "
+                            + getEvolutionInternalSpeciesId(owner) + "/" + o / GEN3_EVOLUTION_ENTRY_SIZE
+                            + " with slot " + slot + " (methods " + method + "/" + otherMethod + ")");
+                }
+            }
+        }
     }
 
     @Override

@@ -99,15 +99,15 @@ class Gen3CfruDpeImpossibleEvolutionOwnerTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void nativeFeebasTradeItemUsesExistingLevelPolicy(boolean estimated) throws Exception {
+    void nativeFeebasKeepsItsIdenticalPrismScaleItemRoute(boolean estimated) throws Exception {
         var f=fixture();
         CfruDpeEvolutionFixture.inventory().stream().filter(slot -> slot.source()==328)
                 .forEach(slot -> f.entry(slot.source(),slot.slot(),slot.method(),slot.parameter(),slot.target(),slot.auxiliary()));
         f.loadEvolutions(); var edge=f.species[328].getEvolutionsFrom().get(1);
         assertEquals(EvolutionType.TRADE_ITEM,edge.getType()); edge.setEstimatedEvoLvl(43);
         byte[] expected=f.memory.clone(); f.removeImpossibleEvolutions(false,estimated);
-        setWord(expected,328,1,0,4); setWord(expected,328,1,2,estimated ? 43 : 30);
         f.write(); assertArrayEquals(expected,f.memory); assertSame(f.species[329],edge.getTo());
+        assertEquals(EvolutionType.TRADE_ITEM,edge.getType()); assertTrue(f.getPreImprovedEvolutions().isEmpty());
     }
 
     @Test
