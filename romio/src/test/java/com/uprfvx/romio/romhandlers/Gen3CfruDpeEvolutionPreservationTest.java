@@ -573,6 +573,38 @@ class Gen3CfruDpeEvolutionPreservationTest {
     }
 
     @Test
+    void f05FullSourceSlotWritesRespectTheExistingBoundWitnessAndImmutableRecord() throws Exception {
+        var f = Gen3CfruDpeImpossibleEvolutionRawSlotTest.nativeOwners(new WitnessFixture());
+        f.populateExactSource(); f.attest(220); f.bind(); byte[] before=f.memory.clone();
+        f.preflightCfruDpeImpossibleEvolutions(false,false); f.removeImpossibleEvolutions(false,false); f.write();
+        assertEquals(7,f.word(133,0,0)); assertEquals(93,f.word(133,0,2));
+        assertEquals(7,f.word(133,1,0)); assertEquals(94,f.word(133,1,2));
+        assertArrayEquals(Arrays.copyOfRange(before,WitnessFixture.RECORD,WitnessFixture.RECORD+32),
+                Arrays.copyOfRange(f.memory,WitnessFixture.RECORD,WitnessFixture.RECORD+32));
+        f.preflightCfruDpeImpossibleEvolutions(false,false); f.write();
+    }
+
+    @Test
+    void f05RejectsLiveWitnessAbiPointerAndConsumerDriftBeforeAnyGraphOrLogPublication() throws Exception {
+        for(int mode=0;mode<5;mode++) {
+            var f = Gen3CfruDpeImpossibleEvolutionRawSlotTest.nativeOwners(new WitnessFixture());
+            f.populateExactSource(); f.attest(220); f.bind();
+            switch(mode) {
+                case 0 -> f.memory[WitnessFixture.RECORD]^=1;
+                case 1 -> f.memory[WitnessFixture.RECORD+18]^=1;
+                case 2 -> f.memory[0x42F6C]^=4;
+                case 3 -> f.memory[0x48000]^=1;
+                case 4 -> f.memory[0x42EC4]^=1;
+            }
+            byte[] before=f.memory.clone(); var edges=List.copyOf(f.species[133].getEvolutionsFrom());
+            assertThrows(RomIOException.class,() -> f.preflightCfruDpeImpossibleEvolutions(false,false));
+            assertThrows(RomIOException.class,() -> f.removeImpossibleEvolutions(false,false));
+            assertArrayEquals(before,f.memory); assertEquals(edges,f.species[133].getEvolutionsFrom());
+            assertTrue(f.getPreImprovedEvolutions().isEmpty());
+        }
+    }
+
+    @Test
     void combinedCfruRevisionIsRequiredAndStandaloneWitnessCannotBeReused() throws Exception {
         var f = new WitnessFixture(); f.populateExactSource(); f.attest(220);
         f.witness.setProperty("cfru.sha", "958c30ec58919ac3e13a40ddb9bd94a86651636e");

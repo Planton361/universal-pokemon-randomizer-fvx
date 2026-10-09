@@ -52,7 +52,7 @@ class Gen3CfruDpeImpossibleEvolutionOwnerTest {
     }
 
     @Test
-    void completeOriginalEeveeGraphUpdatesButOpaqueRowWriterStillRejects() throws Exception {
+    void completeOriginalEeveeGraphWritesOnlyFriendshipSlotWords() throws Exception {
         var f = fixture();
         CfruDpeEvolutionFixture.inventory().stream().filter(s -> s.source() == 133 || s.source() == 1270)
                 .forEach(s -> f.entry(s.source(), s.slot(), s.method(), s.parameter(), s.target(), s.auxiliary()));
@@ -60,8 +60,10 @@ class Gen3CfruDpeImpossibleEvolutionOwnerTest {
         f.removeImpossibleEvolutions(false, false);
         assertEquals(EvolutionType.STONE, f.species[133].getEvolutionsFrom().get(0).getType());
         assertEquals(EvolutionType.STONE, f.species[133].getEvolutionsFrom().get(1).getType());
-        assertThrows(RomIOException.class, f::write);
-        assertArrayEquals(before, f.memory, "Sylveon auxiliary and G-Max slots may not be repacked");
+        byte[] expected=before.clone();
+        setWord(expected,133,0,0,7); setWord(expected,133,0,2,93);
+        setWord(expected,133,1,0,7); setWord(expected,133,1,2,94);
+        f.write(); assertArrayEquals(expected, f.memory, "Sylveon auxiliary and G-Max slots remain exact");
     }
 
     @ParameterizedTest
@@ -176,7 +178,7 @@ class Gen3CfruDpeImpossibleEvolutionOwnerTest {
 
     @ParameterizedTest
     @ValueSource(ints = {0,1,2,3})
-    void changedOpaqueRowsRejectWithoutRepackingSlotsOrAuxiliary(int mode) throws Exception {
+    void opaqueRowsRetainExactSlotsAndRejectAmbiguousOrActiveAuxiliary(int mode) throws Exception {
         var f=fixture(); f.entry(133,0,2,0,196,0);
         switch (mode) {
             case 0 -> f.entry(133,0,2,0,196,0xBEEF);
@@ -185,8 +187,15 @@ class Gen3CfruDpeImpossibleEvolutionOwnerTest {
             case 3 -> f.entry(133,15,0xFFFF,0xCAFE,94,0xABCD);
         }
         f.loadEvolutions(); byte[] before=f.memory.clone();
-        f.removeImpossibleEvolutions(false,false);
-        assertThrows(RomIOException.class,f::write); assertArrayEquals(before,f.memory);
+        if (mode == 0 || mode == 2) {
+            assertThrows(RomIOException.class,() -> f.removeImpossibleEvolutions(false,false));
+            assertArrayEquals(before,f.memory); assertTrue(f.getPreImprovedEvolutions().isEmpty());
+        } else {
+            byte[] expected=before.clone();
+            setWord(expected,133,0,0,7); setWord(expected,133,0,2,93);
+            if (mode == 1) { setWord(expected,133,3,0,7); setWord(expected,133,3,2,94); }
+            f.removeImpossibleEvolutions(false,false); f.write(); assertArrayEquals(expected,f.memory);
+        }
     }
 
     @Test
@@ -203,7 +212,7 @@ class Gen3CfruDpeImpossibleEvolutionOwnerTest {
         int[] map=new int[1440]; for (int id=1;id<1440;id++) map[id]=id;
         f.setField("internalToPokedex",map);
         for (int id : new int[]{133,93,67}) f.entry(id,0,5,0,94,0);
-        f.loadEvolutions(); var owners=new ArrayList<>(f.getSpecies()); Collections.reverse(owners);
+        f.loadEvolutions(); var owners=new ArrayList<>(f.getSpecies()); Collections.reverse(owners.subList(1,owners.size()));
         f.setField("speciesList",owners); f.removeImpossibleEvolutions(false,false);
         assertEquals(List.of(67,93,133),f.visited);
     }

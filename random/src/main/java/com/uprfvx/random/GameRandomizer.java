@@ -214,6 +214,11 @@ public class GameRandomizer {
                     throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires separate approval.");
                 }
             }
+            // F05 must reject unapproved combinations/slot drift before any updater or randomizer.
+            if (settings.isChangeImpossibleEvolutions() && romHandler instanceof Gen3RomHandler gen3) {
+                gen3.preflightCfruDpeImpossibleEvolutions(settings.isMakeEvolutionsEasier(),
+                        settings.isRemoveTimeBasedEvolutions());
+            }
             if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3) {
                 gen3.preflightCfruEvolutionEasier(settings.getMakeEvolutionsEasierLvl());
             }
