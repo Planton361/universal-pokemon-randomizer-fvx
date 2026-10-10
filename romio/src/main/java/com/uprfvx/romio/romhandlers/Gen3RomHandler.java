@@ -11556,9 +11556,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             return;
         }
         List<CfruDpePaletteAllocation> allocations = new ArrayList<>(writes.size());
+        List<CfruDpePaletteRange> rejectedOccupiedRanges = new ArrayList<>();
         try {
-            for (CfruDpePaletteWrite write : writes) {
-                allocations.add(reserveCfruDpePaletteWrite(write));
+            for (int i = 0; i < writes.size(); i++) {
+                CfruDpePaletteAllocation allocation = reserveCfruDpePaletteWrite(
+                        writes.get(i), rejectedOccupiedRanges);
+                allocations.add(allocation);
+                cfruDpePaletteWriteCheckpoint("allocation-reserved", i, allocation.base);
             }
             for (int i = 0; i < allocations.size(); i++) {
                 CfruDpePaletteAllocation allocation = allocations.get(i);
@@ -11591,30 +11595,36 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 cfruDpePaletteWriteCheckpoint("pointer-written", i, allocation.write.pointerOffset());
             }
         } catch (RuntimeException failure) {
-            rollbackCfruDpePaletteBatch(writes, allocations, failure);
+            rollbackCfruDpePaletteBatch(writes, allocations, rejectedOccupiedRanges, failure);
             if (failure instanceof RomIOException ioFailure) {
                 throw ioFailure;
             }
             throw new RomIOException("CFRU/DPE palette batch write failed; all palette changes were restored", failure);
         } catch (Error failure) {
-            rollbackCfruDpePaletteBatch(writes, allocations, failure);
+            rollbackCfruDpePaletteBatch(writes, allocations, rejectedOccupiedRanges, failure);
             throw failure;
         }
     }
 
-    private CfruDpePaletteAllocation reserveCfruDpePaletteWrite(CfruDpePaletteWrite write) {
+    private CfruDpePaletteAllocation reserveCfruDpePaletteWrite(
+            CfruDpePaletteWrite write, List<CfruDpePaletteRange> rejectedOccupiedRanges) {
         int reservedLength = write.compressed().length + 3;
         int base;
-        do {
+        while (true) {
             base = getFreedSpace().findAndUnfree(reservedLength);
             if (base == -1) {
                 throw new RomIOException("ROM full. Can't reserve the complete CFRU/DPE palette batch.");
             }
-            if (base < 0 || base > rom.length - reservedLength) {
+            if (base < 0 || (long) base + reservedLength > rom.length) {
                 getFreedSpace().free(base, reservedLength);
                 throw new RomIOException("CFRU/DPE palette allocator returned an out-of-bounds range");
             }
-        } while (isRomSpaceUsed(base, reservedLength));
+            if (isRomSpaceUsed(base, reservedLength)) {
+                restoreUnoccupiedCfruDpePaletteBytes(base, reservedLength, rejectedOccupiedRanges);
+                continue;
+            }
+            break;
+        }
 
         try {
             int alignmentShift = (4 - (base & 3)) & 3;
@@ -11634,8 +11644,49 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /**
+     * findAndUnfree() removes the candidate before its ROM bytes can be checked. If stale allocator
+     * metadata points into occupied bytes, return only the still-free runs. Record occupied runs so
+     * a failed batch can restore its exact original allocator ledger; a successful batch leaves
+     * those disproven bytes quarantined. ROM bytes are never changed here.
+     */
+    private void restoreUnoccupiedCfruDpePaletteBytes(
+            int base, int length, List<CfruDpePaletteRange> rejectedOccupiedRanges) {
+        int freeRunStart = -1;
+        int occupiedRunStart = -1;
+        int end = base + length;
+        for (int offset = base; offset < end; offset++) {
+            if (rom[offset] == getFreeSpaceByte()) {
+                if (occupiedRunStart != -1) {
+                    rejectedOccupiedRanges.add(new CfruDpePaletteRange(
+                            occupiedRunStart, offset - occupiedRunStart));
+                    occupiedRunStart = -1;
+                }
+                if (freeRunStart == -1) {
+                    freeRunStart = offset;
+                }
+            } else {
+                if (freeRunStart != -1) {
+                    getFreedSpace().free(freeRunStart, offset - freeRunStart);
+                    freeRunStart = -1;
+                }
+                if (occupiedRunStart == -1) {
+                    occupiedRunStart = offset;
+                }
+            }
+        }
+        if (freeRunStart != -1) {
+            getFreedSpace().free(freeRunStart, end - freeRunStart);
+        }
+        if (occupiedRunStart != -1) {
+            rejectedOccupiedRanges.add(new CfruDpePaletteRange(
+                    occupiedRunStart, end - occupiedRunStart));
+        }
+    }
+
     private void rollbackCfruDpePaletteBatch(List<CfruDpePaletteWrite> writes,
                                              List<CfruDpePaletteAllocation> allocations,
+                                             List<CfruDpePaletteRange> rejectedOccupiedRanges,
                                              Throwable failure) {
         for (CfruDpePaletteWrite write : writes) {
             try {
@@ -11659,6 +11710,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 failure.addSuppressed(rollbackFailure);
             }
         }
+        // Restore the original allocator ledger after failure. Future Gen3 allocations validate
+        // ROM contents before writing, so the pre-existing stale metadata cannot overwrite bytes.
+        for (CfruDpePaletteRange range : rejectedOccupiedRanges) {
+            try {
+                getFreedSpace().free(range.base(), range.length());
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+        }
     }
 
     /** Test seam for deterministic failures at the real palette writer's transaction boundaries. */
@@ -11666,6 +11726,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private record CfruDpePaletteWrite(int pointerOffset, byte[] originalPointerBytes,
                                        byte[] paletteBytes, byte[] compressed) { }
+
+    private record CfruDpePaletteRange(int base, int length) { }
 
     private static final class CfruDpePaletteAllocation {
         final CfruDpePaletteWrite write;
