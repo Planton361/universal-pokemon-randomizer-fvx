@@ -400,25 +400,192 @@ class Gen3CfruDpeImpossibleEvolutionRawSlotTest {
         }
     }
 
+    private static boolean timeSlot(CfruDpeEvolutionFixture.SourceSlot s) {
+        return Set.of(2,3,22,23,24,25,28,39).contains(s.method());
+    }
+
+    private static byte[] combinedExpected(CfruDpeEvolutionFixture f, boolean estimated) {
+        byte[] expected=f.memory.clone();
+        for(var s : CfruDpeEvolutionFixture.inventory()) {
+            int method=s.method(),parameter=s.parameter(),aux=s.auxiliary();
+            if(method==5) {method=4;parameter=estimated?45:37;}
+            else if(method==2 || method==3) {parameter=method==2?93:94;method=7;}
+            else if(timeSlot(s)) {
+                boolean paired=Set.of(104,961,1007).contains(s.source());
+                if(paired && method!=28) {parameter=method==23?93:94;method=7;}
+                else switch(method) {
+                    case 22,23 -> method=4;
+                    case 24,25 -> {method=35;aux=parameter;parameter=1;}
+                    case 28 -> {method=7;parameter=100;aux=0;}
+                    case 39 -> method=7;
+                    default -> throw new AssertionError(s);
+                }
+            } else continue;
+            word(expected,s.source(),s.slot(),0,method);word(expected,s.source(),s.slot(),2,parameter);
+            word(expected,s.source(),s.slot(),6,aux);
+        }
+        return expected;
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans={false,true})
+    void combinedFullSourceHasSixStoneOverlapsTwentyTimeSlotsAndSeventeenPreservedTradePairs(boolean estimated) throws Exception {
+        var f=nativeOwners(new CfruDpeEvolutionFixture()); f.populateExactSource();
+        f.entry(1,15,0xFFFF,0xBEEF,94,0xCAFE);f.entry(133,15,0xFFFF,0xABCD,94,0xFEDC);f.loadEvolutions();
+        f.pool.forEach(owner -> owner.getEvolutionsFrom().forEach(e -> e.setEstimatedEvoLvl(45)));
+        byte[] before=f.memory.clone(),expected=combinedExpected(f,estimated);var beforeGraph=graph(f);
+        assertEquals(26,CfruDpeEvolutionFixture.inventory().stream().filter(Gen3CfruDpeImpossibleEvolutionRawSlotTest::timeSlot).count());
+        f.preflightCfruDpeImpossibleEvolutions(false,true); assertArrayEquals(before,f.memory);assertEquals(beforeGraph,graph(f));
+        assertTrue(f.getPreImprovedEvolutions().isEmpty());
+        f.removeImpossibleAndTimeBasedEvolutions(estimated); assertArrayEquals(before,f.memory);
+        f.preflightCfruDpeImpossibleEvolutions(false,true);f.write();assertArrayEquals(expected,f.memory);
+        f.removeImpossibleAndTimeBasedEvolutions(estimated);f.write();assertArrayEquals(expected,f.memory);
+        f.loadEvolutions();f.removeImpossibleAndTimeBasedEvolutions(estimated);f.write();assertArrayEquals(expected,f.memory);
+        var reopened=nativeOwners(new CfruDpeEvolutionFixture());
+        System.arraycopy(f.memory,0,reopened.memory,0,f.memory.length);reopened.loadEvolutions();
+        reopened.preflightCfruDpeImpossibleEvolutions(false,true);reopened.removeImpossibleAndTimeBasedEvolutions(estimated);
+        reopened.write();assertArrayEquals(expected,reopened.memory,"fresh handler reopen without prior combined flags");
+        for(var slot : CfruDpeEvolutionFixture.inventory()) if(slot.method()==6) {
+            assertEquals(6,f.word(slot.source(),slot.slot(),0));assertEquals(slot.parameter(),f.word(slot.source(),slot.slot(),2));
+            assertEquals(slot.target(),itemUseTarget(f,slot.source(),slot.parameter()));
+            assertFalse(f.getPreImprovedEvolutions().containsKey(f.species[slot.source()]));
+        }
+        for(int source : new int[]{123,373}) for(int slot=0;slot<16;slot++) assertNotEquals(4,f.word(source,slot,0));
+        for(int source : new int[]{459,500}) assertEquals(93,f.word(source,0,2));
+        for(int source : new int[]{486,1164}) assertEquals(94,f.word(source,0,2));
+        assertEquals(7,f.word(133,0,0));assertEquals(93,f.word(133,0,2));assertEquals(94,f.word(133,1,2));
+        assertEquals(1,f.word(133,2,6));assertEquals(253,f.word(133,8,0));
+        for(Species owner : f.pool) for(Evolution e : owner.getEvolutionsFrom())
+            assertTrue(e.getTo().getEvolutionsTo().contains(e));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans={false,true})
+    void combinedTargetOnlyProvenanceAcceptsCommonPairsAndTimeTargetsButRejectsDivergentPairs(boolean together) throws Exception {
+        var f=nativeOwners(new CfruDpeEvolutionFixture());f.populateExactSource();
+        var targets=f.getTargetOnlyEvolutionGraph();
+        targets.get(f.species[123]).stream().filter(e -> e.getTo()==f.species[212]
+                && (together || e.getExtraInfo()==0)).forEach(e -> e.setTo(f.species[2]));
+        targets.get(f.species[459]).forEach(e -> e.setTo(f.species[3]));
+        f.applyTargetOnlyEvolutionGraph(targets);
+        if(!together) {assertEarlyCombinedFailure(f);return;}
+        byte[] expected=combinedExpected(f,false);
+        word(expected,123,0,4,2);word(expected,123,1,4,2);word(expected,459,0,4,3);
+        f.preflightCfruDpeImpossibleEvolutions(false,true);f.removeImpossibleAndTimeBasedEvolutions(false);f.write();
+        assertArrayEquals(expected,f.memory);assertEquals(2,itemUseTarget(f,123,199));assertEquals(3,itemUseTarget(f,459,93));
+        f.loadEvolutions();f.removeImpossibleAndTimeBasedEvolutions(false);f.write();assertArrayEquals(expected,f.memory);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"104,0","104,1","133,0","133,1","207,0","215,0","217,0","459,0","486,0",
+        "493,0","500,0","804,0","806,0","951,0","961,0","961,1","961,2","970,0","1007,0",
+        "1007,1","1020,0","1038,0","1164,0","1227,0","1240,0","1365,0"})
+    void eachOfTwentySixCombinedSourceSlotsRejectsMethodParameterTargetAndAuxiliaryDrift(int source,int slot) throws Exception {
+        for(int field : new int[]{0,2,4,6}) {
+            var f=nativeOwners(new CfruDpeEvolutionFixture());f.populateExactSource();
+            word(f.memory,source,slot,field,f.word(source,slot,field)^1);
+            assertEarlyCombinedFailure(f);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints={0,1,2,3,4,5,6,7,8,9})
+    void combinedConflictsAndOwnershipDriftRejectBeforeAllPublication(int mode) throws Exception {
+        var f=nativeOwners(new CfruDpeEvolutionFixture()); f.populateExactSource();
+        switch(mode) {
+            case 0 -> f.entry(459,15,7,93,94,0);
+            case 1 -> f.entry(804,15,35,1,94,199);
+            case 2 -> f.entry(207,15,4,20,94,0);
+            case 3 -> f.entry(123,15,7,199,94,0);
+            case 4 -> f.entry(373,15,7,192,94,0);
+            case 5 -> f.entry(1,15,22,30,94,0);
+            case 6 -> f.entry(0,15,22,30,94,0);
+            case 7 -> f.entry(133,15,2,0,196,0);
+            case 8 -> f.species[500].setSpeciesSetIdentityNumber(501);
+            case 9 -> f.species[459].getEvolutionsFrom().clear();
+        }
+        if(mode<8) f.loadEvolutions();
+        assertEarlyCombinedFailure(f);
+    }
+
+    private static void assertEarlyCombinedFailure(CfruDpeEvolutionFixture f) throws Exception {
+        byte[] before=f.memory.clone();var beforeGraph=graph(f);var logs=new TreeMap<>(f.getPreImprovedEvolutions());
+        assertThrows(RomIOException.class,() -> f.preflightCfruDpeImpossibleEvolutions(false,true));
+        assertThrows(RomIOException.class,() -> f.removeImpossibleAndTimeBasedEvolutions(false));
+        assertArrayEquals(before,f.memory);assertEquals(beforeGraph,graph(f));assertEquals(logs,f.getPreImprovedEvolutions());
+    }
+
+    @Test
+    void independentFeaturePlansCannotBecomeSequentialCompositionAndEasierRemainsBlocked() throws Exception {
+        for(boolean timeFirst : new boolean[]{false,true}) {
+            var f=nativeOwners(new CfruDpeEvolutionFixture());f.populateExactSource();
+            if(timeFirst)f.removeTimeBasedEvolutions();else f.removeImpossibleEvolutions(false,false);
+            assertEarlyCombinedFailure(f);
+        }
+        var f=nativeOwners(new CfruDpeEvolutionFixture());f.populateExactSource();
+        assertThrows(RomIOException.class,() -> f.preflightCfruDpeImpossibleEvolutions(true,true));
+        assertThrows(RomIOException.class,() -> f.preflightCfruDpeImpossibleEvolutions(true,false));
+        assertThrows(RomIOException.class,() -> f.preflightCfruEvolutionOptions(true,true));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans={false,true})
+    void combinedRollsBackEveryOwnedWordForExceptionAndReadbackCorruptionAndRetries(boolean corrupt) throws Exception {
+        class Failing extends CfruDpeEvolutionFixture {
+            int count,failAt=Integer.MAX_VALUE;
+            Failing() throws Exception {super();}
+            @Override protected void writeWord(int offset,int value) {
+                super.writeWord(offset,value);
+                if(++count==failAt) {
+                    if(corrupt)super.writeWord(offset,value^1);else throw new RomIOException("synthetic joint write fault");
+                }
+            }
+        }
+        var reference=nativeOwners(new CfruDpeEvolutionFixture());reference.populateExactSource();
+        byte[] after=combinedExpected(reference,false);int words=0;
+        for(int o=0;o<after.length;o+=2)if(after[o]!=reference.memory[o]||after[o+1]!=reference.memory[o+1])words++;
+        assertEquals(76,words);
+        for(int fail=1;fail<=words;fail++) {
+            var f=nativeOwners(new Failing());f.populateExactSource();byte[] before=f.memory.clone(),expected=combinedExpected(f,false);
+            f.removeImpossibleAndTimeBasedEvolutions(false);var planned=graph(f);f.count=0;f.failAt=fail;
+            assertThrows(RomIOException.class,f::write);assertArrayEquals(before,f.memory);assertEquals(planned,graph(f));
+            f.count=0;f.failAt=Integer.MAX_VALUE;f.write();assertEquals(words,f.count);assertArrayEquals(expected,f.memory);
+            f.loadEvolutions();f.removeImpossibleAndTimeBasedEvolutions(false);f.write();assertArrayEquals(expected,f.memory);
+        }
+    }
+
     @Test
     void freshJvmReplayPreservesExactSlotsAndFullRowAcrossFixedSeeds() throws Exception {
         for(long seed : new long[]{0,1,677,20261005658L}) assertEquals(process(seed),process(seed));
     }
 
     public static void main(String[] args) throws Exception {
-        var f=fullEevee(); long seed=Long.parseLong(args[0]);
-        f.species[133].getEvolutionsFrom().forEach(e -> e.setEstimatedEvoLvl(1+(int)(seed%100)));
-        f.removeImpossibleEvolutions(false,true); f.write(); f.loadEvolutions(); f.write();
+        boolean combined=args.length>1;
+        var f=combined ? nativeOwners(new CfruDpeEvolutionFixture()) : fullEevee();
+        if(combined) f.populateExactSource();
+        long seed=Long.parseLong(args[0]);
+        if(combined) f.pool.forEach(owner -> owner.getEvolutionsFrom().forEach(e -> e.setEstimatedEvoLvl(1+(int)(seed%100))));
+        else f.species[133].getEvolutionsFrom().forEach(e -> e.setEstimatedEvoLvl(1+(int)(seed%100)));
+        if(combined) f.removeImpossibleAndTimeBasedEvolutions(true); else f.removeImpossibleEvolutions(false,true);
+        f.write(); f.loadEvolutions(); f.write();
         System.out.println("SYNTHETIC_F05="+HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(f.memory)));
     }
 
-    private static String process(long seed) throws Exception {
+    @Test
+    void combinedFreshJvmReplayIsStableAcrossFixedSeeds() throws Exception {
+        for(long seed : new long[]{0,1,677,20261005658L}) assertEquals(process(seed,true),process(seed,true));
+    }
+
+    private static String process(long seed) throws Exception { return process(seed,false); }
+
+    private static String process(long seed,boolean combined) throws Exception {
         Set<String> classpath=new LinkedHashSet<>(Arrays.asList(System.getProperty("java.class.path").split(File.pathSeparator)));
         for(ClassLoader l=Gen3CfruDpeImpossibleEvolutionRawSlotTest.class.getClassLoader();l!=null;l=l.getParent())
             if(l instanceof URLClassLoader urls) for(var url:urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
-        Process p=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin","java").toString(),"-cp",
-                String.join(File.pathSeparator,classpath),Gen3CfruDpeImpossibleEvolutionRawSlotTest.class.getName(),Long.toString(seed))
-                .redirectErrorStream(true).start();
+        List<String> command=new ArrayList<>(List.of(Path.of(System.getProperty("java.home"),"bin","java").toString(),"-cp",
+                String.join(File.pathSeparator,classpath),Gen3CfruDpeImpossibleEvolutionRawSlotTest.class.getName(),Long.toString(seed)));
+        if(combined)command.add("combined");
+        Process p=new ProcessBuilder(command).redirectErrorStream(true).start();
         assertTrue(p.waitFor(30,TimeUnit.SECONDS)); String output=new String(p.getInputStream().readAllBytes(),StandardCharsets.UTF_8);
         assertEquals(0,p.exitValue(),output); assertTrue(output.contains("SYNTHETIC_F05="),output); return output;
     }

@@ -26,11 +26,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GameRandomizerEvolutionIsolationTest {
 
     private static class EarlyGateFixture extends CfruDpeEvolutionFixture {
-        int preflights, restrictions, removals;
+        int preflights, restrictions, removals, combinedRemovals, impossibleRemovals;
         boolean rejectRestrictions;
         EarlyGateFixture() throws Exception { super(); }
         @Override public void preflightCfruDpeTimeEvolutions() { preflights++; super.preflightCfruDpeTimeEvolutions(); }
         @Override public void removeTimeBasedEvolutions() { removals++; super.removeTimeBasedEvolutions(); }
+        @Override public void removeImpossibleAndTimeBasedEvolutions(boolean estimated) {
+            combinedRemovals++; super.removeImpossibleAndTimeBasedEvolutions(estimated);
+        }
+        @Override public void removeImpossibleEvolutions(boolean moves,boolean estimated) {
+            impossibleRemovals++; super.removeImpossibleEvolutions(moves,estimated);
+        }
+        void nativeOwners() throws Exception {
+            Species giga=new Species(133);giga.setName("Eevee-Giga");giga.setSpeciesSetIdentityNumber(1270);
+            species[1270]=giga;pool.set(1269,giga);
+            Species clamperl=new Species(366);clamperl.setName("Clamperl");clamperl.setSpeciesSetIdentityNumber(373);
+            species[373]=clamperl;pool.set(372,clamperl);
+            var loaded=new ArrayList<Species>();loaded.add(null);loaded.addAll(pool);setField("speciesList",loaded);
+            setField("pokesInternal",Arrays.copyOf(species,1440));int[] map=new int[1440];
+            for(int id=1;id<1440;id++)map[id]=species[id].getNumber();setField("internalToPokedex",map);
+        }
         @Override public int generationOfPokemon() { return 3; }
         @Override public List<Integer> getMoveTutorMoves() { return List.of(); }
         @Override public List<Trainer> getTrainers() { return List.of(); }
@@ -217,8 +232,8 @@ class GameRandomizerEvolutionIsolationTest {
     }
 
     @Test
-    void impossibleRawSlotPreflightRejectsBothF06PairsBeforeAnyRestrictionsOrUpdaters() throws Exception {
-        for (boolean easier : new boolean[]{false,true}) for(long seed : new long[]{0,1,677,20261005658L}) {
+    void impossibleRawSlotPreflightKeepsEasierPairBlockedBeforeAnyRestrictionsOrUpdaters() throws Exception {
+        for (boolean easier : new boolean[]{true}) for(long seed : new long[]{0,1,677,20261005658L}) {
             var f = new EarlyGateFixture(); f.populateExactSource(); f.rejectRestrictions=true;
             var settings=new Settings(); settings.setChangeImpossibleEvolutions(true);
             settings.setMakeEvolutionsEasier(easier); settings.setRemoveTimeBasedEvolutions(!easier);
@@ -249,6 +264,42 @@ class GameRandomizerEvolutionIsolationTest {
             assertTrue(result.getException().getMessage().contains(malformed?"auxiliary":"synthetic stop at restrictions"));
             assertEquals(EvolutionType.HAPPINESS_DAY,f.species[133].getEvolutionsFrom().getFirst().getType());
             assertEquals(50,f.species[1].getHp()); assertArrayEquals(before,f.memory); assertTrue(f.getPreImprovedEvolutions().isEmpty());
+        }
+    }
+
+    @Test
+    void combinedEarlyGateIsReadOnlyAndMalformedSlotRejectsBeforeRestrictionsUpdatersOrOutput() throws Exception {
+        for(boolean malformed:new boolean[]{false,true}) {
+            var f=new EarlyGateFixture();f.nativeOwners();f.populateExactSource();f.rejectRestrictions=true;
+            if(malformed) {f.entry(1365,0,22,30,1366,1);f.loadEvolutions();}
+            var settings=new Settings();settings.setChangeImpossibleEvolutions(true);settings.setRemoveTimeBasedEvolutions(true);
+            settings.setUpdateBaseStats(true);settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
+            byte[] before=f.memory.clone();var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",
+                    new PrintStream(OutputStream.nullOutputStream()),733);
+            assertFalse(result.wasSaveSuccessful());
+            assertEquals(malformed?0:1,f.restrictions);assertEquals(0,f.preflights);
+            assertEquals(0,f.removals);assertEquals(0,f.impossibleRemovals);assertEquals(0,f.combinedRemovals);
+            assertEquals(50,f.species[1].getHp());assertArrayEquals(before,f.memory);assertTrue(f.getPreImprovedEvolutions().isEmpty());
+            assertTrue(result.getException().getMessage().contains(malformed?"unexpected shape":"synthetic stop at restrictions"));
+        }
+    }
+
+    @Test
+    void actualCombinedDispatchUsesOneJointPlanAndNeverEitherIndependentMutator() throws Exception {
+        for(long seed:new long[]{0,1,677,20261005658L}) {
+            var f=new EarlyGateFixture();f.nativeOwners();f.populateExactSource();byte[] before=f.memory.clone();
+            var settings=new Settings();settings.setChangeImpossibleEvolutions(true);settings.setRemoveTimeBasedEvolutions(true);
+            var restored=Settings.fromString(withSerializationDefaults(settings).toString());
+            assertTrue(restored.isChangeImpossibleEvolutions());assertTrue(restored.isRemoveTimeBasedEvolutions());
+            var method=GameRandomizer.class.getDeclaredMethod("maybeApplyEvolutionImprovements");method.setAccessible(true);
+            var game=randomizer(f,restored);var rng=GameRandomizer.class.getDeclaredField("randomSource");rng.setAccessible(true);
+            ((com.uprfvx.random.random.RandomSource)rng.get(game)).seed(seed);method.invoke(game);
+            assertEquals(1,f.combinedRemovals);assertEquals(0,f.impossibleRemovals);assertEquals(0,f.removals);
+            assertArrayEquals(before,f.memory);f.write();f.loadEvolutions();
+            assertEquals(7,f.word(459,0,0));assertEquals(93,f.word(459,0,2));
+            assertEquals(7,f.word(486,0,0));assertEquals(94,f.word(486,0,2));
+            assertEquals(4,f.word(1365,0,0));assertEquals(6,f.word(123,0,0));assertEquals(6,f.word(123,2,0));
+            assertEquals(6,f.word(373,2,0));assertEquals(6,f.word(373,3,0));
         }
     }
 

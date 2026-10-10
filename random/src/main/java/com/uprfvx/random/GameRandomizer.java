@@ -222,7 +222,8 @@ public class GameRandomizer {
             if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3) {
                 gen3.preflightCfruEvolutionEasier(settings.getMakeEvolutionsEasierLvl());
             }
-            if (settings.isRemoveTimeBasedEvolutions() && romHandler instanceof Gen3RomHandler gen3) {
+            if (settings.isRemoveTimeBasedEvolutions() && romHandler instanceof Gen3RomHandler gen3
+                    && !(settings.isChangeImpossibleEvolutions() && gen3.usesCfruDpeRandomPoolPolicy())) {
                 gen3.preflightCfruDpeTimeEvolutions();
             }
             setupSpeciesRestrictions();
@@ -443,6 +444,13 @@ public class GameRandomizer {
 
     private void maybeApplyEvolutionImprovements() {
         boolean useEstimatedLevels = settings.useEstimatedLevelsForEvolutionImprovements();
+
+        if (settings.isChangeImpossibleEvolutions() && settings.isRemoveTimeBasedEvolutions()
+                && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+            gen3.preflightCfruDpeImpossibleEvolutions(settings.isMakeEvolutionsEasier(), true);
+            gen3.removeImpossibleAndTimeBasedEvolutions(useEstimatedLevels);
+            return;
+        }
 
         // Trade evolutions (etc.) removal
         if (settings.isChangeImpossibleEvolutions()) {

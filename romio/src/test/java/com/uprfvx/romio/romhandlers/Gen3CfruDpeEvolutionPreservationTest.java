@@ -880,6 +880,44 @@ class Gen3CfruDpeEvolutionPreservationTest {
         assertEquals(10,f.species[301].getEvolutionsFrom().get(1).getExtraInfo());
     }
 
+    @Test
+    void combinedPlanPreservesBoundWitnessPointerRecordAndConsumerAndRejectsTheirDrift() throws Exception {
+        for(int mode=0;mode<5;mode++) {
+            var f=Gen3CfruDpeImpossibleEvolutionRawSlotTest.nativeOwners(new WitnessFixture());
+            f.populateExactSource();f.attest(220);f.bind();byte[] before=f.memory.clone();
+            if(mode==0) {
+                f.preflightCfruDpeImpossibleEvolutions(false,true);f.removeImpossibleAndTimeBasedEvolutions(false);f.write();
+                for(int o=0;o<before.length;o++) if(o<CfruDpeEvolutionFixture.EVOLUTION_BASE || o>=CfruDpeEvolutionFixture.EVOLUTION_BASE+1440*128)
+                    assertEquals(before[o],f.memory[o],"non-table witness/consumer/pointer byte "+o);
+                f.loadEvolutions();f.removeImpossibleAndTimeBasedEvolutions(false);f.write();
+            } else {
+                int offset=switch(mode) {case 1 -> 0x42F6C;case 2 -> WitnessFixture.RECORD+18;case 3 -> 0x48004;default -> 0x42EC8;};
+                f.memory[offset]^=1;byte[] drifted=f.memory.clone();
+                assertThrows(RomIOException.class,() -> f.preflightCfruDpeImpossibleEvolutions(false,true));
+                assertThrows(RomIOException.class,() -> f.removeImpossibleAndTimeBasedEvolutions(false));
+                assertArrayEquals(drifted,f.memory);assertTrue(f.getPreImprovedEvolutions().isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void combinedStagedGraphTableExtentReservedRowsAndWitnessRemainGuardedAtSave() throws Exception {
+        for(int mode=0;mode<6;mode++) {
+            var f=Gen3CfruDpeImpossibleEvolutionRawSlotTest.nativeOwners(new WitnessFixture());
+            f.populateExactSource();f.attest(220);f.bind();f.removeImpossibleAndTimeBasedEvolutions(false);
+            switch(mode) {
+                case 0 -> f.species[459].getEvolutionsFrom().getFirst().setTo(f.species[94]);
+                case 1 -> f.memory[CfruDpeEvolutionFixture.EVOLUTION_BASE]^=1;
+                case 2 -> f.memory[CfruDpeEvolutionFixture.EVOLUTION_BASE+1439*128+127]^=1;
+                case 3 -> f.setField("cfruDpeImpossibleEvolutionTableBase",CfruDpeEvolutionFixture.EVOLUTION_BASE+4);
+                case 4 -> f.memory[WitnessFixture.RECORD+18]^=1;
+                case 5 -> f.species[500].setSpeciesSetIdentityNumber(501);
+            }
+            byte[] before=f.memory.clone();assertThrows(RomIOException.class,f::preflightSave);
+            assertThrows(RomIOException.class,f::write);assertArrayEquals(before,f.memory);
+        }
+    }
+
     private static Object fieldValue(Object target,String name) throws Exception {
         Field field = Gen3RomHandler.class.getDeclaredField(name); field.setAccessible(true); return field.get(target);
     }

@@ -217,6 +217,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private EvolutionOwnershipWitness evolutionOwnershipWitness;
     private boolean cfruEvolutionEasierApplied;
     private boolean cfruEvolutionTimeApplied;
+    private boolean cfruEvolutionImpossibleTimeApplied;
     private Integer cfruEasierHighestLevel;
 
     private static RomIOException evolutionOwnershipError(String reason) {
@@ -766,6 +767,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         evolutionOwnershipWitness = null;
         cfruEvolutionEasierApplied = false;
         cfruEvolutionTimeApplied = false;
+        cfruEvolutionImpossibleTimeApplied = false;
         cfruEasierHighestLevel = null;
         isRomHack = false;
         jamboMovesetHack = false;
@@ -7665,13 +7667,23 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private Map<Integer, byte[]> planCfruDpeTimeEvolutions() {
+        return planCfruDpeTimeEvolutions(false);
+    }
+
+    private Map<Integer, byte[]> planCfruDpeTimeEvolutions(boolean combined) {
+        // CONTROL precedence applies only to the six original friendship time slots.
+        List<CfruDpeTimeSlot> timeSlots = combined ? CFRU_DPE_TIME_SLOTS.stream().map(owner ->
+                owner.method() == 2 || owner.method() == 3
+                        ? new CfruDpeTimeSlot(owner.source(), owner.slot(), owner.method(), owner.parameter(),
+                            owner.auxiliary(), 7, owner.method() == 2 ? 93 : 94, 0) : owner).toList()
+                : CFRU_DPE_TIME_SLOTS;
         preflightCfruEvolutionOptions(cfruEvolutionEasierApplied, true);
         if (!isCfruDpeGen9BpreProfile() || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT) {
             throw unsafeCfruDpeTimeEvolution("requires the selected BPRE 1440-species profile");
         }
         Map<Integer, byte[]> rows = prepareCfruDpeEvolutionRows();
         Map<Integer, byte[]> result = new LinkedHashMap<>();
-        for (CfruDpeTimeSlot owner : CFRU_DPE_TIME_SLOTS) {
+        for (CfruDpeTimeSlot owner : timeSlots) {
             byte[] row = rows.get(owner.source());
             if (row == null) throw unsafeCfruDpeTimeEvolution("missing source row " + owner.source());
             byte[] planned = result.computeIfAbsent(owner.source(), id -> row.clone());
@@ -7718,7 +7730,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         // CFRU iterates all sixteen slots; a later match overrides an earlier target.
         // Reject collisions even with conditional item-use methods, never guess a priority.
-        for (CfruDpeTimeSlot owner : CFRU_DPE_TIME_SLOTS) {
+        for (CfruDpeTimeSlot owner : timeSlots) {
             byte[] row = result.get(owner.source());
             int target = IOFunctions.read2ByteInt(row, owner.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4);
             for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
@@ -8228,15 +8240,16 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return pokedexToInternal[species.getNumber()];
     }
 
-    /** Read-only F05 gate before restrictions/updaters; no F06 composition is authorized. */
+    /** Read-only F05/F06a gate before restrictions/updaters. */
     public void preflightCfruDpeImpossibleEvolutions(boolean easier, boolean removeTime) {
         if (!useCfruDpeGen9SpeciesCount) return;
-        if (easier || removeTime || cfruEvolutionEasierApplied || cfruEvolutionTimeApplied) {
+        if (easier || cfruEvolutionEasierApplied || (cfruEvolutionTimeApplied && !cfruEvolutionImpossibleTimeApplied)) {
             throw new RomIOException("CFRU/DPE Change Impossible + Make Easier/Remove Time requires a separately validated shared plan");
         }
         // Level hints are populated by existing updaters later; this early pass
         // validates source ownership using the unchanged default conversion policy.
-        planCfruDpeImpossibleEvolutions(false);
+        if (removeTime) planCfruDpeImpossibleTimeEvolutions(false);
+        else planCfruDpeImpossibleEvolutions(false);
     }
 
     private List<Species> cfruDpeImpossibleEvolutionOwners() {
@@ -8293,8 +8306,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private CfruDpeImpossiblePlan planCfruDpeImpossibleEvolutions(boolean useEstimatedLevels) {
+        return planCfruDpeImpossibleEvolutions(useEstimatedLevels, false);
+    }
+
+    private CfruDpeImpossiblePlan planCfruDpeImpossibleEvolutions(boolean useEstimatedLevels, boolean combined) {
         List<Species> owners = cfruDpeImpossibleEvolutionOwners();
-        if (cfruEvolutionEasierApplied || cfruEvolutionTimeApplied || !plannedCfruDpeTimeRows.isEmpty()) {
+        if (cfruEvolutionEasierApplied || ((cfruEvolutionTimeApplied || !plannedCfruDpeTimeRows.isEmpty())
+                && !(combined && cfruEvolutionImpossibleTimeApplied))) {
             throw new RomIOException("CFRU/DPE Change Impossible requires an independent raw-slot plan");
         }
         int base = romEntry.getIntValue("PokemonEvolutions");
@@ -8393,6 +8411,103 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
         }
         return new CfruDpeImpossiblePlan(rows, changes);
+    }
+
+    private CfruDpeImpossiblePlan planCfruDpeImpossibleTimeEvolutions(boolean useEstimatedLevels) {
+        if (!cfruEvolutionImpossibleTimeApplied && (!plannedCfruDpeImpossibleRows.isEmpty()
+                || !plannedCfruDpeTimeRows.isEmpty())) {
+            throw new RomIOException("CFRU/DPE combined evolutions require one common plan, not sequential option plans");
+        }
+        // Both read-only projections consume the same immutable input. Neither is published.
+        CfruDpeImpossiblePlan impossible = planCfruDpeImpossibleEvolutions(useEstimatedLevels, true);
+        Map<Integer, byte[]> time = planCfruDpeTimeEvolutions(true);
+        Map<Integer, byte[]> input = prepareCfruDpeEvolutionRows();
+        Map<Integer, byte[]> raw = new LinkedHashMap<>();
+        impossible.rows().forEach((id, row) -> raw.put(id, row.raw().clone()));
+        Set<String> overlaps = new LinkedHashSet<>();
+        for (CfruDpeTimeSlot slot : CFRU_DPE_TIME_SLOTS) {
+            byte[] destination = raw.computeIfAbsent(slot.source(), id -> input.get(id).clone());
+            byte[] timed = time.get(slot.source());
+            int o = slot.slot() * GEN3_EVOLUTION_ENTRY_SIZE;
+            if (slot.method() == 2 || slot.method() == 3) {
+                overlaps.add(slot.source() + "/" + slot.slot());
+                // The F05 projection must independently prove the same source-slot output.
+                for (int field : new int[]{0, 2, 4, 6}) {
+                    if (IOFunctions.read2ByteInt(destination, o + field) != IOFunctions.read2ByteInt(timed, o + field)) {
+                        throw unsafeCfruDpeTimeEvolution("unresolved overlap at source/slot " + slot.source() + "/" + slot.slot());
+                    }
+                }
+            }
+            for (int field : new int[]{0, 2, 6}) {
+                IOFunctions.write2ByteInt(destination, o + field, IOFunctions.read2ByteInt(timed, o + field));
+            }
+        }
+        if (!overlaps.equals(Set.of("133/0", "133/1", "459/0", "486/0", "500/0", "1164/0"))) {
+            throw unsafeCfruDpeTimeEvolution("time/impossible source overlap inventory changed");
+        }
+        Map<Integer, CfruDpeEvolutionRow> rows = new LinkedHashMap<>();
+        for (var entry : raw.entrySet()) {
+            Species source = pokesInternal[entry.getKey()];
+            Set<Integer> triggers = new LinkedHashSet<>();
+            for (int o = 0; o < getEvolutionRowSize(); o += GEN3_EVOLUTION_ENTRY_SIZE) {
+                if (!Arrays.equals(Arrays.copyOfRange(input.get(entry.getKey()), o, o + 8),
+                        Arrays.copyOfRange(entry.getValue(), o, o + 8))
+                        || IOFunctions.read2ByteInt(entry.getValue(), o) == 6) triggers.add(o);
+            }
+            CFRU_DPE_TIME_SLOTS.stream().filter(slot -> slot.source() == entry.getKey())
+                    .forEach(slot -> triggers.add(slot.slot() * GEN3_EVOLUTION_ENTRY_SIZE));
+            validateCfruDpeImpossibleTriggers(source, entry.getValue(), triggers);
+            // Timeless held-item/level-up predicates can coincide with any ordinary
+            // normal predicate. Reject different-target ambiguity before publication.
+            for (int o : triggers) if (IOFunctions.read2ByteInt(entry.getValue(), o) == 35) {
+                for (int other = 0; other < getEvolutionRowSize(); other += GEN3_EVOLUTION_ENTRY_SIZE) {
+                    if (other != o && CFRU_DPE_IMPOSSIBLE_NORMAL_METHODS.contains(IOFunctions.read2ByteInt(entry.getValue(), other))
+                            && IOFunctions.read2ByteInt(entry.getValue(), other + 4) != IOFunctions.read2ByteInt(entry.getValue(), o + 4)) {
+                        throw unsafeCfruDpeTimeEvolution("ambiguous held-item trigger in source " + entry.getKey());
+                    }
+                }
+            }
+            List<Evolution> edges = decodeCfruDpeEvolutionRow(source, entry.getValue());
+            rows.put(entry.getKey(), new CfruDpeEvolutionRow(entry.getValue(), snapshotCfruDpeEvolutions(edges), false));
+        }
+        return new CfruDpeImpossiblePlan(rows, impossible.changes());
+    }
+
+    /** Selected-profile F06a: publish only the completely validated common raw-slot plan. */
+    public void removeImpossibleAndTimeBasedEvolutions(boolean useEstimatedLevels) {
+        if (!useCfruDpeGen9SpeciesCount) {
+            throw new RomIOException("Combined native evolution plan requires CFRU/DPE");
+        }
+        CfruDpeImpossiblePlan plan = planCfruDpeImpossibleTimeEvolutions(useEstimatedLevels);
+        Map<Integer, List<Evolution>> graphs = new LinkedHashMap<>();
+        plan.rows().forEach((id, row) -> graphs.put(id, decodeCfruDpeEvolutionRow(pokesInternal[id], row.raw())));
+        Set<Integer> improved = new LinkedHashSet<>();
+        plan.changes().forEach(change -> improved.add(getEvolutionInternalSpeciesId(change.edge().getFrom())));
+        CFRU_DPE_TIME_SLOTS.forEach(slot -> improved.add(slot.source()));
+        // All source, slot, target, graph, pointer and witness checks have completed.
+        attemptObedienceEvolutionPatches();
+        improved.forEach(id -> markImprovedEvolutions(pokesInternal[id]));
+        for (var entry : graphs.entrySet()) {
+            Species source = pokesInternal[entry.getKey()];
+            for (Evolution edge : entry.getValue()) {
+                source.getEvolutionsFrom().stream().filter(old -> old.getTo() == edge.getTo())
+                        .findFirst().ifPresent(old -> edge.setEstimatedEvoLvl(old.getEstimatedEvoLvl()));
+                CFRU_DPE_TIME_SLOTS.stream().filter(slot -> slot.source() == entry.getKey()
+                        && Set.of(22, 23, 28).contains(slot.method())
+                        && IOFunctions.read2ByteInt(plan.rows().get(entry.getKey()).raw(), slot.slot() * GEN3_EVOLUTION_ENTRY_SIZE + 4)
+                            == getEvolutionInternalSpeciesId(edge.getTo()))
+                        .findFirst().ifPresent(slot -> edge.setEstimatedEvoLvl(slot.parameter()));
+            }
+            source.getEvolutionsFrom().forEach(edge -> edge.getTo().getEvolutionsTo().remove(edge));
+            source.getEvolutionsFrom().clear();
+            source.getEvolutionsFrom().addAll(entry.getValue());
+            entry.getValue().forEach(edge -> edge.getTo().getEvolutionsTo().add(edge));
+        }
+        plannedCfruDpeEvolutionRows.putAll(plan.rows());
+        plannedCfruDpeImpossibleRows.addAll(plan.rows().keySet());
+        CFRU_DPE_TIME_SLOTS.forEach(slot -> plannedCfruDpeTimeRows.add(slot.source()));
+        cfruEvolutionTimeApplied = true;
+        cfruEvolutionImpossibleTimeApplied = true;
     }
 
     private int cfruDpeIdenticalItemAlternative(Species owner, byte[] original, byte[] current, int trade) {
