@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GameRandomizerEvolutionIsolationTest {
 
     private static class EarlyGateFixture extends CfruDpeEvolutionFixture {
-        int preflights, restrictions, removals, combinedRemovals, impossibleRemovals, jointEasierPreflights, jointEasierRemovals, standaloneCaps, standaloneEasier, jointTimePreflights, jointTimeRemovals;
+        int preflights, restrictions, removals, combinedRemovals, impossibleRemovals, jointEasierPreflights, jointEasierRemovals, standaloneCaps, standaloneEasier, jointTimePreflights, jointTimeRemovals, triplePreflights, tripleRemovals;
         boolean rejectRestrictions;
         EarlyGateFixture() throws Exception { super(); }
         @Override public void preflightCfruDpeTimeEvolutions() { preflights++; super.preflightCfruDpeTimeEvolutions(); }
@@ -39,6 +39,12 @@ class GameRandomizerEvolutionIsolationTest {
         }
         @Override public void removeImpossibleAndMakeEasierEvolutions(int cap,boolean estimated) {
             jointEasierRemovals++;super.removeImpossibleAndMakeEasierEvolutions(cap,estimated);
+        }
+        @Override public void preflightCfruDpeThreeWayEvolutions(int cap,boolean estimated) {
+            triplePreflights++;super.preflightCfruDpeThreeWayEvolutions(cap,estimated);
+        }
+        @Override public void composeThreeWayEvolutions(int cap,boolean estimated) {
+            tripleRemovals++;super.composeThreeWayEvolutions(cap,estimated);
         }
         @Override public void condenseLevelEvolutions(int cap) {standaloneCaps++;super.condenseLevelEvolutions(cap);}
         @Override public void preflightCfruDpeEasierTimeEvolutions(int cap,boolean estimated) {
@@ -134,12 +140,12 @@ class GameRandomizerEvolutionIsolationTest {
             settings.setUpdateBaseStats(true);settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
             byte[] before=f.memory.clone();
             var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),seed);
-            assertFalse(result.wasSaveSuccessful());assertEquals(mode==0||mode==4?1:0,f.restrictions);
+            assertFalse(result.wasSaveSuccessful());assertEquals(mode==0||mode>=3?1:0,f.restrictions);
             assertEquals(mode>=3?0:1,f.jointEasierPreflights);
             assertEquals(0,f.jointEasierRemovals);assertEquals(0,f.standaloneCaps);assertEquals(0,f.impossibleRemovals);
             assertArrayEquals(before,f.memory);assertEquals(50,f.species[1].getHp());assertTrue(f.getPreImprovedEvolutions().isEmpty());
-            if(mode==0||mode==4)assertEquals("synthetic stop at restrictions",result.getException().getMessage());
-            if(mode==3)assertTrue(result.getException().getMessage().contains("Make Easier + Remove Time"));
+            if(mode==0||mode>=3)assertEquals("synthetic stop at restrictions",result.getException().getMessage());
+            if(mode==3)assertEquals(1,f.triplePreflights);
             if(mode==4)assertEquals(1,f.jointTimePreflights);
         }
     }
@@ -163,7 +169,7 @@ class GameRandomizerEvolutionIsolationTest {
     }
 
     @Test
-    void exactlyOneEasierTimeDispatcherAndEarlyReadOnlyGateWithTripleBlocked() throws Exception {
+    void exactlyOneEasierTimeDispatcherAndSeparateThreeWayPlan() throws Exception {
         for(long seed:new long[]{0,1,677,20261005658L}) {
             var f=new EarlyGateFixture();f.nativeOwners();f.populateExactSource();bindJointWitness(f);
             var settings=new Settings();settings.setMakeEvolutionsEasier(true);settings.setRemoveTimeBasedEvolutions(true);
@@ -180,9 +186,15 @@ class GameRandomizerEvolutionIsolationTest {
             assertEquals(5,f.word(64,0,0));assertEquals(1,f.word(459,0,0));assertEquals(160,f.memory[0x4821C]&255);
             var g=new EarlyGateFixture();g.nativeOwners();g.populateExactSource();bindJointWitness(g);
             restored.setChangeImpossibleEvolutions(true);
+            g.rejectRestrictions=true;
             before=g.memory.clone();result=randomizer(g,restored).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),seed);
-            assertTrue(result.getException().getMessage().contains("Make Easier + Remove Time"));
-            assertEquals(0,g.restrictions);assertEquals(0,g.jointTimePreflights);assertArrayEquals(before,g.memory);
+            assertEquals("synthetic stop at restrictions",result.getException().getMessage());
+            assertEquals(1,g.restrictions);assertEquals(1,g.triplePreflights);assertEquals(0,g.jointTimePreflights);assertArrayEquals(before,g.memory);
+            method.invoke(randomizer(g,restored));g.write();g.write();
+            assertEquals(1,g.tripleRemovals);assertEquals(0,g.jointTimeRemovals);assertEquals(0,g.jointEasierRemovals);
+            assertEquals(0,g.standaloneCaps);assertEquals(0,g.standaloneEasier);assertEquals(0,g.impossibleRemovals);
+            assertEquals(0,g.combinedRemovals);assertEquals(0,g.removals);
+            assertEquals(4,g.word(64,0,0));assertEquals(7,g.word(459,0,0));assertEquals(160,g.memory[0x4821C]&255);
         }
     }
 

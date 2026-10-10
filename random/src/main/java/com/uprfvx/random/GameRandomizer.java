@@ -209,7 +209,10 @@ public class GameRandomizer {
 
             if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
                 if (settings.isMakeEvolutionsEasier() && settings.isRemoveTimeBasedEvolutions()
-                        && !settings.isChangeImpossibleEvolutions()) {
+                        && settings.isChangeImpossibleEvolutions()) {
+                    gen3.preflightCfruDpeThreeWayEvolutions(settings.getMakeEvolutionsEasierLvl(),
+                            settings.useEstimatedLevelsForEvolutionImprovements());
+                } else if (settings.isMakeEvolutionsEasier() && settings.isRemoveTimeBasedEvolutions()) {
                     gen3.preflightCfruDpeEasierTimeEvolutions(settings.getMakeEvolutionsEasierLvl(), false);
                 } else gen3.preflightCfruEvolutionOptions(settings.isMakeEvolutionsEasier(), settings.isRemoveTimeBasedEvolutions());
                 if (settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.RANDOM
@@ -218,7 +221,9 @@ public class GameRandomizer {
                 }
             }
             // F05 must reject unapproved combinations/slot drift before any updater or randomizer.
-            if (settings.isChangeImpossibleEvolutions() && romHandler instanceof Gen3RomHandler gen3) {
+            if (settings.isChangeImpossibleEvolutions() && romHandler instanceof Gen3RomHandler gen3
+                    && !(settings.isMakeEvolutionsEasier() && settings.isRemoveTimeBasedEvolutions()
+                        && gen3.usesCfruDpeRandomPoolPolicy())) {
                 if (settings.isMakeEvolutionsEasier() && !settings.isRemoveTimeBasedEvolutions()
                         && gen3.usesCfruDpeRandomPoolPolicy()) {
                     gen3.preflightCfruDpeImpossibleEasierEvolutions(settings.getMakeEvolutionsEasierLvl(), false);
@@ -452,6 +457,13 @@ public class GameRandomizer {
 
     private void maybeApplyEvolutionImprovements() {
         boolean useEstimatedLevels = settings.useEstimatedLevelsForEvolutionImprovements();
+
+        if (settings.isChangeImpossibleEvolutions() && settings.isMakeEvolutionsEasier()
+                && settings.isRemoveTimeBasedEvolutions() && romHandler instanceof Gen3RomHandler gen3
+                && gen3.usesCfruDpeRandomPoolPolicy()) {
+            gen3.composeThreeWayEvolutions(settings.getMakeEvolutionsEasierLvl(), useEstimatedLevels);
+            return;
+        }
 
         if (settings.isChangeImpossibleEvolutions() && settings.isRemoveTimeBasedEvolutions()
                 && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
