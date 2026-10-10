@@ -400,15 +400,76 @@ public class Gen3to5PaletteBoundsTest {
     }
 
     @Test
-    void selectedCombinedTypesRejectsAndDisabledGfx004DoesNothing() {
-        Species sp = speciesWithPalette(4);
-        SelectedHandler handler = new SelectedHandler(new SpeciesSet(sp));
-        Palette normal = sp.getNormalPalette(), shiny = sp.getShinyPalette();
+    void selectedCombinedTypesUseLoadedNormalForShinyAndTypeColorNormal() {
+        for (boolean followEvolutions : new boolean[]{false, true}) {
+            Species fire = speciesWithPalette(4), water = speciesWithPalette(7), fairy = speciesWithPalette(1);
+            fire.setPrimaryType(Type.FIRE);
+            water.setPrimaryType(Type.WATER); water.setSecondaryType(Type.FLYING);
+            fairy.setPrimaryType(Type.FAIRY); fairy.setSecondaryType(Type.GRASS);
+            List<Species> selected = List.of(fire, water, fairy);
+            SelectedHandler handler = new SelectedHandler(new SpeciesSet(selected));
+            List<byte[]> originalNormal = selected.stream().map(sp -> sp.getNormalPalette().toBytes()).toList();
+            List<byte[]> originalShiny = selected.stream().map(sp -> sp.getShinyPalette().toBytes()).toList();
+            List<Palette> loadedNormalObjects = selected.stream().map(Species::getNormalPalette).toList();
+            for (Species sp : selected) assertTrue(handler.getCfruDpePalettePairEligibility(sp).eligible());
+
+            Settings combined = gfx004(followEvolutions);
+            combined.setPokemonPalettesFollowTypes(true);
+            Gen3to5PaletteRandomizer randomizer = selected(handler, combined, 724);
+            randomizer.randomizePokemonPalettes();
+
+            assertTrue(randomizer.isChangesMade());
+            for (int i = 0; i < selected.size(); i++) {
+                Species sp = selected.get(i);
+                assertFalse(Arrays.equals(originalNormal.get(i), sp.getNormalPalette().toBytes()));
+                assertArrayEquals(originalNormal.get(i), sp.getShinyPalette().toBytes());
+                assertNotSame(loadedNormalObjects.get(i), sp.getShinyPalette());
+                assertNotSame(loadedNormalObjects.get(i).get(0), sp.getShinyPalette().get(0));
+                assertFalse(Arrays.equals(originalShiny.get(i), sp.getShinyPalette().toBytes()));
+            }
+
+            handler.savePokemonPalettes();
+            for (int i = 0; i < selected.size(); i++) {
+                Species sp = selected.get(i);
+                assertArrayEquals(sp.getNormalPalette().toBytes(), handler.readback(sp, false));
+                assertArrayEquals(originalNormal.get(i), handler.readback(sp, true));
+            }
+        }
+
+        Species valid = speciesWithPalette(4), missingShiny = speciesWithPalette(7), opaque = speciesWithPalette(388);
+        missingShiny.setShinyPalette(null);
+        SelectedHandler handler = new SelectedHandler(new SpeciesSet(List.of(valid, missingShiny, opaque)));
+        byte[] validNormalBefore = valid.getNormalPalette().toBytes();
+        Palette missingNormalBefore = missingShiny.getNormalPalette();
+        Palette opaqueNormalBefore = opaque.getNormalPalette(), opaqueShinyBefore = opaque.getShinyPalette();
+        byte[] missingNormalBytes = missingNormalBefore.toBytes();
+        byte[] opaqueNormalBytes = opaqueNormalBefore.toBytes(), opaqueShinyBytes = opaqueShinyBefore.toBytes();
         Settings combined = gfx004(false); combined.setPokemonPalettesFollowTypes(true);
+        selected(handler, combined, 724).randomizePokemonPalettes();
+        handler.savePokemonPalettes();
+        assertFalse(Arrays.equals(validNormalBefore, valid.getNormalPalette().toBytes()));
+        assertArrayEquals(valid.getNormalPalette().toBytes(), handler.readback(valid, false));
+        assertSame(missingNormalBefore, missingShiny.getNormalPalette());
+        assertNull(missingShiny.getShinyPalette());
+        assertArrayEquals(missingNormalBytes, missingShiny.getNormalPalette().toBytes());
+        assertSame(opaqueNormalBefore, opaque.getNormalPalette()); assertSame(opaqueShinyBefore, opaque.getShinyPalette());
+        assertArrayEquals(opaqueNormalBytes, opaque.getNormalPalette().toBytes());
+        assertArrayEquals(opaqueShinyBytes, opaque.getShinyPalette().toBytes());
+
+        Species absent = new Species(4);
+        SelectedHandler noAssets = new SelectedHandler(new SpeciesSet(absent));
+        Palette absentNormal = absent.getNormalPalette(), absentShiny = absent.getShinyPalette();
+        Settings noPair = gfx004(false); noPair.setPokemonPalettesFollowTypes(true);
         assertThrows(com.uprfvx.random.exceptions.RandomizationException.class,
-                () -> selected(handler, combined, 1).randomizePokemonPalettes());
+                () -> selected(noAssets, noPair, 724).randomizePokemonPalettes());
+        assertSame(absentNormal, absent.getNormalPalette()); assertSame(absentShiny, absent.getShinyPalette());
+        assertFalse(noAssets.getCfruDpePalettePairEligibility(absent).eligible());
+
+        Species sp = speciesWithPalette(4);
+        SelectedHandler disabledHandler = new SelectedHandler(new SpeciesSet(sp));
+        Palette normal = sp.getNormalPalette(), shiny = sp.getShinyPalette();
         Settings disabled = gfx004(false); disabled.setPokemonPalettesMod(Settings.PokemonPalettesMod.UNCHANGED);
-        Gen3to5PaletteRandomizer randomizer = selected(handler, disabled, 1);
+        Gen3to5PaletteRandomizer randomizer = selected(disabledHandler, disabled, 1);
         randomizer.randomizePokemonPalettes();
         assertFalse(randomizer.isChangesMade());
         assertSame(normal, sp.getNormalPalette()); assertSame(shiny, sp.getShinyPalette());

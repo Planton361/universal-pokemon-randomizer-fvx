@@ -217,7 +217,11 @@ public class GameRandomizer {
                 } else gen3.preflightCfruEvolutionOptions(settings.isMakeEvolutionsEasier(), settings.isRemoveTimeBasedEvolutions());
                 if (settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.RANDOM
                         && settings.isPokemonPalettesFollowTypes() && settings.isPokemonPalettesShinyFromNormal()) {
-                    throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires separate approval.");
+                    if (paletteRandomizer instanceof Gen3to5PaletteRandomizer palettePreflight) {
+                        palettePreflight.preflightCfruDpePaletteComposition();
+                    } else {
+                        throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal has no supported palette preflight.");
+                    }
                 }
             }
             // F05 must reject unapproved combinations/slot drift before any updater or randomizer.
