@@ -541,6 +541,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public void condenseLevelEvolutions(int maxLevel) {
         if (!useCfruDpeGen9SpeciesCount) { super.condenseLevelEvolutions(maxLevel); return; }
+        if (cfruEvolutionImpossibleEasierApplied) throw evolutionOwnershipError("independent Easier dispatch after joint plan");
         applyCfruEvolutionEasier(maxLevel);
     }
 
@@ -768,6 +769,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         cfruEvolutionEasierApplied = false;
         cfruEvolutionTimeApplied = false;
         cfruEvolutionImpossibleTimeApplied = false;
+        cfruEvolutionImpossibleEasierApplied = false;
+        cfruImpossibleEasierCap = null; cfruImpossibleEasierEstimated = null;
         cfruEasierHighestLevel = null;
         isRomHack = false;
         jamboMovesetHack = false;
@@ -8112,6 +8115,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private Map<Integer, byte[]> prepareCfruDpeEvolutionRows() {
         Map<Integer, byte[]> rows = new LinkedHashMap<>();
         int baseOffset = romEntry.getIntValue("PokemonEvolutions");
+        if (cfruEvolutionImpossibleEasierApplied) {
+            validateEvolutionOwnership(evolutionOwnershipWitness, true);
+            if ((rom[evolutionOwnershipWitness.recordOffset + 28] & 255) != 160
+                    || !plannedCfruDpeEvolutionRows.isEmpty()
+                    || !Arrays.equals(cfruDpeImpossibleEvolutionTableSnapshot,
+                        Arrays.copyOfRange(rom, baseOffset, evolutionOwnershipWitness.table.end))) {
+                throw evolutionOwnershipError("committed joint table/threshold or plan drift");
+            }
+            for (var entry : originalCfruDpeEvolutionRows.entrySet()) {
+                if (!entry.getValue().modeled().equals(snapshotCfruDpeEvolutions(pokesInternal[entry.getKey()]))) {
+                    throw evolutionOwnershipError("committed joint graph drift");
+                }
+            }
+        }
         if (!plannedCfruDpeImpossibleRows.isEmpty()) {
             cfruDpeImpossibleEvolutionOwners(); // Recheck canonical owners/targets at commit time.
             int size = CFRU_DPE_SPECIES_COUNT * getEvolutionRowSize();
@@ -8250,6 +8267,296 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         // validates source ownership using the unchanged default conversion policy.
         if (removeTime) planCfruDpeImpossibleTimeEvolutions(false);
         else planCfruDpeImpossibleEvolutions(false);
+    }
+
+    private boolean cfruEvolutionImpossibleEasierApplied;
+    private Integer cfruImpossibleEasierCap;
+    private Boolean cfruImpossibleEasierEstimated;
+
+    private record CfruDpeImpossibleEasierPlan(Map<Integer, CfruDpeEvolutionRow> rows,
+            Map<Evolution, Evolution> graph, List<EvolutionBytePatch> patches, int highest) {}
+
+    /** F06b early read-only gate; independent F05 and Easier dispatch remain forbidden. */
+    public void preflightCfruDpeImpossibleEasierEvolutions(int maxLevel, boolean estimated) {
+        if (!useCfruDpeGen9SpeciesCount) throw new RomIOException("Joint evolution plan requires CFRU/DPE");
+        planCfruDpeImpossibleEasierEvolutions(maxLevel, estimated);
+    }
+
+    private CfruDpeImpossibleEasierPlan planCfruDpeImpossibleEasierEvolutions(int maxLevel, boolean estimated) {
+        preflightCfruEvolutionEasier(maxLevel);
+        cfruDpeImpossibleEvolutionOwners();
+        if (cfruEvolutionTimeApplied || !plannedCfruDpeTimeRows.isEmpty()
+                || !plannedCfruDpeImpossibleRows.isEmpty()) {
+            throw evolutionOwnershipError("joint plan cannot consume independent time/impossible plans");
+        }
+        if (cfruEvolutionImpossibleEasierApplied) {
+            if (!Objects.equals(cfruImpossibleEasierCap, maxLevel)
+                    || !Objects.equals(cfruImpossibleEasierEstimated, estimated)) {
+                throw evolutionOwnershipError("joint replay option drift");
+            }
+            prepareCfruDpeEvolutionRows();
+            return new CfruDpeImpossibleEasierPlan(Map.of(), Map.of(), List.of(), cfruEasierHighestLevel);
+        }
+        if (cfruEvolutionEasierApplied) throw evolutionOwnershipError("joint plan cannot consume independent Easier writes");
+        CfruDpeImpossiblePlan impossible = planCfruDpeImpossibleEvolutions(estimated);
+        Map<Integer, byte[]> input = prepareCfruDpeEvolutionRows();
+        Map<Integer, byte[]> finalRows = new LinkedHashMap<>();
+        input.forEach((id, raw) -> finalRows.put(id, raw.clone()));
+        impossible.rows().forEach((id, row) -> finalRows.put(id, row.raw().clone()));
+        Set<Integer> outgoing = new HashSet<>();
+        int highest = getHighestEvoLvl();
+        for (var entry : finalRows.entrySet()) for (int o = 0; o < 128; o += 8) {
+            int method = IOFunctions.read2ByteInt(entry.getValue(), o);
+            int target = IOFunctions.read2ByteInt(entry.getValue(), o + 4);
+            if (method >= 1 && method <= 42 && target > 0 && target < CFRU_DPE_SPECIES_COUNT) outgoing.add(entry.getKey());
+            if (CFRU_PARAM_LEVEL_METHODS.contains(method) && target != 0) {
+                highest = Math.max(highest, IOFunctions.read2ByteInt(entry.getValue(), o + 2));
+            }
+        }
+        boolean condense = maxLevel < highest;
+        int intermediate = (3 * maxLevel + 3) / 4;
+        Map<Evolution, Evolution> graph = new IdentityHashMap<>();
+        impossible.changes().forEach(change -> graph.put(change.edge(), new Evolution(change.converted())));
+        Map<Integer, CfruDpeEvolutionRow> committed = new LinkedHashMap<>();
+        List<EvolutionBytePatch> patches = new ArrayList<>();
+        for (var entry : finalRows.entrySet()) {
+            int id = entry.getKey(); byte[] raw = entry.getValue();
+            byte[] beforeCap = raw.clone();
+            for (int o = 0; o < 128; o += 8) {
+                int method = IOFunctions.read2ByteInt(raw, o), target = IOFunctions.read2ByteInt(raw, o + 4);
+                if (target != 0 && CFRU_PARAM_LEVEL_METHODS.contains(method)) {
+                    int old = IOFunctions.read2ByteInt(raw, o + 2);
+                    IOFunctions.write2ByteInt(raw, o + 2, condense ? Math.min(old, outgoing.contains(target) ? intermediate : maxLevel) : old);
+                }
+            }
+            validateCfruDpeJointTriggers(id, input.get(id), raw);
+            List<Evolution> expected = new ArrayList<>();
+            for (Evolution original : pokesInternal[id].getEvolutionsFrom()) {
+                Evolution edge = graph.computeIfAbsent(original, Evolution::new);
+                int method = Gen3Constants.evolutionTypeToIndex(edge.getType());
+                int target = getEvolutionInternalSpeciesId(edge.getTo());
+                if (CFRU_PARAM_LEVEL_METHODS.contains(method)) {
+                    Set<Integer> levels = new HashSet<>();
+                    for (int o = 0; o < 128; o += 8) {
+                        if (IOFunctions.read2ByteInt(beforeCap, o) == method
+                                && IOFunctions.read2ByteInt(beforeCap, o + 2) == edge.getExtraInfo()
+                                && IOFunctions.read2ByteInt(beforeCap, o + 4) == target) {
+                            levels.add(IOFunctions.read2ByteInt(raw, o + 2));
+                        }
+                    }
+                    if (levels.size() != 1) throw evolutionOwnershipError("joint modeled level has no unique native slot value");
+                    edge.updateEvolutionMethod(edge.getType(), levels.iterator().next());
+                } else if (condense) {
+                    edge.setEstimatedEvoLvl(Math.min(edge.getEstimatedEvoLvl(), outgoing.contains(target) ? intermediate : maxLevel));
+                }
+                expected.add(edge);
+            }
+            List<CfruDpeModeledEvolution> modeled = snapshotCfruDpeEvolutions(expected);
+            if (!modeled.equals(snapshotCfruDpeEvolutions(decodeCfruDpeEvolutionRow(pokesInternal[id], raw)))) {
+                throw evolutionOwnershipError("joint raw plan collapses or diverges from modeled graph");
+            }
+            committed.put(id, new CfruDpeEvolutionRow(raw, modeled, originalCfruDpeEvolutionRows.get(id).fullyModeled()));
+            byte[] original = originalCfruDpeEvolutionRows.get(id).raw();
+            byte[] f05 = impossible.rows().containsKey(id) ? impossible.rows().get(id).raw() : input.get(id);
+            int start = evolutionOwnershipWitness.table.start + id * 128;
+            for (int o = 0; o < 128; o += 2) {
+                if (raw[o] == original[o] && raw[o + 1] == original[o + 1]) continue;
+                boolean target = o % 8 == 4 && plannedCfruDpeEvolutionRows.containsKey(id);
+                boolean f05Word = (o % 8 == 0 || o % 8 == 2)
+                        && (f05[o] != input.get(id)[o] || f05[o + 1] != input.get(id)[o + 1]);
+                boolean capWord = o % 8 == 2 && CFRU_PARAM_LEVEL_METHODS.contains(IOFunctions.read2ByteInt(raw, o - 2));
+                if ((!target && !f05Word && !capWord) || !evolutionOwnershipWitness.table.contains(start + o, 2)) {
+                    throw evolutionOwnershipError("joint plan escapes authorized slot words");
+                }
+                patches.add(new EvolutionBytePatch(start + o, Arrays.copyOfRange(original, o, o + 2), Arrays.copyOfRange(raw, o, o + 2)));
+            }
+        }
+        int threshold = evolutionOwnershipWitness.recordOffset + 28;
+        if ((rom[threshold] & 255) != 160) patches.add(new EvolutionBytePatch(threshold, new byte[]{rom[threshold]}, new byte[]{(byte)160}));
+        validateEvolutionOwnership(evolutionOwnershipWitness, true);
+        validateCfruEvolutionMethods(finalRows);
+        for (EvolutionBytePatch patch : patches) {
+            if (!Arrays.equals(patch.before, 0, patch.before.length, rom, patch.offset, patch.offset + patch.before.length)) {
+                throw evolutionOwnershipError("stale joint byte plan");
+            }
+        }
+        return new CfruDpeImpossibleEasierPlan(committed, graph, patches, condense ? maxLevel : highest);
+    }
+
+    // Narrow source-test fault seam covers both word writes and the final byte writer,
+    // whose inherited writeByte implementation is final.
+    protected void writeCfruDpeJointEvolutionPatch(int offset, byte[] value) {
+        if (value.length == 2) writeWord(offset, IOFunctions.read2ByteInt(value, 0));
+        else if (value.length == 1) writeByte(offset, value[0]);
+        else throw evolutionOwnershipError("invalid joint patch width");
+    }
+
+    /** One commit for native method/parameter/target words and the separately owned threshold. */
+    public void removeImpossibleAndMakeEasierEvolutions(int maxLevel, boolean estimated) {
+        CfruDpeImpossibleEasierPlan plan = planCfruDpeImpossibleEasierEvolutions(maxLevel, estimated);
+        if (cfruEvolutionImpossibleEasierApplied) return;
+        Map<Evolution, Evolution> beforeGraph = new IdentityHashMap<>();
+        plan.graph().keySet().forEach(edge -> beforeGraph.put(edge, new Evolution(edge)));
+        Map<Species, List<Evolution>> beforeLog = new IdentityHashMap<>(getPreImprovedEvolutions());
+        Map<Integer, CfruDpeEvolutionRow> beforeOriginal = new HashMap<>(originalCfruDpeEvolutionRows);
+        Map<Integer, CfruDpeEvolutionRow> beforePlanned = new HashMap<>(plannedCfruDpeEvolutionRows);
+        byte[] beforeSnapshot = cfruDpeImpossibleEvolutionTableSnapshot;
+        int tableStart = evolutionOwnershipWitness.table.start;
+        byte[] beforeTable = Arrays.copyOfRange(rom, tableStart, evolutionOwnershipWitness.table.end);
+        byte[] expectedTable = beforeTable.clone();
+        plan.rows().forEach((id, row) -> System.arraycopy(row.raw(), 0, expectedTable, id * 128, 128));
+        try {
+            for (EvolutionBytePatch patch : plan.patches()) writeCfruDpeJointEvolutionPatch(patch.offset, patch.after);
+            for (EvolutionBytePatch patch : plan.patches()) {
+                if (!Arrays.equals(patch.after, 0, patch.after.length, rom, patch.offset, patch.offset + patch.after.length)) {
+                    throw evolutionOwnershipError("joint write readback mismatch");
+                }
+            }
+            if (!Arrays.equals(expectedTable, 0, expectedTable.length, rom, tableStart, evolutionOwnershipWitness.table.end)) {
+                throw evolutionOwnershipError("joint full physical table readback mismatch");
+            }
+            validateEvolutionOwnership(evolutionOwnershipWitness, false);
+            // Native owner validation and every graph value were checked before the first write.
+            plan.graph().forEach((edge, replacement) -> {
+                if (edge.getType() != replacement.getType() || edge.getExtraInfo() != replacement.getExtraInfo()
+                        || edge.getEstimatedEvoLvl() != replacement.getEstimatedEvoLvl()) {
+                    markImprovedEvolutions(edge.getFrom());
+                    edge.updateEvolutionMethod(replacement.getType(), replacement.getExtraInfo());
+                    edge.setEstimatedEvoLvl(replacement.getEstimatedEvoLvl());
+                }
+            });
+            originalCfruDpeEvolutionRows.putAll(plan.rows());
+            plannedCfruDpeEvolutionRows.clear();
+            int base = evolutionOwnershipWitness.table.start;
+            cfruDpeImpossibleEvolutionTableSnapshot = Arrays.copyOfRange(rom, base, evolutionOwnershipWitness.table.end);
+            cfruEasierHighestLevel = plan.highest();
+            cfruEvolutionEasierApplied = true;
+            cfruEvolutionImpossibleEasierApplied = true;
+            cfruImpossibleEasierCap = maxLevel; cfruImpossibleEasierEstimated = estimated;
+        } catch (RuntimeException e) {
+            System.arraycopy(beforeTable, 0, rom, tableStart, beforeTable.length);
+            for (EvolutionBytePatch patch : plan.patches()) System.arraycopy(patch.before, 0, rom, patch.offset, patch.before.length);
+            beforeGraph.forEach((edge, original) -> {
+                edge.updateEvolutionMethod(original.getType(), original.getExtraInfo());
+                edge.setEstimatedEvoLvl(original.getEstimatedEvoLvl());
+            });
+            getPreImprovedEvolutions().clear(); getPreImprovedEvolutions().putAll(beforeLog);
+            originalCfruDpeEvolutionRows.clear(); originalCfruDpeEvolutionRows.putAll(beforeOriginal);
+            plannedCfruDpeEvolutionRows.clear(); plannedCfruDpeEvolutionRows.putAll(beforePlanned);
+            cfruDpeImpossibleEvolutionTableSnapshot = beforeSnapshot;
+            throw evolutionOwnershipError("joint evolution commit failed; bytes/graph/log restored");
+        }
+    }
+
+    private static int jointConsumerMode(int method) {
+        if (CFRU_DPE_IMPOSSIBLE_NORMAL_METHODS.contains(method)) return 1;
+        if (CFRU_DPE_ITEM_USE_METHODS.contains(method)) return 2;
+        return method == 5 || method == 6 ? 3 : 0;
+    }
+
+    private static int jointGender(int method) {
+        return method == 20 || method == 37 ? 1 : method == 21 || method == 38 ? 2 : 0;
+    }
+
+    private static int jointHours(int method, int auxiliary) {
+        int day = ((1 << 20) - 1) ^ ((1 << 4) - 1);
+        if (Set.of(2, 23, 25).contains(method)) return day;
+        if (Set.of(3, 22, 24, 39).contains(method)) return 0xFFFFFF ^ day;
+        if (method == 28) {
+            int start = auxiliary >>> 8, end = auxiliary & 255;
+            if (start >= end || end > 24) throw evolutionOwnershipError("invalid joint source time window");
+            return ((1 << end) - 1) ^ ((1 << start) - 1);
+        }
+        return 0xFFFFFF;
+    }
+
+    private static boolean jointTriggersOverlap(byte[] row, int x, int y) {
+        int a = IOFunctions.read2ByteInt(row, x), b = IOFunctions.read2ByteInt(row, y);
+        int mode = jointConsumerMode(a);
+        if (mode == 0 || mode != jointConsumerMode(b)) return false;
+        int ap = IOFunctions.read2ByteInt(row, x + 2), bp = IOFunctions.read2ByteInt(row, y + 2);
+        int aa = IOFunctions.read2ByteInt(row, x + 6), ba = IOFunctions.read2ByteInt(row, y + 6);
+        if (mode == 2) {
+            if (ap != bp) return false;
+            if (ap == 101 && aa != ba) return false; // Dawn Stone is gender gated by the consumer.
+            if (a == 36 && b == 36 && aa != ba) return false;
+        }
+        if (mode == 3) return a != 6 || b != 6 || ap == bp;
+        if ((jointHours(a, aa) & jointHours(b, ba)) == 0) return false;
+        if (jointGender(a) != 0 && jointGender(b) != 0 && jointGender(a) != jointGender(b)) return false;
+        if (a >= 8 && a <= 10 && b >= 8 && b <= 10 && a != b) return false;
+        if (a != b && (Set.of(a, b).equals(Set.of(11, 12)) || Set.of(a, b).equals(Set.of(31, 32))
+                || Set.of(a, b).equals(Set.of(41, 42)))) return false;
+        if (a == 19 && b == 19 && ap != bp) return false;
+        int heldA = a == 24 || a == 25 ? ap : a == 35 || a == 36 ? aa : -1;
+        int heldB = b == 24 || b == 25 ? bp : b == 35 || b == 36 ? ba : -1;
+        return heldA < 0 || heldB < 0 || heldA == heldB;
+    }
+
+    private static boolean jointSlot(byte[] row, int slot, int method, int parameter, int target, int auxiliary) {
+        int o = slot * 8;
+        return IOFunctions.read2ByteInt(row, o) == method && IOFunctions.read2ByteInt(row, o + 2) == parameter
+                && IOFunctions.read2ByteInt(row, o + 4) == target && IOFunctions.read2ByteInt(row, o + 6) == auxiliary;
+    }
+
+    private void validateCfruDpeJointTriggers(int id, byte[] input, byte[] row) {
+        byte[] original = originalCfruDpeEvolutionRows.get(id).raw();
+        int[][] nativePairs = {{156,36,36,157,1238}, {555,36,36,556,1241}, {680,54,54,681,1246},
+                {812,40,40,813,1247}, {820,37,37,821,1249}, {940,34,36,941,1250}};
+        for (int[] h : nativePairs) if (id == h[0]) {
+            if (!jointSlot(original,0,4,h[1],h[3],0) || !jointSlot(original,1,35,h[2],h[4],771)) {
+                throw evolutionOwnershipError("exact native Hisui source drift");
+            }
+            for (int o = 0; o < 128; o++) if (o % 8 != 2 && o % 8 != 3 && row[o] != original[o]) {
+                throw evolutionOwnershipError("exact native Hisui priority drift");
+            }
+        }
+        if (id == 961) {
+            if (!jointSlot(original,0,23,25,962,0) || !jointSlot(original,1,22,25,1046,0)
+                    || !jointSlot(original,2,28,25,1082,4372)) throw evolutionOwnershipError("exact Rockruff source drift");
+            for (int o = 0; o < 128; o++) if (o % 8 != 2 && o % 8 != 3 && row[o] != original[o]) {
+                throw evolutionOwnershipError("exact Rockruff priority drift");
+            }
+        }
+        if (id == 25 || id == 206 || id == 601) {
+            if (!Arrays.equals(original,input) || !Arrays.equals(input,row)) {
+                throw evolutionOwnershipError("untouched native priority row mutation is unapproved");
+            }
+        }
+        for (int o = 0; o < 128; o += 8) {
+            int method = IOFunctions.read2ByteInt(row,o), target = IOFunctions.read2ByteInt(row,o+4);
+            if (method >= 1 && method <= 42 && (target <= 0 || target >= CFRU_DPE_SPECIES_COUNT
+                    || pokesInternal[target] == null)) throw evolutionOwnershipError("invalid joint active native target");
+        }
+        for (int x = 0; x < 128; x += 8) for (int y = x + 8; y < 128; y += 8) {
+            if (IOFunctions.read2ByteInt(row, x + 4) == 0 || IOFunctions.read2ByteInt(row, y + 4) == 0
+                    || IOFunctions.read2ByteInt(row, x + 4) == IOFunctions.read2ByteInt(row, y + 4)
+                    || !jointTriggersOverlap(row, x, y)) continue;
+            boolean approved = false;
+            int[][] hisui = {{156,36,36,157,1238}, {555,36,36,556,1241}, {680,54,54,681,1246},
+                    {812,40,40,813,1247}, {820,37,37,821,1249}, {940,34,36,941,1250}};
+            for (int[] h : hisui) if (id == h[0] && x == 0 && y == 8
+                    && jointSlot(original,0,4,h[1],h[3],0) && jointSlot(original,1,35,h[2],h[4],771)) {
+                approved = IOFunctions.read2ByteInt(row,0) == 4 && IOFunctions.read2ByteInt(row,4) == h[3]
+                        && IOFunctions.read2ByteInt(row,6) == 0 && IOFunctions.read2ByteInt(row,8) == 35
+                        && IOFunctions.read2ByteInt(row,12) == h[4] && IOFunctions.read2ByteInt(row,14) == 771;
+            }
+            if (id == 961 && x == 0 && y == 16 && jointSlot(original,0,23,25,962,0)
+                    && jointSlot(original,1,22,25,1046,0) && jointSlot(original,2,28,25,1082,4372)) {
+                approved = IOFunctions.read2ByteInt(row,0) == 23 && IOFunctions.read2ByteInt(row,4) == 962
+                        && IOFunctions.read2ByteInt(row,6) == 0 && IOFunctions.read2ByteInt(row,8) == 22
+                        && IOFunctions.read2ByteInt(row,12) == 1046 && IOFunctions.read2ByteInt(row,14) == 0
+                        && IOFunctions.read2ByteInt(row,16) == 28 && IOFunctions.read2ByteInt(row,20) == 1082
+                        && IOFunctions.read2ByteInt(row,22) == 4372;
+            }
+            if (x == 0 && y == 8 && Arrays.equals(original,input) && Arrays.equals(input,row)) {
+                approved |= id == 25 && jointSlot(original,0,7,96,26,0) && jointSlot(original,1,34,96,1022,23);
+                approved |= id == 601 && jointSlot(original,0,7,93,602,0) && jointSlot(original,1,36,93,1242,771);
+                approved |= id == 206 && jointSlot(original,0,26,942,1378,0) && jointSlot(original,1,26,942,1379,100);
+            }
+            if (!approved) throw evolutionOwnershipError("unapproved joint collision at native owner " + id
+                    + " slots " + x / 8 + "/" + y / 8);
+        }
     }
 
     private List<Species> cfruDpeImpossibleEvolutionOwners() {

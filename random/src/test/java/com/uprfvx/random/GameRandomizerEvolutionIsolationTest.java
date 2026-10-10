@@ -26,13 +26,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GameRandomizerEvolutionIsolationTest {
 
     private static class EarlyGateFixture extends CfruDpeEvolutionFixture {
-        int preflights, restrictions, removals, combinedRemovals, impossibleRemovals;
+        int preflights, restrictions, removals, combinedRemovals, impossibleRemovals, jointEasierPreflights, jointEasierRemovals, standaloneCaps, standaloneEasier;
         boolean rejectRestrictions;
         EarlyGateFixture() throws Exception { super(); }
         @Override public void preflightCfruDpeTimeEvolutions() { preflights++; super.preflightCfruDpeTimeEvolutions(); }
         @Override public void removeTimeBasedEvolutions() { removals++; super.removeTimeBasedEvolutions(); }
         @Override public void removeImpossibleAndTimeBasedEvolutions(boolean estimated) {
             combinedRemovals++; super.removeImpossibleAndTimeBasedEvolutions(estimated);
+        }
+        @Override public void preflightCfruDpeImpossibleEasierEvolutions(int cap,boolean estimated) {
+            jointEasierPreflights++;super.preflightCfruDpeImpossibleEasierEvolutions(cap,estimated);
+        }
+        @Override public void removeImpossibleAndMakeEasierEvolutions(int cap,boolean estimated) {
+            jointEasierRemovals++;super.removeImpossibleAndMakeEasierEvolutions(cap,estimated);
+        }
+        @Override public void condenseLevelEvolutions(int cap) {standaloneCaps++;super.condenseLevelEvolutions(cap);}
+        @Override public void makeEvolutionsEasier(boolean other,boolean estimated) {
+            standaloneEasier++;super.makeEvolutionsEasier(other,estimated);
         }
         @Override public void removeImpossibleEvolutions(boolean moves,boolean estimated) {
             impossibleRemovals++; super.removeImpossibleEvolutions(moves,estimated);
@@ -68,6 +78,81 @@ class GameRandomizerEvolutionIsolationTest {
             @Override protected Object[][] getContents() { return new Object[0][]; }
         };
         return new GameRandomizer(settings, null, f, bundle, false);
+    }
+
+    private static void bindJointWitness(EarlyGateFixture f) throws Exception {
+        byte[] memory=f.memory;int record=0x48200;
+        memory[0xAC]='B';memory[0xAD]='P';memory[0xAE]='R';memory[0xAF]='E';
+        memory[0x42EC4]=0;memory[0x42EC5]=0x4B;memory[0x42EC6]=0x18;memory[0x42EC7]=0x47;
+        java.util.function.BiConsumer<Integer,Integer> full=(at,value)->{for(int i=0;i<4;i++)memory[at+i]=(byte)(value>>>(i*8));};
+        full.accept(0x42EC8,0x08048001);full.accept(0x42F6C,0x08000100);
+        System.arraycopy("CFRUEVO1".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,memory,record,8);
+        full.accept(record+8,0x08048200);full.accept(record+12,0x08048001);
+        int[] fields={1,32,28,1,220,160};for(int i=0;i<fields.length;i++) {
+            memory[record+16+i*2]=(byte)fields[i];memory[record+17+i*2]=(byte)(fields[i]>>>8);
+        }
+        memory[record+28]=(byte)220;
+        Properties witness=new Properties();
+        String[][] data={{"schema","OWNERSHIP_WITNESS_V1"},{"version","1"},
+                {"cfru.sha","e27e2113e4d59dc76cf5da8d4c43b067addae348"},{"dpe.sha","d887185de1f6ae6a78e85c4311bbadde17041d00"},
+                {"build.id","synthetic-build"},{"config.id","synthetic-config"},{"config.sha256","0".repeat(64)},
+                {"input.size",Integer.toString(memory.length)},
+                {"input.sha256",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(memory))},
+                {"record.offset","0x48200"},{"table.rows","1440"},{"table.slots","16"},{"table.entryBytes","8"},
+                {"consumer.start","0x48000"},{"consumer.end","0x48100"},
+                {"table.start","0x100"},{"table.end",Integer.toString(0x100+1440*128)},
+                {"insertions.count","2"},{"insertions.0.start","0x100"},{"insertions.0.end","0x2E000"},
+                {"insertions.1.start","0x48000"},{"insertions.1.end","0x4C000"},{"protected.count","4"}};
+        for(String[] d:data)witness.setProperty(d[0],d[1]);
+        String[] types={"PICKUP_CODE","PICKUP_DATA","OTHER_CODE","OTHER_DATA"};
+        for(int i=0;i<4;i++) {
+            witness.setProperty("protected."+i+".type",types[i]);
+            witness.setProperty("protected."+i+".start",Integer.toString(0x49000+i*0x100));
+            witness.setProperty("protected."+i+".end",Integer.toString(0x49080+i*0x100));
+        }
+        f.setField("originalRom",memory.clone());f.loadEvolutions();
+        var bind=com.uprfvx.romio.romhandlers.Gen3RomHandler.class.getDeclaredMethod("acceptSyntheticEvolutionWitness",Properties.class);
+        bind.setAccessible(true);bind.invoke(f,witness);
+    }
+
+    @Test
+    void jointEasierEarlyGateValidatesWitnessSlotsAndAllForbiddenPairsBeforeUpdaters() throws Exception {
+        for(int mode=0;mode<5;mode++)for(long seed:new long[]{0,1,677,20261005658L}) {
+            var f=new EarlyGateFixture();f.nativeOwners();f.populateExactSource();
+            if(mode==1)f.entry(156,15,4,10,3,0);
+            bindJointWitness(f);f.rejectRestrictions=true;
+            if(mode==2)f.memory[0x48212]^=1;
+            var settings=new Settings();settings.setChangeImpossibleEvolutions(true);settings.setMakeEvolutionsEasier(true);
+            settings.setMakeEvolutionsEasierLvl(20);settings.setRemoveTimeBasedEvolutions(mode>=3);
+            if(mode==4)settings.setChangeImpossibleEvolutions(false);
+            settings.setUpdateBaseStats(true);settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
+            byte[] before=f.memory.clone();
+            var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),seed);
+            assertFalse(result.wasSaveSuccessful());assertEquals(mode==0?1:0,f.restrictions);
+            assertEquals(mode>=3?0:1,f.jointEasierPreflights);
+            assertEquals(0,f.jointEasierRemovals);assertEquals(0,f.standaloneCaps);assertEquals(0,f.impossibleRemovals);
+            assertArrayEquals(before,f.memory);assertEquals(50,f.species[1].getHp());assertTrue(f.getPreImprovedEvolutions().isEmpty());
+            if(mode==0)assertEquals("synthetic stop at restrictions",result.getException().getMessage());
+            if(mode>=3)assertTrue(result.getException().getMessage().contains("Make Easier + Remove Time"));
+        }
+    }
+
+    @Test
+    void exactlyOneJointEasierDispatcherCrossSeedAndNoIndependentMutator() throws Exception {
+        byte[] reference=null;
+        for(long seed:new long[]{0,1,677,20261005658L}) {
+            var f=new EarlyGateFixture();f.nativeOwners();f.populateExactSource();bindJointWitness(f);
+            var settings=new Settings();settings.setChangeImpossibleEvolutions(true);settings.setMakeEvolutionsEasier(true);settings.setMakeEvolutionsEasierLvl(20);
+            var restored=Settings.fromString(withSerializationDefaults(settings).toString());
+            var method=GameRandomizer.class.getDeclaredMethod("maybeApplyEvolutionImprovements");method.setAccessible(true);
+            var game=randomizer(f,restored);var rng=GameRandomizer.class.getDeclaredField("randomSource");rng.setAccessible(true);
+            ((com.uprfvx.random.random.RandomSource)rng.get(game)).seed(seed);method.invoke(game);f.write();f.write();
+            assertEquals(1,f.jointEasierRemovals);assertEquals(0,f.standaloneCaps);assertEquals(0,f.standaloneEasier);
+            assertEquals(0,f.impossibleRemovals);assertEquals(0,f.combinedRemovals);assertEquals(0,f.removals);
+            assertEquals(4,f.word(64,0,0));assertEquals(20,f.word(64,0,2));assertEquals(7,f.word(133,0,0));
+            assertEquals(160,f.memory[0x4821C]&255);
+            if(reference==null)reference=f.memory.clone();else assertArrayEquals(reference,f.memory);
+        }
     }
 
     @Test
@@ -232,7 +317,7 @@ class GameRandomizerEvolutionIsolationTest {
     }
 
     @Test
-    void impossibleRawSlotPreflightKeepsEasierPairBlockedBeforeAnyRestrictionsOrUpdaters() throws Exception {
+    void jointImpossibleEasierRejectsMissingWitnessBeforeAnyRestrictionsOrUpdaters() throws Exception {
         for (boolean easier : new boolean[]{true}) for(long seed : new long[]{0,1,677,20261005658L}) {
             var f = new EarlyGateFixture(); f.populateExactSource(); f.rejectRestrictions=true;
             var settings=new Settings(); settings.setChangeImpossibleEvolutions(true);
@@ -241,7 +326,7 @@ class GameRandomizerEvolutionIsolationTest {
             byte[] before=f.memory.clone();
             var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),seed);
             assertFalse(result.wasSaveSuccessful());
-            assertTrue(result.getException().getMessage().contains("Change Impossible + Make Easier/Remove Time"));
+            assertTrue(result.getException().getMessage().contains("explicit JVM opt-in missing"));
             assertEquals(0,f.restrictions); assertEquals(0,f.preflights); assertEquals(0,f.removals);
             assertEquals(50,f.species[1].getHp()); assertArrayEquals(before,f.memory);
             assertTrue(f.getPreImprovedEvolutions().isEmpty());

@@ -519,7 +519,7 @@ class Gen3CfruDpeEvolutionPreservationTest {
     }
 
     /** Entire witness and input are constructed in memory. No filesystem ingress in source tests. */
-    private static class WitnessFixture extends CfruDpeEvolutionFixture {
+    static class WitnessFixture extends CfruDpeEvolutionFixture {
         static final int RECORD = 0x48200;
         final Properties witness = new Properties();
         int failAt = -1, writes;
