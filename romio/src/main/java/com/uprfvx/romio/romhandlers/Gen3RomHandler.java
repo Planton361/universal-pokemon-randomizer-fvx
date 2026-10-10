@@ -770,7 +770,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         cfruEvolutionTimeApplied = false;
         cfruEvolutionImpossibleTimeApplied = false;
         cfruEvolutionImpossibleEasierApplied = false;
-        cfruEvolutionEasierTimeApplied = false; cfruEasierTimeCap = null; cfruEasierTimeEstimated = null;
+        cfruEvolutionEasierTimeApplied = false; cfruEasierTimeCap = null; cfruEasierTimeEstimated = null; cfruEasierTimeIncludesImpossible = false;
         cfruImpossibleEasierCap = null; cfruImpossibleEasierEstimated = null;
         cfruEasierHighestLevel = null;
         isRomHack = false;
@@ -8452,6 +8452,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private boolean cfruEvolutionEasierTimeApplied;
     private Integer cfruEasierTimeCap;
     private Boolean cfruEasierTimeEstimated;
+    private boolean cfruEasierTimeIncludesImpossible;
 
     private record CfruDpeEasierTimePlan(Map<Integer, CfruDpeEvolutionRow> rows,
             Map<Species, List<Evolution>> graph, List<EvolutionBytePatch> patches, int highest) {}
@@ -8483,9 +8484,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /** F06d proves all three options from the same original table before any updater. */
+    public void preflightCfruDpeThreeWayEvolutions(int cap, boolean estimated) {
+        if (!useCfruDpeGen9SpeciesCount) throw new RomIOException("Joint evolution plan requires CFRU/DPE");
+        planCfruDpeEasierTimeEvolutions(cap, estimated, true);
+    }
+
     private CfruDpeEasierTimePlan planCfruDpeEasierTimeEvolutions(int cap, boolean estimated) {
+        return planCfruDpeEasierTimeEvolutions(cap, estimated, false);
+    }
+
+    private CfruDpeEasierTimePlan planCfruDpeEasierTimeEvolutions(int cap, boolean estimated, boolean impossible) {
         if (cfruEvolutionEasierTimeApplied) {
-            if (!Objects.equals(cfruEasierTimeCap, cap) || !Objects.equals(cfruEasierTimeEstimated, estimated)) {
+            if (cfruEasierTimeIncludesImpossible != impossible
+                    || !Objects.equals(cfruEasierTimeCap, cap) || !Objects.equals(cfruEasierTimeEstimated, estimated)) {
                 throw evolutionOwnershipError("joint Easier/Time replay option drift");
             }
             cfruDpeImpossibleEvolutionOwners();
@@ -8502,10 +8514,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         cfruDpeImpossibleEvolutionOwners();
         validateCfruDpeEasierTimeGraphReferences();
         Map<Integer, byte[]> input = prepareCfruDpeEvolutionRows();
-        Map<Integer, byte[]> time = planCfruDpeTimeEvolutions();
+        // F06a already proves the six stone-precedence overlaps against independent
+        // Impossible/Time projections. Its result is read-only, never published here.
+        CfruDpeImpossiblePlan conversions = impossible ? planCfruDpeImpossibleTimeEvolutions(estimated) : null;
+        Map<Integer, byte[]> time = impossible ? planCfruDpeTimeEvolutions(true) : planCfruDpeTimeEvolutions();
         Map<Integer, byte[]> finalRows = new LinkedHashMap<>();
         input.forEach((id, raw) -> finalRows.put(id, raw.clone()));
-        time.forEach((id, raw) -> finalRows.put(id, raw.clone()));
+        if (impossible) conversions.rows().forEach((id, row) -> finalRows.put(id, row.raw().clone()));
+        else time.forEach((id, raw) -> finalRows.put(id, raw.clone()));
         // These are the 26 pinned DPE targets, not Dex IDs. Staged, independently
         // validated target-only changes are separate from original source ownership.
         int[] targets = {105,1039,196,197,525,514,1253,363,411,113,501,805,807,
@@ -8563,6 +8579,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                             && old.getExtraInfo() == edge.getExtraInfo()).toList();
                 }
                 if (prior.size() == 1) edge.setEstimatedEvoLvl(prior.getFirst().getEstimatedEvoLvl());
+                if (impossible) for (CfruDpeImpossibleChange change : conversions.changes()) {
+                    if (change.edge().getFrom() == source && change.converted().getTo() == edge.getTo()
+                            && change.converted().getType() == edge.getType()
+                            && change.converted().getExtraInfo() == edge.getExtraInfo()) {
+                        edge.setEstimatedEvoLvl(change.converted().getEstimatedEvoLvl());
+                    }
+                }
                 for (CfruDpeTimeSlot slot : CFRU_DPE_TIME_SLOTS) if (slot.source() == id
                         && Set.of(22,23,28).contains(slot.method()) && slot.timelessMethod() == 7
                         && IOFunctions.read2ByteInt(raw, slot.slot() * 8 + 4) == getEvolutionInternalSpeciesId(edge.getTo())) {
@@ -8575,7 +8598,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             committed.put(id, new CfruDpeEvolutionRow(raw, snapshotCfruDpeEvolutions(edges),
                     !time.containsKey(id) && originalCfruDpeEvolutionRows.get(id).fullyModeled()));
             byte[] original = originalCfruDpeEvolutionRows.get(id).raw();
-            byte[] timeRow = time.getOrDefault(id, input.get(id));
+            byte[] timeRow = impossible && conversions.rows().containsKey(id)
+                    ? conversions.rows().get(id).raw() : time.getOrDefault(id, input.get(id));
             int start = evolutionOwnershipWitness.table.start + id * 128;
             for (int o = 0; o < 128; o += 2) {
                 if (raw[o] == original[o] && raw[o + 1] == original[o + 1]) continue;
@@ -8600,7 +8624,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     /** Single atomic table+threshold commit. No independent feature writer is dispatched. */
     public void makeEasierAndRemoveTimeEvolutions(int cap, boolean estimated) {
-        CfruDpeEasierTimePlan plan = planCfruDpeEasierTimeEvolutions(cap, estimated);
+        makeEasierAndRemoveTimeEvolutions(cap, estimated, false);
+    }
+
+    public void composeThreeWayEvolutions(int cap, boolean estimated) {
+        makeEasierAndRemoveTimeEvolutions(cap, estimated, true);
+    }
+
+    private void makeEasierAndRemoveTimeEvolutions(int cap, boolean estimated, boolean impossible) {
+        CfruDpeEasierTimePlan plan = planCfruDpeEasierTimeEvolutions(cap, estimated, impossible);
         if (cfruEvolutionEasierTimeApplied) return;
         Map<Species, List<Evolution>> beforeFrom = new IdentityHashMap<>(), beforeTo = new IdentityHashMap<>();
         for (Species owner : pokesInternal) if (owner != null) {
@@ -8644,6 +8676,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             cfruDpeImpossibleEvolutionTableSnapshot = expectedTable;
             cfruEasierHighestLevel = plan.highest();
             cfruEasierTimeCap = cap; cfruEasierTimeEstimated = estimated;
+            cfruEasierTimeIncludesImpossible = impossible;
             cfruEvolutionEasierApplied = true; cfruEvolutionTimeApplied = true;
             cfruEvolutionEasierTimeApplied = true;
         } catch (RuntimeException failure) {
