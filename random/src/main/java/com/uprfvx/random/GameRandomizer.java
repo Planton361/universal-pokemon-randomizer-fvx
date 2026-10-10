@@ -216,7 +216,10 @@ public class GameRandomizer {
             }
             // F05 must reject unapproved combinations/slot drift before any updater or randomizer.
             if (settings.isChangeImpossibleEvolutions() && romHandler instanceof Gen3RomHandler gen3) {
-                gen3.preflightCfruDpeImpossibleEvolutions(settings.isMakeEvolutionsEasier(),
+                if (settings.isMakeEvolutionsEasier() && !settings.isRemoveTimeBasedEvolutions()
+                        && gen3.usesCfruDpeRandomPoolPolicy()) {
+                    gen3.preflightCfruDpeImpossibleEasierEvolutions(settings.getMakeEvolutionsEasierLvl(), false);
+                } else gen3.preflightCfruDpeImpossibleEvolutions(settings.isMakeEvolutionsEasier(),
                         settings.isRemoveTimeBasedEvolutions());
             }
             if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3) {
@@ -449,6 +452,12 @@ public class GameRandomizer {
                 && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
             gen3.preflightCfruDpeImpossibleEvolutions(settings.isMakeEvolutionsEasier(), true);
             gen3.removeImpossibleAndTimeBasedEvolutions(useEstimatedLevels);
+            return;
+        }
+
+        if (settings.isChangeImpossibleEvolutions() && settings.isMakeEvolutionsEasier()
+                && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+            gen3.removeImpossibleAndMakeEasierEvolutions(settings.getMakeEvolutionsEasierLvl(), useEstimatedLevels);
             return;
         }
 
