@@ -208,7 +208,10 @@ public class GameRandomizer {
             randomSource.seed(seed);
 
             if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
-                gen3.preflightCfruEvolutionOptions(settings.isMakeEvolutionsEasier(), settings.isRemoveTimeBasedEvolutions());
+                if (settings.isMakeEvolutionsEasier() && settings.isRemoveTimeBasedEvolutions()
+                        && !settings.isChangeImpossibleEvolutions()) {
+                    gen3.preflightCfruDpeEasierTimeEvolutions(settings.getMakeEvolutionsEasierLvl(), false);
+                } else gen3.preflightCfruEvolutionOptions(settings.isMakeEvolutionsEasier(), settings.isRemoveTimeBasedEvolutions());
                 if (settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.RANDOM
                         && settings.isPokemonPalettesFollowTypes() && settings.isPokemonPalettesShinyFromNormal()) {
                     throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires separate approval.");
@@ -222,11 +225,13 @@ public class GameRandomizer {
                 } else gen3.preflightCfruDpeImpossibleEvolutions(settings.isMakeEvolutionsEasier(),
                         settings.isRemoveTimeBasedEvolutions());
             }
-            if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3) {
+            if (settings.isMakeEvolutionsEasier() && romHandler instanceof Gen3RomHandler gen3
+                    && !(settings.isRemoveTimeBasedEvolutions() && gen3.usesCfruDpeRandomPoolPolicy())) {
                 gen3.preflightCfruEvolutionEasier(settings.getMakeEvolutionsEasierLvl());
             }
             if (settings.isRemoveTimeBasedEvolutions() && romHandler instanceof Gen3RomHandler gen3
-                    && !(settings.isChangeImpossibleEvolutions() && gen3.usesCfruDpeRandomPoolPolicy())) {
+                    && !((settings.isChangeImpossibleEvolutions() || settings.isMakeEvolutionsEasier())
+                        && gen3.usesCfruDpeRandomPoolPolicy())) {
                 gen3.preflightCfruDpeTimeEvolutions();
             }
             setupSpeciesRestrictions();
@@ -458,6 +463,13 @@ public class GameRandomizer {
         if (settings.isChangeImpossibleEvolutions() && settings.isMakeEvolutionsEasier()
                 && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
             gen3.removeImpossibleAndMakeEasierEvolutions(settings.getMakeEvolutionsEasierLvl(), useEstimatedLevels);
+            return;
+        }
+
+        if (settings.isMakeEvolutionsEasier() && settings.isRemoveTimeBasedEvolutions()
+                && !settings.isChangeImpossibleEvolutions()
+                && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+            gen3.makeEasierAndRemoveTimeEvolutions(settings.getMakeEvolutionsEasierLvl(), useEstimatedLevels);
             return;
         }
 
