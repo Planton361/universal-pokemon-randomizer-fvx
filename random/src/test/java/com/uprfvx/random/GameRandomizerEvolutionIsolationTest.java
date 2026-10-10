@@ -333,7 +333,7 @@ class GameRandomizerEvolutionIsolationTest {
     }
 
     @Test
-    void combinedOptionsRejectBeforeEitherFeaturePreflightRestrictionsOrAnyMutation() throws Exception {
+    void combinedOptionsWithoutASourceOwnedPairRejectBeforeRestrictionsOrAnyMutation() throws Exception {
         for (long seed : new long[]{0, 1, 677, 20261005658L}) for (boolean palettes : new boolean[]{false, true}) {
             var f = new EarlyGateFixture(); f.populateExactSource(); f.rejectRestrictions = true;
             var settings = new Settings();
@@ -431,6 +431,24 @@ class GameRandomizerEvolutionIsolationTest {
         }
     }
 
+    @Test
+    void guiLoadsAndSavesEveryPokemonPaletteSetting() throws IOException {
+        String source = Files.readString(randomizerGuiSourcePath());
+        String loadSettings = methodBody(source, "private void restoreStateFromSettings(Settings settings)");
+        String saveSettings = methodBody(source, "private Settings createSettingsFromState(CustomNamesSet customNames)");
+
+        assertTrue(loadSettings.contains("ppalUnchangedRadioButton.setSelected(settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.UNCHANGED);"));
+        assertTrue(loadSettings.contains("ppalRandomRadioButton.setSelected(settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.RANDOM);"));
+        assertTrue(loadSettings.contains("ppalFollowTypesCheckBox.setSelected(settings.isPokemonPalettesFollowTypes());"));
+        assertTrue(loadSettings.contains("ppalFollowEvolutionsCheckBox.setSelected(settings.isPokemonPalettesFollowEvolutions());"));
+        assertTrue(loadSettings.contains("ppalShinyFromNormalCheckBox.setSelected(settings.isPokemonPalettesShinyFromNormal());"));
+
+        assertTrue(saveSettings.contains("settings.setPokemonPalettesMod(ppalUnchangedRadioButton.isSelected(), ppalRandomRadioButton.isSelected());"));
+        assertTrue(saveSettings.contains("settings.setPokemonPalettesFollowTypes(ppalFollowTypesCheckBox.isSelected());"));
+        assertTrue(saveSettings.contains("settings.setPokemonPalettesFollowEvolutions(ppalFollowEvolutionsCheckBox.isSelected());"));
+        assertTrue(saveSettings.contains("settings.setPokemonPalettesShinyFromNormal(ppalShinyFromNormalCheckBox.isSelected());"));
+    }
+
     private static Settings withSerializationDefaults(Settings settings) {
         settings.setRomName("SYNTHETIC"); settings.setSelectedEXPCurve(ExpCurve.MEDIUM_FAST); return settings;
     }
@@ -449,6 +467,14 @@ class GameRandomizerEvolutionIsolationTest {
             return moduleRelative;
         }
         return Path.of("random/src/main/java/com/uprfvx/random/log/RandomizationLogger.java");
+    }
+
+    private static Path randomizerGuiSourcePath() {
+        Path moduleRelative = Path.of("src/main/java/com/uprfvx/random/gui/RandomizerGUI.java");
+        if (Files.isRegularFile(moduleRelative)) {
+            return moduleRelative;
+        }
+        return Path.of("random/src/main/java/com/uprfvx/random/gui/RandomizerGUI.java");
     }
 
     private static String methodBody(String source, String signature) {

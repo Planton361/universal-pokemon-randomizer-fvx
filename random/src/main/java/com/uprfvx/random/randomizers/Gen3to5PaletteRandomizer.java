@@ -87,7 +87,8 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
                 return;
             }
             if (typeSanity) {
-                throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires separate approval.");
+                randomizeCfruDpePalettePairsFollowingTypes(gen3, evolutionSanity);
+                return;
             }
             randomizeCfruDpePalettePairs(gen3, evolutionSanity);
             return;
@@ -202,6 +203,131 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
                 + " changedNormal=" + changed + " preserved=" + preserved);
     }
 
+    /** Read-only early gate used before GameRandomizer runs any updater or randomizer. */
+    public void preflightCfruDpePaletteComposition() {
+        if (!(romHandler instanceof Gen3RomHandler gen3) || !gen3.usesCfruDpeRandomPoolPolicy()) {
+            throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires a selected Gen3 profile.");
+        }
+        buildCfruDpePaletteCompositionPreflight(gen3);
+    }
+
+    private CfruDpeCompositionPreflight buildCfruDpePaletteCompositionPreflight(Gen3RomHandler handler) {
+        if (!"FRLG".equals(paletteFilesID)) {
+            throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal requires FRLG palette descriptions.");
+        }
+        List<Species> species = new ArrayList<>(romHandler.getSpeciesSetInclFormes());
+        species.sort(Comparator.comparingInt(Species::getSpeciesSetIdentityNumber)
+                .thenComparingInt(Species::getNumber));
+        Set<Species> selectedOwners = Collections.newSetFromMap(new IdentityHashMap<>());
+        selectedOwners.addAll(romHandler.getSpeciesSet());
+        Map<Integer, Integer> dexOwners = new HashMap<>();
+        Map<Palette, Integer> normalPaletteOwners = new IdentityHashMap<>();
+        for (Species pk : species) {
+            dexOwners.merge(pk.getNumber(), 1, Integer::sum);
+            if (pk.getNormalPalette() != null) {
+                normalPaletteOwners.merge(pk.getNormalPalette(), 1, Integer::sum);
+            }
+        }
+
+        List<PaletteDescription> descriptions = getPaletteDescriptions("pokePalettes");
+        Map<Species, PalettePartDescription[]> eligible = new IdentityHashMap<>();
+        Map<String, Integer> skipped = new TreeMap<>();
+        for (Species pk : species) {
+            String reason = null;
+            if (!selectedOwners.contains(pk) || !pk.isBaseForme() || pk.getFormeNumber() != 0
+                    || pk.isActuallyCosmetic()
+                    || SpecialFormPredicates.cfruDpePoolCategory(pk)
+                        != SpecialFormPredicates.CfruDpePoolCategory.ORDINARY
+                    || pk.getNumber() == SpeciesIDs.unown
+                    || dexOwners.getOrDefault(pk.getNumber(), 0) != 1) {
+                reason = "uncertainOwnerOrForm";
+            } else if (pk.getPrimaryType(false) == null
+                    || pk.getPrimaryType(false) == pk.getSecondaryType(false)) {
+                reason = "missingOrInvalidTypes";
+            } else if (normalPaletteOwners.getOrDefault(pk.getNormalPalette(), 0) != 1) {
+                reason = "sharedNormalPalette";
+            } else {
+                Gen3RomHandler.CfruDpePalettePairEligibility pair = handler.getCfruDpePalettePairEligibility(pk);
+                if (!pair.eligible()) {
+                    reason = pair.reason();
+                }
+            }
+            if (reason == null) {
+                PalettePartDescription[] parts;
+                try {
+                    parts = getPalettePartDescriptions(pk, descriptions);
+                } catch (NumberFormatException malformed) {
+                    parts = null;
+                }
+                if (parts == null || !hasSafeNormalPalette(pk) || !hasSafeParts(parts)) {
+                    reason = "unavailableOrUnsafeDescription";
+                } else {
+                    eligible.put(pk, parts);
+                }
+            }
+            if (reason != null) {
+                skipped.merge(reason, 1, Integer::sum);
+            }
+        }
+        if (eligible.isEmpty()) {
+            throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal has no source-owned, described palette pairs.");
+        }
+        if (settings.isPokemonPalettesFollowEvolutions()) {
+            preflightEvolutionTraversal(romHandler.getSpeciesSetInclFormes());
+        }
+        return new CfruDpeCompositionPreflight(species, eligible, skipped);
+    }
+
+    private void randomizeCfruDpePalettePairsFollowingTypes(Gen3RomHandler handler, boolean followEvolutions) {
+        changesMade = false;
+        CfruDpeCompositionPreflight preflight = buildCfruDpePaletteCompositionPreflight(handler);
+        Map<Species, TypeBaseColorList> colors = new IdentityHashMap<>();
+        copyUpEvolutionsHelper.apply(followEvolutions, true,
+                pk -> {
+                    if (preflight.parts().containsKey(pk)) {
+                        colors.put(pk, new TypeBaseColorList(pk, true, random));
+                    }
+                },
+                (from, to, last) -> {
+                    if (preflight.parts().containsKey(to)) {
+                        colors.put(to, new TypeBaseColorList(to, colors.get(from), true, random));
+                    }
+                });
+
+        PalettePopulator populator = new PalettePopulator(random);
+        Map<Species, PalettePairPlan> planned = new IdentityHashMap<>();
+        boolean changed = false;
+        for (Species pk : preflight.species()) {
+            PalettePartDescription[] parts = preflight.parts().get(pk);
+            if (parts == null) {
+                continue;
+            }
+            TypeBaseColorList colorPlan = colors.get(pk);
+            if (colorPlan == null) {
+                throw new RandomizationException("CFRU/DPE Follow Types + Shiny From Normal has an incomplete typed color plan.");
+            }
+            Palette loadedNormal = pk.getNormalPalette();
+            Palette normal = new Palette(loadedNormal);
+            Palette shiny = new Palette(loadedNormal);
+            populatePalette(normal, populator, colorPlan, parts);
+            changed |= !Arrays.equals(normal.toBytes(), loadedNormal.toBytes())
+                    || !Arrays.equals(shiny.toBytes(), pk.getShinyPalette().toBytes());
+            planned.put(pk, new PalettePairPlan(normal, shiny));
+        }
+
+        // Publish both channels only after every source-valid pair has a complete scratch plan.
+        for (Species pk : preflight.species()) {
+            PalettePairPlan pair = planned.get(pk);
+            if (pair != null) {
+                pk.setNormalPalette(pair.normal());
+                pk.setShinyPalette(pair.shiny());
+            }
+        }
+        changesMade = changed;
+        System.err.println("CFRU/DPE Follow Types + Shiny From Normal: plannedPairs=" + planned.size()
+                + " changed=" + changesMade + " preserved=" + preflight.skipped());
+    }
+
     private boolean hasSafeNormalPalette(Species species) {
         Palette palette = species.getNormalPalette();
         if (palette == null || palette.size() != 16) {
@@ -303,6 +429,10 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
     }
 
     private record PalettePairPlan(Palette normal, Palette shiny) { }
+
+    private record CfruDpeCompositionPreflight(List<Species> species,
+                                               Map<Species, PalettePartDescription[]> parts,
+                                               Map<String, Integer> skipped) { }
 
     private void randomizeCfruDpePalettePairs(Gen3RomHandler handler, boolean followEvolutions) {
         if (!"FRLG".equals(paletteFilesID)) {

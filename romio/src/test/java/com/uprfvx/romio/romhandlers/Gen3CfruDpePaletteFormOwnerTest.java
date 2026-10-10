@@ -168,6 +168,50 @@ class Gen3CfruDpePaletteFormOwnerTest {
         assertArrayEquals(before, f.bytes());
     }
 
+    @Test void failureBeforeFirstPaletteWriteRestoresReservedAllocatorRanges() throws Exception {
+        Fixture f = changedPairFixture();
+        byte[] before = f.bytes().clone(); int freeBefore = f.freeBytes();
+        String allocatorBefore = f.allocatorRanges();
+        f.failPhase = "before-payload-write"; f.failIndex = 0;
+        assertThrows(RomIOException.class, f::savePokemonPalettes);
+        assertArrayEquals(before, f.bytes());
+        assertEquals(freeBefore, f.freeBytes());
+        assertEquals(allocatorBefore, f.allocatorRanges());
+    }
+
+    @Test void partialPayloadWriteFailureRestoresBytesPointersAndAllocator() throws Exception {
+        Fixture f = changedPairFixture();
+        byte[] before = f.bytes().clone(); int freeBefore = f.freeBytes();
+        String allocatorBefore = f.allocatorRanges();
+        f.failPhase = "payload-written"; f.failIndex = 0;
+        assertThrows(RomIOException.class, f::savePokemonPalettes);
+        assertArrayEquals(before, f.bytes());
+        assertEquals(freeBefore, f.freeBytes());
+        assertEquals(allocatorBefore, f.allocatorRanges());
+    }
+
+    @Test void compressedPayloadReadbackMismatchRestoresTheWholeBatch() throws Exception {
+        Fixture f = changedPairFixture();
+        byte[] before = f.bytes().clone(); int freeBefore = f.freeBytes();
+        String allocatorBefore = f.allocatorRanges();
+        f.failPhase = "payload-written"; f.failIndex = 0; f.corruptPayloadAtCheckpoint = true;
+        assertThrows(RomIOException.class, f::savePokemonPalettes);
+        assertArrayEquals(before, f.bytes());
+        assertEquals(freeBefore, f.freeBytes());
+        assertEquals(allocatorBefore, f.allocatorRanges());
+    }
+
+    @Test void partialPointerPublicationFailureRestoresBothNativeChannels() throws Exception {
+        Fixture f = changedPairFixture();
+        byte[] before = f.bytes().clone(); int freeBefore = f.freeBytes();
+        String allocatorBefore = f.allocatorRanges();
+        f.failPhase = "pointer-written"; f.failIndex = 0;
+        assertThrows(RomIOException.class, f::savePokemonPalettes);
+        assertArrayEquals(before, f.bytes());
+        assertEquals(freeBefore, f.freeBytes());
+        assertEquals(allocatorBefore, f.allocatorRanges());
+    }
+
     @Test void fullPhysical1440RowsRetain1439NativePairsIncludingSameDexOwners() throws Exception {
         Fixture f = fixture(); List<Species> all = new ArrayList<>();
         for (int id = 1; id <= 1439; id++) all.add(species(id % 1025 + 1, id));
@@ -359,9 +403,19 @@ class Gen3CfruDpePaletteFormOwnerTest {
         Field field = Gen3RomHandler.class.getDeclaredField(shiny ? "originalCfruDpeShinyPaletteBytes" : "originalCfruDpeNormalPaletteBytes");
         field.setAccessible(true); return (Map<Species, byte[]>) field.get(f);
     }
-    private static final class Fixture extends Gen3RomHandler {
+    private static Fixture changedPairFixture() throws Exception {
+        Fixture f = fixture(); f.loadPokemonPalettes();
+        Species sp = f.owners.getFirst();
+        byte[] normal = sp.getNormalPalette().toBytes(); normal[2] ^= 7;
+        byte[] shiny = sp.getShinyPalette().toBytes(); shiny[4] ^= 11;
+        sp.setNormalPalette(new Palette(normal)); sp.setShinyPalette(new Palette(shiny));
+        return f;
+    }
+
+    private static class Fixture extends Gen3RomHandler {
         final Gen3RomEntry entry; final Species[] internal = new Species[1440];
         final int[] dex = new int[1440], reverse = new int[1440]; List<Species> owners;
+        String failPhase; int failIndex = -1; boolean corruptPayloadAtCheckpoint;
         Fixture(List<Species> selected) throws Exception {
             var constructor = Gen3RomEntry.class.getDeclaredConstructor(String.class); constructor.setAccessible(true);
             entry = constructor.newInstance("SYNTHETIC F03"); entry.setRomCode("BPRE"); entry.setRomType(Gen3Constants.RomType_FRLG);
@@ -392,5 +446,15 @@ class Gen3CfruDpePaletteFormOwnerTest {
         int pointerAt(int entry) { return readPointer(entry, true); }
         byte[] decode(int entry) { return new Palette(DSDecmp.Decompress(rom, pointerAt(entry))).toBytes(); }
         byte[] bytes() { return rom; }
+        int freeBytes() { return getFreedSpace().getLengthSum(); }
+        String allocatorRanges() { return getFreedSpace().toString(); }
+        @Override void cfruDpePaletteWriteCheckpoint(String phase, int index, int offset) {
+            if (!phase.equals(failPhase) || index != failIndex) return;
+            if (corruptPayloadAtCheckpoint) {
+                rom[offset] ^= 0x40;
+            } else {
+                throw new IllegalStateException("synthetic palette writer failure at " + phase);
+            }
+        }
     }
 }

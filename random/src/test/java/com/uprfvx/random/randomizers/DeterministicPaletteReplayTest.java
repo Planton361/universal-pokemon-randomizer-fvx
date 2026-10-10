@@ -99,7 +99,7 @@ class DeterministicPaletteReplayTest {
             System.out.println("SYNTHETIC_INTEGRATION="+HexFormat.of().formatHex(digest.digest()));
             return;
         }
-        if (args[1].startsWith("gfx004")) { gfx004Main(args); return; }
+        if (args[1].startsWith("gfx004") || args[1].startsWith("gfx-combined")) { gfx004Main(args); return; }
         System.out.println("SYNTHETIC_PALETTE=" + selectedReplay(Long.parseLong(args[0])));
     }
 
@@ -153,10 +153,18 @@ class DeterministicPaletteReplayTest {
     }
 
     @Test
+    void selectedFollowTypesAndShinyFromNormalReplayAcrossFreshJvms() throws Exception {
+        for (long seed : SEEDS) for (String mode : List.of("gfx-combined", "gfx-combined-follow")) {
+            String first = process(seed, mode);
+            assertEquals(first, process(seed, mode), "seed=" + seed + " mode=" + mode);
+        }
+    }
+
+    @Test
     void actualGfx004ConsumesOnlyCosmeticStreamAndKeepsHundredGameplayDraws() {
         for (long seed : SEEDS) for (boolean follow : new boolean[]{false, true}) {
             RandomSource source = new RandomSource(); source.seed(seed);
-            loadedPairReplay(source.getCosmetic(), follow);
+            loadedPairReplay(source.getCosmetic(), follow, false);
             assertTrue(source.callsSinceSeedCosmetic() > 0);
             assertEquals(0, source.callsSinceSeedNonCosmetic());
             Random expected = new Random(seed);
@@ -164,7 +172,19 @@ class DeterministicPaletteReplayTest {
         }
     }
 
-    private static String loadedPairReplay(Random cosmetic, boolean follow) {
+    @Test
+    void actualCombinedPalettePathConsumesOnlyCosmeticStream() {
+        for (long seed : SEEDS) for (boolean follow : new boolean[]{false, true}) {
+            RandomSource source = new RandomSource(); source.seed(seed);
+            loadedPairReplay(source.getCosmetic(), follow, true);
+            assertTrue(source.callsSinceSeedCosmetic() > 0);
+            assertEquals(0, source.callsSinceSeedNonCosmetic());
+            Random expected = new Random(seed);
+            for (int i = 0; i < 100; i++) assertEquals(expected.nextInt(), source.getNonCosmetic().nextInt());
+        }
+    }
+
+    private static String loadedPairReplay(Random cosmetic, boolean follow, boolean followTypes) {
         var a = Gen3to5PaletteBoundsTest.speciesWithPalette(4);
         var b = Gen3to5PaletteBoundsTest.speciesWithPalette(5);
         var c = Gen3to5PaletteBoundsTest.speciesWithPalette(6);
@@ -176,9 +196,11 @@ class DeterministicPaletteReplayTest {
         var species = List.of(a, b, c);
         var handler = new Gen3to5PaletteBoundsTest.SelectedHandler(new com.uprfvx.romio.gamedata.SpeciesSet(species));
         var originals = species.stream().map(sp -> sp.getNormalPalette().toBytes()).toList();
-        var randomizer = new Gen3to5PaletteRandomizer(handler, Gen3to5PaletteBoundsTest.gfx004(follow), cosmetic);
+        var settings = Gen3to5PaletteBoundsTest.gfx004(follow);
+        settings.setPokemonPalettesFollowTypes(followTypes);
+        var randomizer = new Gen3to5PaletteRandomizer(handler, settings, cosmetic);
         randomizer.randomizePokemonPalettes();
-        if (!randomizer.isChangesMade()) throw new AssertionError("GFX004 made no changes");
+        if (!randomizer.isChangesMade()) throw new AssertionError("Palette composition made no changes");
         StringBuilder result = new StringBuilder();
         for (int i = 0; i < species.size(); i++) {
             var sp = species.get(i);
@@ -196,7 +218,9 @@ class DeterministicPaletteReplayTest {
     private static void gfx004Main(String[] args) {
         long seed = Long.parseLong(args[0]);
         RandomSource source = new RandomSource(); source.seed(seed);
-        String palettes = loadedPairReplay(source.getCosmetic(), args[1].equals("gfx004-follow"));
+        boolean follow = args[1].endsWith("follow");
+        boolean followTypes = args[1].startsWith("gfx-combined");
+        String palettes = loadedPairReplay(source.getCosmetic(), follow, followTypes);
         StringBuilder gameplay = new StringBuilder();
         Random expected = new Random(seed);
         for (int i = 0; i < 100; i++) {
@@ -204,7 +228,7 @@ class DeterministicPaletteReplayTest {
             if (draw != expected.nextInt()) throw new AssertionError("Gameplay RNG changed");
             gameplay.append(draw).append(',');
         }
-        System.out.println("SYNTHETIC_GFX004=" + palettes + " COSMETIC_CALLS=" + source.callsSinceSeedCosmetic()
+        System.out.println("SYNTHETIC_GFX_PALETTE=" + palettes + " COSMETIC_CALLS=" + source.callsSinceSeedCosmetic()
                 + " GAMEPLAY=" + gameplay);
     }
 
@@ -215,7 +239,7 @@ class DeterministicPaletteReplayTest {
             if (loader instanceof URLClassLoader urls) for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
         }
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("cfru-types") || composition.startsWith("gfx004") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
+            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("cfru-types") || composition.startsWith("gfx004") || composition.startsWith("gfx-combined") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
             .redirectErrorStream(true).start();
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly();
@@ -224,7 +248,7 @@ class DeterministicPaletteReplayTest {
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         assertEquals(0, process.exitValue(), output);
         // Only synthetic model fingerprints, never ROM data or hashes.
-        String fingerprints = output.lines().filter(line -> line.startsWith("COMPOSITION=") || line.startsWith("SYNTHETIC_PALETTE=") || line.startsWith("SYNTHETIC_GFX004=") || line.startsWith("SYNTHETIC_INTEGRATION=")).reduce("", (a,b) -> a + b + "\n");
+        String fingerprints = output.lines().filter(line -> line.startsWith("COMPOSITION=") || line.startsWith("SYNTHETIC_PALETTE=") || line.startsWith("SYNTHETIC_GFX_PALETTE=") || line.startsWith("SYNTHETIC_INTEGRATION=")).reduce("", (a,b) -> a + b + "\n");
         assertFalse(fingerprints.isEmpty(), output);
         return fingerprints;
     }

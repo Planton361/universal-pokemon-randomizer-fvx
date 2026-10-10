@@ -11475,6 +11475,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         int skippedMissingPalettePointers = 0;
         int skippedDecodeFailedPalettes = 0;
         int skippedUncertainFormePalettes = 0;
+        List<CfruDpePaletteWrite> writes = new ArrayList<>();
 
         for (Species pk : owners) {
             int pokeNumber = getCfruDpePaletteTableIndexForSave(pk);
@@ -11492,7 +11493,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             if (!hasChangedCfruDpePokemonPalette(currentNormalPalette, originalNormalBytes)) {
                 skippedUnchangedNormalPalettes++;
             } else if (canWriteCfruDpePaletteCopy(pk, currentNormalPalette, originalNormalBytes)) {
-                writeCompressedPaletteCopy(normalPalPointerOffset, currentNormalPalette);
+                writes.add(createCfruDpePaletteWrite(normalPalPointerOffset, currentNormalPalette));
                 normalPaletteWriteAttempts++;
             } else {
                 if (pk.getNumber() == SpeciesIDs.unown) {
@@ -11508,7 +11509,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             if (!hasChangedCfruDpePokemonPalette(currentShinyPalette, originalShinyBytes)) {
                 skippedUnchangedShinyPalettes++;
             } else if (canWriteCfruDpePaletteCopy(pk, currentShinyPalette, originalShinyBytes)) {
-                writeCompressedPaletteCopy(shinyPalPointerOffset, currentShinyPalette);
+                writes.add(createCfruDpePaletteWrite(shinyPalPointerOffset, currentShinyPalette));
                 shinyPaletteWriteAttempts++;
             } else {
                 if (pk.getNumber() == SpeciesIDs.unown) {
@@ -11522,6 +11523,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
         }
 
+        writeCfruDpePaletteBatch(writes);
+
         System.err.println(CFRU_DPE_PALETTE_DIAGNOSTIC_PREFIX
                 + "palette copy save:"
                 + " normalPaletteWriteAttempts=" + normalPaletteWriteAttempts
@@ -11531,6 +11534,159 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 + " skippedMissingPalettePointers=" + skippedMissingPalettePointers
                 + " skippedDecodeFailedPalettes=" + skippedDecodeFailedPalettes
                 + " skippedUncertainFormePalettes=" + skippedUncertainFormePalettes);
+    }
+
+    private CfruDpePaletteWrite createCfruDpePaletteWrite(int pointerOffset, Palette palette) {
+        byte[] paletteBytes = palette.toBytes();
+        byte[] compressed = DSCmp.compressLZ10(paletteBytes);
+        if (!Arrays.equals(DSDecmp.Decompress(compressed), paletteBytes)) {
+            throw new RomIOException("CFRU/DPE compressed palette failed pre-write verification");
+        }
+        return new CfruDpePaletteWrite(pointerOffset,
+                Arrays.copyOfRange(rom, pointerOffset, pointerOffset + 4), paletteBytes, compressed);
+    }
+
+    /**
+     * Palette-local transaction: reserve every output, write and verify every payload, then
+     * publish pointer entries last. Any failure restores pointer bytes, free-space bytes and
+     * allocator ranges before returning an error.
+     */
+    private void writeCfruDpePaletteBatch(List<CfruDpePaletteWrite> writes) {
+        if (writes.isEmpty()) {
+            return;
+        }
+        List<CfruDpePaletteAllocation> allocations = new ArrayList<>(writes.size());
+        try {
+            for (CfruDpePaletteWrite write : writes) {
+                allocations.add(reserveCfruDpePaletteWrite(write));
+            }
+            for (int i = 0; i < allocations.size(); i++) {
+                CfruDpePaletteAllocation allocation = allocations.get(i);
+                cfruDpePaletteWriteCheckpoint("before-payload-write", i, allocation.payloadOffset);
+                writeBytes(allocation.payloadOffset, allocation.write.compressed());
+                cfruDpePaletteWriteCheckpoint("payload-written", i, allocation.payloadOffset);
+                byte[] readback = Arrays.copyOfRange(rom, allocation.payloadOffset,
+                        allocation.payloadOffset + allocation.write.compressed().length);
+                if (!Arrays.equals(readback, allocation.write.compressed())
+                        || !Arrays.equals(DSDecmp.Decompress(readback), allocation.write.paletteBytes())) {
+                    throw new RomIOException("CFRU/DPE compressed palette payload readback failed");
+                }
+            }
+            // Return alignment slack only after all payloads passed readback. On rollback the
+            // used prefix is freed and merges with this tail, restoring each original range.
+            for (CfruDpePaletteAllocation allocation : allocations) {
+                if (allocation.tailLength > 0) {
+                    getFreedSpace().free(allocation.payloadOffset + allocation.write.compressed().length,
+                            allocation.tailLength);
+                    allocation.tailReturned = true;
+                }
+            }
+            for (int i = 0; i < allocations.size(); i++) {
+                CfruDpePaletteAllocation allocation = allocations.get(i);
+                cfruDpePaletteWriteCheckpoint("before-pointer-write", i, allocation.write.pointerOffset());
+                writePointer(allocation.write.pointerOffset(), allocation.payloadOffset);
+                if (readPointer(allocation.write.pointerOffset(), true) != allocation.payloadOffset) {
+                    throw new RomIOException("CFRU/DPE palette pointer readback failed");
+                }
+                cfruDpePaletteWriteCheckpoint("pointer-written", i, allocation.write.pointerOffset());
+            }
+        } catch (RuntimeException failure) {
+            rollbackCfruDpePaletteBatch(writes, allocations, failure);
+            if (failure instanceof RomIOException ioFailure) {
+                throw ioFailure;
+            }
+            throw new RomIOException("CFRU/DPE palette batch write failed; all palette changes were restored", failure);
+        } catch (Error failure) {
+            rollbackCfruDpePaletteBatch(writes, allocations, failure);
+            throw failure;
+        }
+    }
+
+    private CfruDpePaletteAllocation reserveCfruDpePaletteWrite(CfruDpePaletteWrite write) {
+        int reservedLength = write.compressed().length + 3;
+        int base;
+        do {
+            base = getFreedSpace().findAndUnfree(reservedLength);
+            if (base == -1) {
+                throw new RomIOException("ROM full. Can't reserve the complete CFRU/DPE palette batch.");
+            }
+            if (base < 0 || base > rom.length - reservedLength) {
+                getFreedSpace().free(base, reservedLength);
+                throw new RomIOException("CFRU/DPE palette allocator returned an out-of-bounds range");
+            }
+        } while (isRomSpaceUsed(base, reservedLength));
+
+        try {
+            int alignmentShift = (4 - (base & 3)) & 3;
+            int payloadOffset = base + alignmentShift;
+            int usedLength = alignmentShift + write.compressed().length;
+            int tailLength = reservedLength - usedLength;
+            byte[] originalBytes = Arrays.copyOfRange(rom, base, base + reservedLength);
+            return new CfruDpePaletteAllocation(write, base, reservedLength, payloadOffset,
+                    usedLength, tailLength, originalBytes);
+        } catch (RuntimeException | Error failure) {
+            try {
+                getFreedSpace().free(base, reservedLength);
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+            throw failure;
+        }
+    }
+
+    private void rollbackCfruDpePaletteBatch(List<CfruDpePaletteWrite> writes,
+                                             List<CfruDpePaletteAllocation> allocations,
+                                             Throwable failure) {
+        for (CfruDpePaletteWrite write : writes) {
+            try {
+                writeBytes(write.pointerOffset(), write.originalPointerBytes());
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+        }
+        for (CfruDpePaletteAllocation allocation : allocations) {
+            try {
+                writeBytes(allocation.base, allocation.originalBytes);
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+        }
+        for (CfruDpePaletteAllocation allocation : allocations) {
+            try {
+                getFreedSpace().free(allocation.base,
+                        allocation.tailReturned ? allocation.usedLength : allocation.reservedLength);
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
+            }
+        }
+    }
+
+    /** Test seam for deterministic failures at the real palette writer's transaction boundaries. */
+    void cfruDpePaletteWriteCheckpoint(String phase, int index, int offset) { }
+
+    private record CfruDpePaletteWrite(int pointerOffset, byte[] originalPointerBytes,
+                                       byte[] paletteBytes, byte[] compressed) { }
+
+    private static final class CfruDpePaletteAllocation {
+        final CfruDpePaletteWrite write;
+        final int base;
+        final int reservedLength;
+        final int payloadOffset;
+        final int usedLength;
+        final int tailLength;
+        final byte[] originalBytes;
+        boolean tailReturned;
+
+        CfruDpePaletteAllocation(CfruDpePaletteWrite write, int base, int reservedLength,
+                                 int payloadOffset, int usedLength, int tailLength, byte[] originalBytes) {
+            this.write = write;
+            this.base = base;
+            this.reservedLength = reservedLength;
+            this.payloadOffset = payloadOffset;
+            this.usedLength = usedLength;
+            this.tailLength = tailLength;
+            this.originalBytes = originalBytes;
+        }
     }
 
     /** DPE d887185 omits Dex mappings for these four named, unsupported Terastal rows. */
@@ -11611,13 +11767,6 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 && pk.getNumber() != SpeciesIDs.unown
                 && currentPalette != null
                 && originalBytes != null;
-    }
-
-    private void writeCompressedPaletteCopy(int pointerOffset, Palette palette) {
-        byte[] paletteBytes = DSCmp.compressLZ10(palette.toBytes());
-        int newOffset = findAndUnfreeSpace(paletteBytes.length);
-        writePointer(pointerOffset, newOffset);
-        writeBytes(newOffset, paletteBytes);
     }
 
     private boolean hasChangedCfruDpePokemonPalettes() {

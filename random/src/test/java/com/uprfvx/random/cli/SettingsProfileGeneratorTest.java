@@ -232,6 +232,11 @@ public class SettingsProfileGeneratorTest {
         Settings shinyFromNormal = settingsForOverlay("FVX-GFX-004");
         assertEquals(Settings.PokemonPalettesMod.RANDOM, shinyFromNormal.getPokemonPalettesMod());
         assertTrue(shinyFromNormal.isPokemonPalettesShinyFromNormal());
+
+        Settings combined = settingsForOverlays("FVX-GFX-002", "FVX-GFX-004");
+        assertEquals(Settings.PokemonPalettesMod.RANDOM, combined.getPokemonPalettesMod());
+        assertTrue(combined.isPokemonPalettesFollowTypes());
+        assertTrue(combined.isPokemonPalettesShinyFromNormal());
     }
 
     @Test
