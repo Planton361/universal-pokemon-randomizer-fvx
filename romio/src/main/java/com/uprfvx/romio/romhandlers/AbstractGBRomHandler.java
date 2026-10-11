@@ -17,9 +17,17 @@ import filefunctions.IOFunctions;
 
 import java.awt.image.BufferedImage;
 import java.io.*;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
@@ -107,17 +115,95 @@ public abstract class AbstractGBRomHandler extends AbstractRomHandler {
 
     @Override
     public boolean saveRomFile(String filename, long seed) {
+        Path temporary = null;
         try {
-            FileOutputStream fos = new FileOutputStream(filename);
-            fos.write(rom);
-            fos.close();
+            Path target = checkedSaveTarget(Paths.get(filename));
+            temporary = Files.createTempFile(target.getParent(), ".uprfvx-save-", ".tmp");
+            try (OutputStream output = openSaveOutput(temporary)) {
+                output.write(rom);
+            }
+            verifySaveOutput(temporary);
+            // Recheck identity after writing, before publishing to the final name.
+            checkedSaveTarget(target);
+            publishSaveOutput(temporary, target);
+            temporary = null;
             return true;
         } catch (IOException ex) {
-            if (ex.getMessage().contains("Access is denied")) {
+            if (ex instanceof AccessDeniedException
+                    || (ex.getMessage() != null && ex.getMessage().contains("Access is denied"))) {
                 throw new CannotWriteToLocationException("The randomizer cannot write to this location: " + filename);
             }
             return false;
+        } catch (InvalidPathException ex) {
+            return false;
+        } finally {
+            if (temporary != null) {
+                try {
+                    removeSaveTemporary(temporary);
+                } catch (IOException ignored) {
+                    // Preserve the save failure contract; never remove the destination as cleanup.
+                }
+            }
         }
+    }
+
+    private Path checkedSaveTarget(Path requested) throws IOException {
+        Path absolute = requested.toAbsolutePath();
+        if (absolute.getFileName() == null || loadedFilename() == null) {
+            throw new IOException("Invalid save destination or missing input identity");
+        }
+        // Resolve the directory first, so parent-directory aliases cannot hide input identity.
+        Path target = absolute.getParent().toRealPath().resolve(absolute.getFileName());
+        Path input = Paths.get(loadedFilename()).toRealPath();
+        if (target.equals(input)) {
+            throw new IOException("Save destination is the loaded input");
+        }
+        BasicFileAttributes attributes;
+        try {
+            attributes = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        } catch (NoSuchFileException ex) {
+            return target;
+        }
+        // Reject even dangling symlinks, directories and special files; do not follow their targets.
+        if (!attributes.isRegularFile() || Files.isSameFile(input, target)) {
+            throw new IOException("Unsafe save destination");
+        }
+        return target;
+    }
+
+    private void verifySaveOutput(Path temporary) throws IOException {
+        if (Files.size(temporary) != rom.length) {
+            throw new IOException("Incomplete save output");
+        }
+        try (InputStream input = Files.newInputStream(temporary)) {
+            byte[] buffer = new byte[8192];
+            int offset = 0;
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                if (count > rom.length - offset
+                        || !Arrays.equals(buffer, 0, count, rom, offset, offset + count)) {
+                    throw new IOException("Save output readback mismatch");
+                }
+                offset += count;
+            }
+            if (offset != rom.length) {
+                throw new IOException("Incomplete save output readback");
+            }
+        }
+    }
+
+    // Narrow I/O seams for deterministic transaction fault tests. Production never falls back to a plain move.
+    protected OutputStream openSaveOutput(Path temporary) throws IOException {
+        return Files.newOutputStream(temporary);
+    }
+
+    protected void publishSaveOutput(Path temporary, Path target) throws IOException {
+        // ATOMIC_MOVE makes replacement provider-specific: unsupported replacement fails closed.
+        Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    protected void removeSaveTemporary(Path temporary) throws IOException {
+        Files.deleteIfExists(temporary);
     }
 
     @Override
