@@ -3029,9 +3029,16 @@ public class Gen2RomHandler extends AbstractGBCRomHandler {
     private void rewritePokemonOrTrainerImage(int pointerOffset, GBCImage image) {
         byte[] uncompressed = image.toBytes();
 
-        GBCDataRewriter<byte[]> dataRewriter = new GBCDataRewriter<>();
+        GBCDataRewriter<byte[]> dataRewriter = new GBCDataRewriter<>() {
+            @Override protected void validateOriginalPointer(int offset) {
+                if (readWord(offset + 1) >= 2 * GBConstants.bankSize) {
+                    throw new RomIOException("Invalid image pointer encoding.");
+                }
+            }
+        };
         dataRewriter.setPointerReader(this::readPokemonOrTrainerImagePointer);
         dataRewriter.setPointerWriter(this::writePokemonOrTrainerImagePointer);
+        dataRewriter.setPointerFormat(3, this::imagePointerCanRepresent);
         dataRewriter.rewriteData(pointerOffset, uncompressed, Gen2Cmp::compress, this::lengthOfCompressedDataAt);
     }
 
@@ -3058,6 +3065,14 @@ public class Gen2RomHandler extends AbstractGBCRomHandler {
             }
         }
         return readPointer(pointerOffset + 1, bank);
+    }
+
+    /** The existing bank remapping must round-trip before the three-byte owner is published. */
+    private boolean imagePointerCanRepresent(int target) {
+        int bank = bankOf(target);
+        if (bank == 0) return true; // A bank-zero address ignores the encoded selector.
+        if (romEntry.isCrystal()) return bank >= 0x36 && bank - 0x36 <= 0xFF;
+        return bank <= 0xFF && bank != 0x13 && bank != 0x14;
     }
 
     private void writePokemonOrTrainerImagePointer(int offset, int pointer) {

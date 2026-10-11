@@ -338,6 +338,19 @@ public abstract class AbstractGBCRomHandler extends AbstractGBRomHandler {
         public GBCDataRewriter() {
             super();
             setLongAlignAdresses(false);
+            pointerSize = 2;
+        }
+
+        @Override protected void validateOriginalPayload(int offset, int length) {
+            if (bankOf(offset) != bankOf(offset + length - 1)) {
+                throw new RomIOException("Original payload crosses a bank boundary.");
+            }
+        }
+
+        @Override protected void validateOriginalPointer(int offset) {
+            if (pointerSize == 2 && readWord(offset) >= 2 * GBConstants.bankSize) {
+                throw new RomIOException("Invalid GB pointer encoding.");
+            }
         }
     }
 
@@ -358,13 +371,15 @@ public abstract class AbstractGBCRomHandler extends AbstractGBRomHandler {
         }
 
         @Override
-        protected int repointAndWriteToFreeSpace(int pointerOffset, byte[] data) {
-            int newOffset = findAndUnfreeSpaceInBank(data.length, bank);
+        protected int reserve(int pointerOffset, int length) {
+            return findAndUnfreeSpaceInBank(length, bank);
+        }
 
-            pointerWriter.accept(pointerOffset, newOffset);
-            writeBytes(newOffset, data);
-
-            return newOffset;
+        @Override protected void validatePointerTarget(int offset, int target) {
+            super.validatePointerTarget(offset, target);
+            if (bankOf(target) != 0 && bankOf(target) != bank) {
+                throw new RomIOException("Target outside fixed bank.");
+            }
         }
     }
 
@@ -378,13 +393,15 @@ public abstract class AbstractGBCRomHandler extends AbstractGBRomHandler {
     protected class SameBankDataRewriter<E> extends GBCDataRewriter<E> {
 
         @Override
-        protected int repointAndWriteToFreeSpace(int pointerOffset, byte[] data) {
-            int bank = bankOf(pointerOffset);
-            int newOffset = findAndUnfreeSpaceInBankOrZeroBank(data.length, bank);
-            pointerWriter.accept(pointerOffset, newOffset);
-            writeBytes(newOffset, data);
+        protected int reserve(int pointerOffset, int length) {
+            return findAndUnfreeSpaceInBankOrZeroBank(length, bankOf(pointerOffset));
+        }
 
-            return newOffset;
+        @Override protected void validatePointerTarget(int offset, int target) {
+            super.validatePointerTarget(offset, target);
+            if (bankOf(target) != 0 && bankOf(target) != bankOf(offset)) {
+                throw new RomIOException("Target outside pointer bank.");
+            }
         }
     }
 
@@ -403,7 +420,11 @@ public abstract class AbstractGBCRomHandler extends AbstractGBRomHandler {
 
         public IndirectBankDataRewriter(int[] bankOffsets) {
             super();
-            this.bankOffsets = bankOffsets;
+            if (bankOffsets.length == 0) throw new IllegalArgumentException("Missing bank owner.");
+            this.bankOffsets = bankOffsets.clone();
+            for (int offset : this.bankOffsets) {
+                if (offset <= 0 || offset >= rom.length) throw new RomIOException("Invalid bank owner.");
+            }
             this.bank = rom[bankOffsets[0]] & 0xFF;
             for (int i = 1; i < bankOffsets.length; i++) {
                 if ((rom[bankOffsets[i]] & 0xFF) != bank) {
@@ -417,18 +438,34 @@ public abstract class AbstractGBCRomHandler extends AbstractGBRomHandler {
         }
 
         @Override
-        protected int repointAndWriteToFreeSpace(int pointerOffset, byte[] data) {
+        protected int reserve(int pointerOffset, int length) {
+            return findAndUnfreeSpaceInUnreservedBanksOrInBank(length, bank);
+        }
 
-            int newOffset = findAndUnfreeSpaceInUnreservedBanksOrInBank(data.length, bank);
-
-            pointerWriter.accept(pointerOffset, newOffset);
-            writeBytes(newOffset, data);
-
-            for (int bankOffset : bankOffsets) {
-                writeByte(bankOffset, (byte) bankOf(newOffset));
+        @Override protected int[] bankOwnerOffsets() {
+            for (int offset : bankOffsets) {
+                if ((rom[offset] & 0xFF) != bank) throw new RomIOException("Changed bank owner.");
             }
+            return bankOffsets.clone();
+        }
 
-            return newOffset;
+        @Override protected void validatePointerTarget(int offset, int target) {
+            super.validatePointerTarget(offset, target);
+            if (bankOf(target) > 0xFF) throw new RomIOException("Unrepresentable bank selector.");
+        }
+
+        @Override protected void publishBanks(int target) {
+            for (int offset : bankOffsets) {
+                writeByte(offset, (byte) bankOf(target));
+                dataRewriteCheckpoint(DataRewritePhase.BANK_WRITTEN, offset);
+            }
+            for (int offset : bankOffsets) {
+                if ((rom[offset] & 0xFF) != bankOf(target)) throw new RomIOException("Bank readback mismatch.");
+            }
+        }
+
+        @Override protected int readPublishedPointer(int offset, int target) {
+            return readPointer(offset, bankOf(target));
         }
     }
 

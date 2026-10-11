@@ -31,6 +31,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.IntPredicate;
 
 /**
  * An abstract base class for GB/GBA {@link RomHandler}s, which standardises common GB(A) functions.
@@ -403,27 +404,67 @@ public abstract class AbstractGBRomHandler extends AbstractRomHandler {
 
     protected abstract void writePointer(int offset, int pointer);
 
-    protected class DataRewriter<E> {
+    protected enum DataRewritePhase {
+        PAYLOAD_WRITTEN, BEFORE_PUBLICATION, POINTER_WRITTEN, BANK_WRITTEN, BEFORE_RELEASE, OLD_RELEASED
+    }
 
+    /** Narrow fault seams; rollback bypasses these writers and restores captured bytes directly. */
+    protected void writeRepointPayload(int offset, byte[] data) {
+        writeBytes(offset, data);
+    }
+
+    protected void dataRewriteCheckpoint(DataRewritePhase phase, int offset) { }
+
+    protected class DataRewriter<E> {
         protected Function<Integer, Integer> pointerReader = AbstractGBRomHandler.this::readPointer;
         protected BiConsumer<Integer, Integer> pointerWriter = AbstractGBRomHandler.this::writePointer;
-
         private boolean longAlignAdresses = true;
+        protected int pointerSize = GBConstants.longSize;
+        private IntPredicate pointerTargetValidator = target -> true;
 
-        public boolean isLongAlignAdresses() {
-            return longAlignAdresses;
+        public boolean isLongAlignAdresses() { return longAlignAdresses; }
+        public void setLongAlignAdresses(boolean value) { longAlignAdresses = value; }
+        public void setPointerReader(Function<Integer, Integer> reader) { pointerReader = reader; }
+        public void setPointerWriter(BiConsumer<Integer, Integer> writer) { pointerWriter = writer; }
+
+        /** Custom codecs must declare their complete byte footprint and representable targets. */
+        public void setPointerFormat(int size, IntPredicate targetValidator) {
+            if (size < 1 || targetValidator == null) throw new IllegalArgumentException("Invalid pointer format.");
+            pointerSize = size;
+            pointerTargetValidator = targetValidator;
         }
 
-        public void setLongAlignAdresses(boolean longAlignAdresses) {
-            this.longAlignAdresses = longAlignAdresses;
+        protected int[] bankOwnerOffsets() { return new int[0]; }
+        protected void validateOriginalPointer(int offset) { }
+        protected void validateOriginalPayload(int offset, int length) { }
+        protected void validatePointerTarget(int offset, int target) {
+            checkRange(target, 1);
+            if (!pointerTargetValidator.test(target)) throw new RomIOException("Unrepresentable pointer target.");
+        }
+        protected int readPublishedPointer(int offset, int target) { return pointerReader.apply(offset); }
+        protected void publishBanks(int target) { }
+        protected int reserve(int pointerOffset, int length) {
+            return findAndUnfreeSpace(length, longAlignAdresses);
         }
 
-        public void setPointerReader(Function<Integer, Integer> pointerReader) {
-            this.pointerReader = pointerReader;
+        private void checkRange(int offset, int length) {
+            if (offset <= 0 || length < 1 || offset > rom.length - length) {
+                throw new RomIOException("Invalid DataRewriter byte range.");
+            }
         }
-
-        public void setPointerWriter(BiConsumer<Integer, Integer> pointerWriter) {
-            this.pointerWriter = pointerWriter;
+        private boolean overlaps(int a, int al, int b, int bl) {
+            return (long) a < (long) b + bl && (long) b < (long) a + al;
+        }
+        private void addOwner(List<Integer> offsets, List<byte[]> bytes, int offset, int length) {
+            checkRange(offset, length);
+            for (int i = 0; i < offsets.size(); i++) {
+                if (offset == offsets.get(i) && length == bytes.get(i).length) return;
+                if (overlaps(offset, length, offsets.get(i), bytes.get(i).length)) {
+                    throw new RomIOException("Overlapping DataRewriter owners.");
+                }
+            }
+            offsets.add(offset);
+            bytes.add(Arrays.copyOfRange(rom, offset, offset + length));
         }
 
         public void rewriteData(int pointerOffset, E e, Function<E, byte[]> newDataFunction,
@@ -433,39 +474,108 @@ public abstract class AbstractGBRomHandler extends AbstractRomHandler {
 
         public void rewriteData(int pointerOffset, E e, int[] secondaryPointerOffsets,
                                 Function<E, byte[]> newDataFunction, Function<Integer, Integer> lengthOfOldFunction) {
-            byte[] newData = newDataFunction.apply(e);
-            int oldDataOffset = pointerReader.apply(pointerOffset);
-            int oldLength = lengthOfOldFunction.apply(oldDataOffset);
-            freeSpace(oldDataOffset, oldLength);
-            int newDataOffset = repointAndWriteToFreeSpace(pointerOffset, newData);
-
-            rewriteSecondaryPointers(pointerOffset, secondaryPointerOffsets, oldDataOffset, newDataOffset);
-        }
-
-        /**
-         * Returns the new offset of the data.
-         **/
-        protected int repointAndWriteToFreeSpace(int pointerOffset, byte[] data) {
-            int newOffset = findAndUnfreeSpace(data.length, longAlignAdresses);
-
-            pointerWriter.accept(pointerOffset, newOffset);
-            writeBytes(newOffset, data);
-
-            return newOffset;
-        }
-
-        protected void rewriteSecondaryPointers(int primaryPointerOffset, int[] secondaryPointerOffsets,
-                                              int oldDataOffset, int newDataOffset) {
-            for (int spo : secondaryPointerOffsets) {
-                int offset = pointerReader.apply(spo);
-                if (spo != primaryPointerOffset && offset != oldDataOffset) {
-                    System.out.println();
-                    System.out.println("bad: " + spo);
-                    throw new RomIOException("Invalid secondary pointer spo=0x" + Integer.toHexString(spo) +
-                            ". Points to 0x" + Integer.toHexString(offset) + " instead of 0x" +
-                            Integer.toHexString(oldDataOffset) + ".");
+            byte[] data = newDataFunction.apply(e).clone();
+            if (data.length < 1 || data.length > rom.length - GBConstants.longSize)
+                throw new RomIOException("Invalid DataRewriter payload size.");
+            List<Integer> pointers = new ArrayList<>();
+            pointers.add(pointerOffset);
+            for (int offset : secondaryPointerOffsets) if (!pointers.contains(offset)) pointers.add(offset);
+            List<Integer> owners = new ArrayList<>();
+            List<byte[]> ownerBytes = new ArrayList<>();
+            for (int offset : pointers) {
+                addOwner(owners, ownerBytes, offset, pointerSize);
+                validateOriginalPointer(offset);
+            }
+            for (int offset : bankOwnerOffsets()) addOwner(owners, ownerBytes, offset, 1);
+            int oldOffset = pointerReader.apply(pointerOffset);
+            checkRange(oldOffset, 1);
+            int oldLength = lengthOfOldFunction.apply(oldOffset);
+            checkRange(oldOffset, oldLength);
+            validateOriginalPayload(oldOffset, oldLength);
+            for (int offset : pointers) {
+                if (pointerReader.apply(offset) != oldOffset) throw new RomIOException("Divergent DataRewriter pointer.");
+            }
+            for (int i = 0; i < owners.size(); i++) {
+                if (overlaps(oldOffset, oldLength, owners.get(i), ownerBytes.get(i).length)) {
+                    throw new RomIOException("Payload overlaps a pointer or bank owner.");
                 }
-                pointerWriter.accept(spo, newDataOffset);
+            }
+            byte[] oldBytes = Arrays.copyOfRange(rom, oldOffset, oldOffset + oldLength);
+            FreedSpace allocator = getFreedSpace();
+            FreedSpace.Snapshot ledger = allocator.snapshot();
+            int newOffset = -1;
+            byte[] replacementBytes = null;
+            boolean oldRegistered = false;
+            try {
+                try {
+                    newOffset = reserve(pointerOffset, data.length);
+                } catch (RomIOException exhausted) {
+                    // Model old-range reuse on scratch bytes only. The original remains reachable.
+                    allocator.restore(ledger);
+                    byte[] live = rom;
+                    byte[] planning = live.clone();
+                    Arrays.fill(planning, oldOffset, oldOffset + oldLength, getFreeSpaceByte());
+                    allocator.free(oldOffset, oldLength);
+                    oldRegistered = true;
+                    try {
+                        rom = planning;
+                        newOffset = reserve(pointerOffset, data.length);
+                    } finally {
+                        rom = live;
+                    }
+                }
+                checkRange(newOffset, data.length);
+                if (!oldRegistered && overlaps(newOffset, data.length, oldOffset, oldLength)) {
+                    throw new RomIOException("Allocation overlaps the live original payload.");
+                }
+                for (int i = 0; i < owners.size(); i++) {
+                    if (overlaps(newOffset, data.length, owners.get(i), ownerBytes.get(i).length)) {
+                        throw new RomIOException("Allocation overlaps pointer or bank owner.");
+                    }
+                }
+                for (int offset : pointers) validatePointerTarget(offset, newOffset);
+                replacementBytes = Arrays.copyOfRange(rom, newOffset, newOffset + data.length);
+                writeRepointPayload(newOffset, data);
+                dataRewriteCheckpoint(DataRewritePhase.PAYLOAD_WRITTEN, newOffset);
+                verifyPayload(newOffset, data);
+                dataRewriteCheckpoint(DataRewritePhase.BEFORE_PUBLICATION, newOffset);
+                verifyPayload(newOffset, data);
+                for (int offset : pointers) {
+                    pointerWriter.accept(offset, newOffset);
+                    dataRewriteCheckpoint(DataRewritePhase.POINTER_WRITTEN, offset);
+                }
+                publishBanks(newOffset);
+                for (int offset : pointers) {
+                    if (readPublishedPointer(offset, newOffset) != newOffset) {
+                        throw new RomIOException("DataRewriter pointer readback mismatch.");
+                    }
+                }
+                verifyPayload(newOffset, data);
+                dataRewriteCheckpoint(DataRewritePhase.BEFORE_RELEASE, oldOffset);
+                if (oldRegistered) {
+                    // Unreserved old fragments already belong to the ledger. Never free them twice.
+                    for (int i = oldOffset; i < oldOffset + oldLength; i++) {
+                        if (i < newOffset || i >= newOffset + data.length) writeByte(i, getFreeSpaceByte());
+                    }
+                } else {
+                    freeSpace(oldOffset, oldLength);
+                }
+                dataRewriteCheckpoint(DataRewritePhase.OLD_RELEASED, oldOffset);
+                verifyPayload(newOffset, data);
+            } catch (RuntimeException failure) {
+                if (replacementBytes != null) System.arraycopy(replacementBytes, 0, rom, newOffset, replacementBytes.length);
+                System.arraycopy(oldBytes, 0, rom, oldOffset, oldBytes.length);
+                for (int i = 0; i < owners.size(); i++) {
+                    System.arraycopy(ownerBytes.get(i), 0, rom, owners.get(i), ownerBytes.get(i).length);
+                }
+                allocator.restore(ledger);
+                throw failure;
+            }
+        }
+
+        private void verifyPayload(int offset, byte[] expected) {
+            for (int i = 0; i < expected.length; i++) {
+                if (rom[offset + i] != expected[i]) throw new RomIOException("DataRewriter payload readback mismatch.");
             }
         }
     }

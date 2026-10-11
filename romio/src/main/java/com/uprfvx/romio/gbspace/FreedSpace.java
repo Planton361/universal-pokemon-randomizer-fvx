@@ -57,6 +57,38 @@ public class FreedSpace {
 
     protected final LinkedList<FreedChunk> freedChunks = new LinkedList<>();
 
+    /** A deep, immutable ledger belonging exclusively to the allocator that captured it. */
+    public static final class Snapshot {
+        private final FreedSpace owner;
+        private final int[][] chunks;
+
+        private Snapshot(FreedSpace owner) {
+            this.owner = owner;
+            chunks = new int[owner.freedChunks.size()][2];
+            int i = 0;
+            for (FreedChunk chunk : owner.freedChunks) {
+                chunks[i++] = new int[]{chunk.start, chunk.end};
+            }
+        }
+    }
+
+    public final Snapshot snapshot() {
+        return new Snapshot(this);
+    }
+
+    /** Restores all chunks, including reserved banks, without changing bank configuration. */
+    public final void restore(Snapshot snapshot) {
+        if (snapshot == null || snapshot.owner != this) {
+            throw new IllegalArgumentException("Snapshot belongs to a different allocator.");
+        }
+        LinkedList<FreedChunk> restored = new LinkedList<>();
+        for (int[] chunk : snapshot.chunks) {
+            restored.add(new FreedChunk(chunk[0], chunk[1]));
+        }
+        freedChunks.clear();
+        freedChunks.addAll(restored);
+    }
+
     public void free(int start, int length) {
         // System.out.printf("freeing %d bytes starting from 0x%x.%n", length, start);
         if (length < 1) {
