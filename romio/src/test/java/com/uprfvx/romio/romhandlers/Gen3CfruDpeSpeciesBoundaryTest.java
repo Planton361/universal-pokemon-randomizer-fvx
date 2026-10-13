@@ -21,6 +21,14 @@ class Gen3CfruDpeSpeciesBoundaryTest {
     private static final int MAX_ID = 0x59F, CAPACITY = MAX_ID + 1;
     private static final int NAMES = 0x130000, DEX = 0x140000, STATS = 0x150000;
     private static final int EVOS = 0x1A0000, NAME_LENGTH = 11;
+    private static final int REPOINTED_DEX = 0x144000, DEX_POINTER = 0x4323C;
+    private static final int[] ZERO_IDS = {
+            252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264,
+            265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276,
+            412, 1426, 1427, 1428, 1429
+    };
+    private static final Map<Integer, Integer> DEX_ANCHORS = Map.of(
+            1, 1, 412, 0, 824, 716, 1000, 783, 1294, 906, MAX_ID, 1025);
 
     @Test
     void physicalCapacityIncludesReservedZeroButModelEndsAtPecharunt() throws Exception {
@@ -37,12 +45,92 @@ class Gen3CfruDpeSpeciesBoundaryTest {
         assertEquals(CAPACITY, f.entry.getIntValue("PokemonCount")); // Strict ABI metadata remains physical.
         assertEquals(CAPACITY, ((String[]) get(f.handler, "pokeNames")).length);
         assertEquals(CAPACITY, ((int[]) get(f.handler, "internalToPokedex")).length);
-        assertEquals(MAX_ID, ((int[]) get(f.handler, "internalToPokedex"))[MAX_ID]);
+        assertEquals(1025, ((int[]) get(f.handler, "internalToPokedex"))[MAX_ID]);
         assertTrue(diagnostics.contains("maxInternalSpeciesId=1439"));
         assertTrue(diagnostics.contains("nativeTableCapacity=1440"));
         assertFalse(diagnostics.contains("Alien"));
         assertEquals(MAX_ID, ((List<?>) get(f.handler, "speciesList")).size() - 1);
         assertArrayEquals(before, f.bytes);
+    }
+
+    @Test
+    void relocatedDexTableBindsBeforeModelLoadPreservingZerosAndFormAliases() throws Exception {
+        var f = fixture(true, CAPACITY);
+        word(f.bytes, DEX, 0); // Stale original table deliberately disagrees with DPE.
+        byte[] before = f.bytes.clone();
+        load(f);
+        assertEquals(REPOINTED_DEX, f.entry.getIntValue("PokedexOrder"));
+        Species[] model = (Species[]) get(f.handler, "pokesInternal");
+        int[] dex = (int[]) get(f.handler, "internalToPokedex");
+        for (var anchor : DEX_ANCHORS.entrySet()) {
+            assertEquals(anchor.getValue().intValue(), dex[anchor.getKey()]);
+            assertEquals(anchor.getValue().intValue(), model[anchor.getKey()].getNumber());
+        }
+        for (int id : ZERO_IDS) {
+            assertEquals(0, dex[id]);
+            assertEquals(0, model[id].getNumber());
+            assertEquals(id, model[id].getSpeciesSetIdentityNumber());
+        }
+        assertEquals(133, model[1270].getNumber()); // Public Eevee-Giga form alias.
+        assertEquals(1270, model[1270].getSpeciesSetIdentityNumber());
+        assertEquals(CAPACITY, model.length);
+        assertEquals(CAPACITY, f.entry.getIntValue("PokemonCount"));
+        assertArrayEquals(before, f.bytes);
+    }
+
+    @Test
+    void malformedDexPointersRejectBeforeModelLoadWithoutVanillaFallback() throws Exception {
+        for (int raw : new int[]{0, -1, 0x07000000, 0x0A000000,
+                0x08000000 + REPOINTED_DEX + 1, 0x08000000 + 0x200000}) {
+            var f = fixture(true, CAPACITY);
+            for (int i = 0; i < 4; i++) f.bytes[DEX_POINTER + i] = (byte) (raw >> (i * 8));
+            assertDexLoadRejectedWithoutMutation(f);
+        }
+    }
+
+    @Test
+    void truncatedDexPointerOwnerRejectsBeforeModelLoad() throws Exception {
+        var f = fixture(true, CAPACITY);
+        byte[] truncated = Arrays.copyOf(f.bytes, DEX_POINTER + 3);
+        set(f.handler, "rom", truncated);
+        assertDexLoadRejectedWithoutMutation(new Fixture(f.handler, f.entry, truncated));
+    }
+
+    @Test
+    void truncatedRelocatedDexWindowRejectsBeforeModelLoad() throws Exception {
+        var f = fixture(true, CAPACITY);
+        pointer(f.bytes, DEX_POINTER, f.bytes.length - MAX_ID * 2 + 2);
+        assertDexLoadRejectedWithoutMutation(f);
+    }
+
+    @Test
+    void invalidDexAnchorsRejectBeforeModelLoad() throws Exception {
+        for (var anchor : DEX_ANCHORS.entrySet()) {
+            var f = fixture(true, CAPACITY);
+            word(f.bytes, REPOINTED_DEX + (anchor.getKey() - 1) * 2, anchor.getValue() + 1);
+            assertDexLoadRejectedWithoutMutation(f);
+        }
+    }
+
+    @Test
+    void outOfRangeDexRejectsBeforeModelLoad() throws Exception {
+        var f = fixture(true, CAPACITY);
+        word(f.bytes, REPOINTED_DEX + 2, 1026);
+        assertDexLoadRejectedWithoutMutation(f);
+    }
+
+    @Test
+    void zeroDexAtPublicPositiveSlotRejectsBeforeModelLoad() throws Exception {
+        var f = fixture(true, CAPACITY);
+        word(f.bytes, REPOINTED_DEX + 2, 0); // Native #2 is positive and is not an anchor.
+        assertDexLoadRejectedWithoutMutation(f);
+    }
+
+    @Test
+    void positiveDexAtReservedZeroSlotRejectsBeforeModelLoad() throws Exception {
+        var f = fixture(true, CAPACITY);
+        word(f.bytes, REPOINTED_DEX + (252 - 1) * 2, 1);
+        assertDexLoadRejectedWithoutMutation(f);
     }
 
     @Test
@@ -56,6 +144,7 @@ class Gen3CfruDpeSpeciesBoundaryTest {
         assertFalse(diagnostics.toString(StandardCharsets.UTF_8).contains("nameWindow index=1440"));
         assertFalse(diagnostics.toString(StandardCharsets.UTF_8).contains("Alien"));
         assertEquals(CAPACITY, f.entry.getIntValue("PokemonCount"));
+        assertEquals(REPOINTED_DEX, f.entry.getIntValue("PokedexOrder"));
         load(f);
         assertEquals(CAPACITY, ((Species[]) get(f.handler, "pokesInternal")).length);
     }
@@ -72,6 +161,7 @@ class Gen3CfruDpeSpeciesBoundaryTest {
         assertFalse(diagnostics.toString(StandardCharsets.UTF_8).contains("nameWindow index=1440"));
         assertFalse(diagnostics.toString(StandardCharsets.UTF_8).contains("Alien"));
         assertEquals(CAPACITY, f.entry.getIntValue("PokemonCount"));
+        assertEquals(REPOINTED_DEX, f.entry.getIntValue("PokedexOrder"));
         load(f);
         assertEquals("Pecharunt", ((Species[]) get(f.handler, "pokesInternal"))[MAX_ID].getName());
     }
@@ -197,6 +287,7 @@ class Gen3CfruDpeSpeciesBoundaryTest {
         assertEquals(CAPACITY + 1, model.length);
         assertEquals("Alien", model[CAPACITY].getName());
         assertEquals(CAPACITY, f.handler.getCfruDpePokemonCountForDiagnostics());
+        assertEquals(DEX, f.entry.getIntValue("PokedexOrder"));
     }
 
     @Test
@@ -204,6 +295,18 @@ class Gen3CfruDpeSpeciesBoundaryTest {
         var f = fixture(false, 25); set(f.handler, "isRomHack", false); load(f);
         assertEquals(26, ((Species[]) get(f.handler, "pokesInternal")).length);
         assertEquals(25, f.handler.getCfruDpePokemonCountForDiagnostics());
+        assertEquals(DEX, f.entry.getIntValue("PokedexOrder"));
+    }
+
+    private static void assertDexLoadRejectedWithoutMutation(Fixture f) throws Exception {
+        byte[] before = f.bytes.clone();
+        int binding = f.entry.getIntValue("PokedexOrder");
+        assertThrows(RomIOException.class, f.handler::loadSpeciesStats);
+        assertEquals(binding, f.entry.getIntValue("PokedexOrder"));
+        assertNull(get(f.handler, "pokesInternal"));
+        assertNull(get(f.handler, "internalToPokedex"));
+        assertNull(get(f.handler, "pokeNames"));
+        assertArrayEquals(before, f.bytes);
     }
 
     private static String load(Fixture f) throws Exception {
@@ -230,6 +333,13 @@ class Gen3CfruDpeSpeciesBoundaryTest {
             memory[DEX + (id - 1) * 2] = (byte) id;
             memory[DEX + (id - 1) * 2 + 1] = (byte) (id >> 8);
         }
+        // Synthetic invariant fixture, not a claim of full public positive-map equality.
+        for (int id = 1; id <= MAX_ID; id++) word(memory, REPOINTED_DEX + (id - 1) * 2, (id - 1) % 1025 + 1);
+        for (int id : ZERO_IDS) word(memory, REPOINTED_DEX + (id - 1) * 2, 0);
+        for (var anchor : DEX_ANCHORS.entrySet())
+            word(memory, REPOINTED_DEX + (anchor.getKey() - 1) * 2, anchor.getValue());
+        word(memory, REPOINTED_DEX + (1270 - 1) * 2, 133);
+        if (nativeProfile) pointer(memory, DEX_POINTER, REPOINTED_DEX);
         name(memory, 824, "Xerneas"); name(memory, 1000, "Hakamo-o"); name(memory, 1294, "Sprigatito");
         Arrays.fill(memory, EVOS + CAPACITY * 128, EVOS + (CAPACITY + 1) * 128, (byte) 0x5A);
         pointer(memory, 0x3EA7C, 0x170000); pointer(memory, 0x43C68, 0x172000);
