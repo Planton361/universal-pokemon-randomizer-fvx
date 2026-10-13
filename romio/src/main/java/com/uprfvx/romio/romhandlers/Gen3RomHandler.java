@@ -680,6 +680,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private static final int CFRU_DPE_MAX_INTERNAL_SPECIES_ID = CFRU_DPE_PECHARUNT_INTERNAL_ID;
     // Native physical rows 0..1439, including reserved slot 0; also the witness ABI capacity.
     private static final int CFRU_DPE_SPECIES_COUNT = CFRU_DPE_MAX_INTERNAL_SPECIES_ID + 1;
+    // DPE d887185 repointall: gSpeciesToNationalPokedexNum, indexed by native ID - 1.
+    private static final int CFRU_DPE_POKEDEX_ORDER_POINTER_LOCATION = 0x4323C;
+    private static final int CFRU_DPE_MAX_NATIONAL_DEX = 1025;
     private static final int CFRU_DPE_TMHMMOVES_POINTER_LOCATION = 0x125A8C;
     private static final int CFRU_DPE_TMHMLEARNSETS_POINTER_LOCATION = 0x43C68;
     private static final int CFRU_DPE_TM_COUNT = 120;
@@ -716,6 +719,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     // DPE/CFRU internal constants; FVX SpeciesIDs has no entries for these non-Pokedex slots.
     private static final int CFRU_DPE_SPECIES_NONE_INTERNAL_ID = 0;
     private static final int CFRU_DPE_SPECIES_EGG_INTERNAL_ID = 0x19C;
+    private static final Map<Integer, Integer> CFRU_DPE_POKEDEX_ANCHORS = Map.of(
+            1, 1, CFRU_DPE_SPECIES_EGG_INTERNAL_ID, 0,
+            CFRU_DPE_XERNEAS_INTERNAL_ID, 716, CFRU_DPE_HAKAMO_O_INTERNAL_ID, 783,
+            CFRU_DPE_SPRIGATITO_INTERNAL_ID, 906, CFRU_DPE_PECHARUNT_INTERNAL_ID, 1025);
     static final int GEN3_TRAINER_MON_BASIC_SIZE = 8;
     static final int GEN3_TRAINER_MON_CUSTOM_MOVES_SIZE = 16;
     static final int CFRU_DPE_TRAINER_MON_ITEM_CUSTOM_MOVES_SIZE = 32;
@@ -1098,6 +1105,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             // write new pokemon count
             romEntry.putIntValue("PokemonCount", iPokemonCount);
             if (useCfruDpeGen9SpeciesCount) {
+                bindCfruDpePokedexOrder();
                 System.err.println(CFRU_DPE_DIAGNOSTIC_PREFIX
                         + "using PokemonNames+BaseStats PokemonCount=" + iPokemonCount
                         + "; skipped Moveset/PokedexOrder count caps for CFRU/DPE Gen9 BPRE");
@@ -1262,6 +1270,36 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /** Validate the selected public DPE invariants before changing the binding or building Species. */
+    private void bindCfruDpePokedexOrder() {
+        if (!useCfruDpeGen9SpeciesCount) return;
+        int maxId = getMaxInternalSpeciesId();
+        if (!isCfruDpeGen9BpreProfile() || romEntry.getVersion() != 0) {
+            throw new RomIOException("CFRU/DPE PokedexOrder requires the selected BPRE0 profile");
+        }
+        long rawPointer = Integer.toUnsignedLong(safeReadLong(CFRU_DPE_POKEDEX_ORDER_POINTER_LOCATION));
+        if (rawPointer < 0x08000000L || rawPointer >= 0x0A000000L || (rawPointer & 1) != 0) {
+            throw new RomIOException("CFRU/DPE PokedexOrder pointer is invalid");
+        }
+        int tableOffset = (int) (rawPointer - 0x08000000L);
+        if (!isTableInRom(rom, tableOffset, maxId * Short.BYTES)) {
+            throw new RomIOException("CFRU/DPE PokedexOrder table is incomplete");
+        }
+        for (int id = 1; id <= maxId; id++) {
+            int dex = readWord(rom, tableOffset + (id - 1) * Short.BYTES);
+            // Exact public zero set: legacy Unown placeholders, Egg, unsupported Terastal rows.
+            boolean zeroSlot = (id >= 252 && id <= 276) || id == CFRU_DPE_SPECIES_EGG_INTERNAL_ID
+                    || (id >= 1426 && id <= 1429);
+            Integer expected = CFRU_DPE_POKEDEX_ANCHORS.get(id);
+            if (dex > CFRU_DPE_MAX_NATIONAL_DEX || (zeroSlot ? dex != 0 : dex == 0)
+                    || (expected != null && dex != expected)) {
+                throw new RomIOException("CFRU/DPE PokedexOrder mapping is invalid");
+            }
+        }
+        // No fallback to the old fixed BPRE table; shared form Dex numbers remain legitimate.
+        romEntry.putIntValue("PokedexOrder", tableOffset);
+    }
+
     private void loadPokedexOrder() {
         int pdOffset = romEntry.getIntValue("PokedexOrder");
         int numInternalPokes = getMaxInternalSpeciesId();
@@ -1341,6 +1379,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void loadSpeciesStats() {
+        bindCfruDpePokedexOrder();
         validateCfruDpeSpeciesTables();
         originalCfruDpeAbilities.clear();
         loadPokemonNames();
