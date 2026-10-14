@@ -199,6 +199,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                                         List<CfruDpeImpossibleChange> changes) {}
 
     private record CfruDpeTargetSlot(int index, int method, int parameter, int target, int auxiliary, boolean randomizable) {}
+    private record CfruDpeTradeItemTargetLink(int tradeSlot, int itemSlot) {}
 
     // Value snapshots must not alias mutable Evolution objects. Estimated levels are
     // randomizer bookkeeping; they are not fields of a Gen3 evolution-table entry.
@@ -7894,6 +7895,56 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             result.add(new CfruDpeTargetSlot(slot, method, parameter, target, auxiliary, unique));
         }
         return result;
+    }
+
+    private List<CfruDpeTradeItemTargetLink> cfruDpeIdenticalTradeItemTargetLinks(byte[] row) {
+        List<CfruDpeTradeItemTargetLink> links = new ArrayList<>();
+        for (int tradeSlot = 0; tradeSlot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; tradeSlot++) {
+            int tradeOffset = tradeSlot * GEN3_EVOLUTION_ENTRY_SIZE;
+            if (IOFunctions.read2ByteInt(row, tradeOffset) != 6) continue;
+            int parameter = IOFunctions.read2ByteInt(row, tradeOffset + 2);
+            int target = IOFunctions.read2ByteInt(row, tradeOffset + 4);
+            if (parameter == 101) continue; // Dawn Stone is gender-gated at this source.
+
+            int matchingTrades = 0;
+            int matchingItems = 0;
+            int itemSlot = -1;
+            boolean unconditionalItem = false;
+            for (int slot = 0; slot < CFRU_DPE_EVOLUTION_SLOTS_PER_MON; slot++) {
+                int offset = slot * GEN3_EVOLUTION_ENTRY_SIZE;
+                int method = IOFunctions.read2ByteInt(row, offset);
+                if (IOFunctions.read2ByteInt(row, offset + 2) != parameter
+                        || IOFunctions.read2ByteInt(row, offset + 4) != target) continue;
+                if (method == 6) matchingTrades++;
+                if (method == 7) {
+                    matchingItems++;
+                    itemSlot = slot;
+                    unconditionalItem = IOFunctions.read2ByteInt(row, offset + 6) == 0;
+                }
+            }
+            if (matchingTrades == 1 && matchingItems == 1 && unconditionalItem) {
+                links.add(new CfruDpeTradeItemTargetLink(tradeSlot, itemSlot));
+            }
+        }
+        return links;
+    }
+
+    /** Returns unambiguous native trade/item slot links whose targets are randomized together. */
+    public Map<Integer, Integer> getCfruDpeTargetOnlyEvolutionLinks(Species source) {
+        if (!usesCfruDpeRandomPoolPolicy()) return Map.of();
+        CfruDpeEvolutionRow row = originalCfruDpeEvolutionRows.get(getEvolutionInternalSpeciesId(source));
+        if (row == null) throw unsafeCfruDpeEvolutionChange(source, "missing loaded raw row");
+        Map<Integer, CfruDpeTargetSlot> slots = new HashMap<>();
+        ordinaryTopologySlots(source, getMovesLearnt()).forEach(slot -> slots.put(slot.index(), slot));
+        Map<Integer, Integer> links = new HashMap<>();
+        for (CfruDpeTradeItemTargetLink link : cfruDpeIdenticalTradeItemTargetLinks(row.raw())) {
+            CfruDpeTargetSlot trade = slots.get(link.tradeSlot());
+            CfruDpeTargetSlot item = slots.get(link.itemSlot());
+            if (trade == null || item == null || !trade.randomizable() || !item.randomizable()) continue;
+            links.put(link.tradeSlot(), link.itemSlot());
+            links.put(link.itemSlot(), link.tradeSlot());
+        }
+        return Map.copyOf(links);
     }
 
     @Override
