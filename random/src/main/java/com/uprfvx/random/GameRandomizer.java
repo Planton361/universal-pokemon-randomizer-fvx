@@ -272,13 +272,21 @@ public class GameRandomizer {
     }
 
     private void setupSpeciesRestrictions() {
+        setupSpeciesRestrictions(settings, romHandler);
+    }
+
+    static void setupSpeciesRestrictions(Settings settings, RomHandler romHandler) {
         romHandler.getRestrictedSpeciesService().setRestrictions(
                 settings.isLimitPokemon() ? settings.getCurrentRestrictions() : null,
                 new SpecialFormExclusionOptions(
                         settings.isAllowMegaForms(),
                         settings.isAllowGigantamaxForms(),
                         settings.isAllowRegionalFormsAcrossGenLimit()));
-        if (settings.isLimitPokemon()) {
+        // Native target-only planning validates against this decoded graph. The
+        // EvolutionRandomizer already uses the restricted service for source and target choices.
+        boolean nativeTargetOnlyEvolutions = settings.getEvolutionsMod() != Settings.EvolutionsMod.UNCHANGED
+                && romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy();
+        if (settings.isLimitPokemon() && !nativeTargetOnlyEvolutions) {
             romHandler.removeEvosForPokemonPool();
         }
     }

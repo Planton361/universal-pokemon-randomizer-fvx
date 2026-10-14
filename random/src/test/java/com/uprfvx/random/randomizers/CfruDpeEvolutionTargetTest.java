@@ -1,11 +1,15 @@
 package com.uprfvx.random.randomizers;
 
+import com.uprfvx.random.GameRandomizer;
 import com.uprfvx.random.Settings;
 import com.uprfvx.random.exceptions.RandomizationException;
 import com.uprfvx.romio.exceptions.RomIOException;
 import com.uprfvx.romio.gamedata.*;
 import com.uprfvx.romio.romhandlers.CfruDpeEvolutionFixture;
+import com.uprfvx.romio.romhandlers.RomHandler;
 import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Method;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -13,6 +17,104 @@ public class CfruDpeEvolutionTargetTest {
     static Settings settings() {
         Settings s = new Settings(); s.setEvolutionsMod(Settings.EvolutionsMod.RANDOM);
         s.setEvosForceChange(true); return s;
+    }
+
+    private static void setupSpeciesRestrictions(Settings settings, RomHandler handler) throws Exception {
+        Method setup = GameRandomizer.class.getDeclaredMethod("setupSpeciesRestrictions", Settings.class, RomHandler.class);
+        setup.setAccessible(true);
+        setup.invoke(null, settings, handler);
+    }
+
+    private static GenRestrictions onlyGenerationOne() {
+        GenRestrictions restrictions = new GenRestrictions(0);
+        restrictions.setGenAllowed(1, true);
+        restrictions.setAllowEvolutionaryRelatives(false);
+        return restrictions;
+    }
+
+    private static void prepareNativeEvolutionOwners(CfruDpeEvolutionFixture fixture) throws Exception {
+        List<Species> loaded = new ArrayList<>();
+        loaded.add(null);
+        loaded.addAll(fixture.pool);
+        fixture.setField("speciesList", loaded);
+        fixture.setField("pokesInternal", Arrays.copyOf(fixture.species, 1440));
+        int[] internalToPokedex = new int[1440];
+        for (int id = 1; id < internalToPokedex.length; id++) {
+            internalToPokedex[id] = fixture.species[id].getNumber();
+        }
+        fixture.setField("internalToPokedex", internalToPokedex);
+    }
+
+    @Test
+    void limitedAllGenerationsKeepsFilteredNativeFormEdgeAndRestrictsRandomTargets() throws Exception {
+        var f = small();
+        f.pool.add(f.species[0x365]);
+        f.entry(1, 0, 4, 30, 0x365, 0); // Native target is ineligible Mega data.
+        f.entry(1, 1, 4, 35, 3, 0);
+        f.loadEvolutions();
+
+        Settings settings = settings();
+        settings.setLimitPokemon(true);
+        settings.setCurrentRestrictions(new GenRestrictions()); // All nine generations selected.
+        setupSpeciesRestrictions(settings, f);
+
+        var allowed = f.getRestrictedSpeciesService().getAll(false);
+        assertFalse(allowed.contains(f.species[0x365]));
+        assertTrue(allowed.contains(f.species[3]));
+        assertTrue(f.species[1].getEvolutionsFrom().stream().anyMatch(e -> e.getTo() == f.species[0x365]));
+
+        new EvolutionRandomizer(f, settings, new Random(667)).randomizeEvolutions();
+        f.write();
+
+        assertEquals(0x365, f.word(1, 0, 4), "filtered native form edge remains byte-for-byte native");
+        int randomizedTarget = f.word(1, 1, 4);
+        assertTrue(allowed.contains(f.species[randomizedTarget]));
+        assertNotEquals(3, randomizedTarget, "force-change remains active within the allowed pool");
+        f.loadEvolutions();
+        assertTrue(f.species[1].getEvolutionsFrom().stream().anyMatch(e -> e.getTo() == f.species[0x365]));
+        assertEquals(1, f.getTargetOnlyEvolutionGraph().get(f.species[1]).size());
+    }
+
+    @Test
+    void randomEvolutionsKeepNativeTradeItemTargetLinkedForImpossibleAndTimeRemoval() throws Exception {
+        for (long seed : new long[] {0, 1, 667, 723}) {
+            var f = new CfruDpeEvolutionFixture();
+            f.populateExactSource();
+            Set<Integer> allowedIds = Set.of(61, 201, 202, 203);
+            f.pool.forEach(species -> species.setGeneration(9));
+            allowedIds.forEach(id -> f.species[id].setGeneration(1));
+
+            Settings settings = settings();
+            settings.setLimitPokemon(true);
+            settings.setCurrentRestrictions(onlyGenerationOne());
+            settings.setChangeImpossibleEvolutions(true);
+            settings.setRemoveTimeBasedEvolutions(true);
+            prepareNativeEvolutionOwners(f);
+            setupSpeciesRestrictions(settings, f);
+
+            Set<Integer> actualPool = new HashSet<>();
+            f.getRestrictedSpeciesService().getSpecies(false, false, false)
+                    .forEach(species -> actualPool.add(species.getSpeciesSetIdentityNumber()));
+            assertEquals(allowedIds, actualPool);
+
+            Evolution trade = f.species[61].getEvolutionsFrom().stream()
+                    .filter(e -> e.getType() == EvolutionType.TRADE_ITEM).findFirst().orElseThrow();
+            Evolution item = f.species[61].getEvolutionsFrom().stream()
+                    .filter(e -> e.getType() == EvolutionType.STONE && e.getTo() == f.species[186])
+                    .findFirst().orElseThrow();
+            f.preflightCfruDpeImpossibleEvolutions(false, true);
+            new EvolutionRandomizer(f, settings, new Random(seed)).randomizeEvolutions();
+
+            assertSame(trade.getTo(), item.getTo(), "linked alternatives share the randomized target");
+            assertTrue(actualPool.contains(trade.getTo().getSpeciesSetIdentityNumber()));
+            f.preflightCfruDpeImpossibleEvolutions(false, true);
+            f.removeImpossibleAndTimeBasedEvolutions(false);
+            f.write();
+            assertEquals(f.word(61, 1, 4), f.word(61, 2, 4));
+            f.write();
+            f.loadEvolutions();
+            assertEquals(f.word(61, 1, 4), f.word(61, 2, 4));
+        }
     }
 
     @Test

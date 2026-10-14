@@ -7,6 +7,7 @@ import com.uprfvx.romio.gamedata.Evolution;
 import com.uprfvx.romio.gamedata.EvolutionType;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.gamedata.SpeciesSet;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 
 import java.util.*;
@@ -157,13 +158,28 @@ public class EvolutionRandomizer extends Randomizer {
             // TODO: iterating through this in a random order would be better
             for (Species from : pokemonPool) {
                 List<Evolution> originalEvos = getOriginalEvos(from);
+                Map<Integer, Integer> linkedSlots = targetOnly && romHandler instanceof Gen3RomHandler gen3
+                        && gen3.usesCfruDpeRandomPoolPolicy()
+                        ? gen3.getCfruDpeTargetOnlyEvolutionLinks(from) : Map.of();
+                Map<Integer, Species> linkedTargets = new HashMap<>();
                 for (Evolution evo : originalEvos) {
-                    SpeciesSet possible = findPossibleReplacements(from, evo);
-                    if (possible.isEmpty()) {
+                    int slot = evo.getExtraInfo();
+                    int peerSlot = linkedSlots.getOrDefault(slot, -1);
+                    int link = peerSlot < 0 ? -1 : Math.min(slot, peerSlot);
+                    Species picked = link < 0 ? null : linkedTargets.get(link);
+                    // Linked raw slots represent the same destination under an
+                    // alternate trigger, so reuse the already validated choice.
+                    if (picked == null) {
+                        SpeciesSet possible = findPossibleReplacements(from, evo);
+                        if (possible.isEmpty()) {
+                            return false;
+                        }
+                        picked = similarStrength ? possible.getRandomSimilarStrengthSpecies(evo.getTo(), random)
+                                : possible.getRandomSpecies(random);
+                        if (link >= 0) linkedTargets.put(link, picked);
+                    } else if (!pokemonPool.contains(picked) || banned.contains(picked) || picked.equals(from)) {
                         return false;
                     }
-                    Species picked = similarStrength ? possible.getRandomSimilarStrengthSpecies(evo.getTo(), random)
-                            : possible.getRandomSpecies(random);
 
                     Evolution newEvo = prepareNewEvolution(from, evo, picked);
                     from.getEvolutionsFrom().add(newEvo);
