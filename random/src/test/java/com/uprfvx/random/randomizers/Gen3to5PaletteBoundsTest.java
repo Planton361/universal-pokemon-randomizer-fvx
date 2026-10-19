@@ -48,9 +48,12 @@ public class Gen3to5PaletteBoundsTest {
             assertFalse(handler.getCfruDpePalettePairEligibility(sp).eligible());
         }
         Species sp = speciesWithPalette(4); sp.setNormalPalette(null);
-        // The independent GFX-001 path is unchanged, including its existing missing-asset failure.
-        assertThrows(NullPointerException.class, () -> selected(new SelectedHandler(new SpeciesSet(sp)),
-                new Settings(), 1).randomizePokemonPalettes());
+        // A feature-level RANDOM request with no eligible channel is a controlled non-PASS.
+        var normalOnly = selected(new SelectedHandler(new SpeciesSet(sp)), paletteSettings(false, false), 1);
+        var failure = assertThrows(com.uprfvx.random.exceptions.RandomizationException.class,
+                normalOnly::randomizePokemonPalettes);
+        assertTrue(failure.getMessage().endsWith("NO_ELIGIBLE_NORMAL_PALETTES"));
+        assertFalse(normalOnly.isChangesMade());
     }
 
     @Test
@@ -499,7 +502,7 @@ public class Gen3to5PaletteBoundsTest {
             // Match the actual load-normalized bytes in the generic control.
             controlA.setNormalPalette(new Palette(a.getNormalPalette()));
             controlB.setNormalPalette(new Palette(b.getNormalPalette()));
-            Settings settings = new Settings(); settings.setPokemonPalettesFollowEvolutions(follow);
+            Settings settings = paletteSettings(false, follow);
             selected(handler, settings, seed).randomizePokemonPalettes();
             Gen3to5PaletteRandomizer control = new Gen3to5PaletteRandomizer(proxy(new SpeciesSet(List.of(controlA, controlB))), settings, new Random(seed));
             control.randomizePokemonPalettes();
@@ -756,7 +759,9 @@ public class Gen3to5PaletteBoundsTest {
                 assertDoesNotThrow(randomizer::randomizePokemonPalettes);
                 assertFalse(randomizer.isChangesMade());
             } else {
-                assertThrows(NullPointerException.class, randomizer::randomizePokemonPalettes);
+                assertThrows(com.uprfvx.random.exceptions.RandomizationException.class,
+                        randomizer::randomizePokemonPalettes);
+                assertFalse(randomizer.isChangesMade());
             }
             assertNull(missing.getNormalPalette());
         }
@@ -999,10 +1004,17 @@ public class Gen3to5PaletteBoundsTest {
         for (String paletteId : List.of("FRLG", "E")) for (boolean types : new boolean[]{false, true})
                 for (boolean evolutions : new boolean[]{false, true}) {
             SpeciesSet vanilla = chain(), selected = chain();
+            // Only FRLG is a real selected CFRU/DPE profile. Give that branch truthful
+            // loader provenance and compare against the same decoded bytes in vanilla.
+            RomHandler handler = !types && paletteId.equals("FRLG") ? new SelectedHandler(selected)
+                    : new SyntheticGen3(selected, types, paletteId);
+            if (!types && paletteId.equals("FRLG")) for (Species sp : selected) vanilla.stream()
+                    .filter(v -> v.getNumber() == sp.getNumber()).findFirst().orElseThrow()
+                    .setNormalPalette(new Palette(sp.getNormalPalette()));
             var original = new Gen3to5PaletteRandomizer(new SyntheticGen3(vanilla, false, paletteId),
                     paletteSettings(types, evolutions), new Random(724));
             original.randomizePokemonPalettes();
-            var control = new Gen3to5PaletteRandomizer(new SyntheticGen3(selected, true, paletteId),
+            var control = new Gen3to5PaletteRandomizer(handler,
                     paletteSettings(types, evolutions), new Random(724));
             control.randomizePokemonPalettes();
             for (Species sp : selected) assertArrayEquals(vanilla.stream()
@@ -1011,6 +1023,207 @@ public class Gen3to5PaletteBoundsTest {
                     paletteId + ": types=" + types + ", evolutions=" + evolutions);
             assertTrue(original.isChangesMade());
         }
+    }
+
+    @Test
+    void normalOnlyMissingChannelsPreserveAssetsAndRecolorValidOwnersInBothModes() throws Exception {
+        for (boolean follow : new boolean[]{false, true}) for (int missing : new int[]{1, 2, 3}) {
+            Species a = speciesWithPalette(4), b = speciesWithPalette(5);
+            link(a, b);
+            if ((missing & 1) != 0) a.setNormalPalette(null);
+            if ((missing & 2) != 0) a.setShinyPalette(null);
+            SelectedHandler handler = new SelectedHandler(new SpeciesSet(List.of(a, b)));
+            Palette missingNormal = a.getNormalPalette(), missingShiny = a.getShinyPalette();
+            byte[] child = b.getNormalPalette().toBytes(), shiny = b.getShinyPalette().toBytes();
+            byte[] buffer = handler.buffer().clone();
+            var randomizer = selected(handler, paletteSettings(false, follow), 677);
+            assertDoesNotThrow(randomizer::randomizePokemonPalettes);
+            assertTrue(randomizer.isChangesMade());
+            if ((missing & 1) != 0) assertSame(missingNormal, a.getNormalPalette());
+            else assertNotSame(missingNormal, a.getNormalPalette()); // missing shiny alone is eligible
+            assertSame(missingShiny, a.getShinyPalette());
+            assertFalse(Arrays.equals(child, b.getNormalPalette().toBytes()));
+            assertArrayEquals(shiny, b.getShinyPalette().toBytes());
+            assertArrayEquals(buffer, handler.buffer()); // randomizer never touches pointers/ROM memory
+            assertDoesNotThrow(handler::savePokemonPalettes);
+            assertArrayEquals(b.getNormalPalette().toBytes(), handler.readback(b, false));
+            assertArrayEquals(shiny, handler.readback(b, true));
+            assertArrayEquals(Arrays.copyOfRange(buffer, 0, handler.normalTable),
+                    Arrays.copyOfRange(handler.buffer(), 0, handler.normalTable));
+        }
+    }
+
+    @Test
+    void normalOnlySkippedParentKeepsFullLegacyColorPlansAndRngPrefix() throws Exception {
+        for (boolean follow : new boolean[]{false, true}) {
+            Species parent = speciesWithPalette(4), child = speciesWithPalette(5), split = speciesWithPalette(6);
+            parent.setNormalPalette(null); link(parent, child); link(parent, split);
+            var handler = new SelectedHandler(new SpeciesSet(List.of(parent, child, split)));
+            var randomizer = selected(handler, paletteSettings(false, follow), 677);
+            randomizer.randomizePokemonPalettes();
+            var field = Gen3to5PaletteRandomizer.class.getDeclaredField("typeBaseColorLists");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked") var plans = (java.util.Map<Species, TypeBaseColorList>) field.get(randomizer);
+            assertEquals(3, plans.size()); assertTrue(plans.containsKey(parent));
+            var prevo = TypeBaseColorList.class.getDeclaredField("prevo"); prevo.setAccessible(true);
+            assertSame(follow ? plans.get(parent) : null, prevo.get(plans.get(child)));
+            assertSame(follow ? plans.get(parent) : null, prevo.get(plans.get(split)));
+            assertNull(parent.getNormalPalette());
+        }
+    }
+
+    @Test
+    void normalOnlyRejectsMalformedGraphBeforeAnyRngOrMutation() {
+        for (int fixture = 0; fixture < 7; fixture++) {
+            Species a = speciesWithPalette(4), b = speciesWithPalette(5);
+            link(a, b);
+            if (fixture == 0) link(b, a);
+            if (fixture == 1) a.getEvolutionsFrom().add(null);
+            if (fixture == 2) b.getEvolutionsTo().clear();
+            if (fixture == 3) b.getEvolutionsTo().getFirst().setTo(a);
+            if (fixture == 4) b.getEvolutionsTo().add(new Evolution(speciesWithPalette(7), b, EvolutionType.LEVEL, 20));
+            if (fixture == 5) a.getEvolutionsFrom().getFirst().setTo(null);
+            if (fixture == 6) b.getEvolutionsTo().getFirst().setFrom(null);
+            var handler = new SelectedHandler(new SpeciesSet(List.of(a, b)));
+            byte[] normal = a.getNormalPalette().toBytes(), shiny = a.getShinyPalette().toBytes();
+            var random = new Random(677);
+            var randomizer = new Gen3to5PaletteRandomizer(handler, paletteSettings(false, true), random);
+            assertThrows(com.uprfvx.random.exceptions.RandomizationException.class, randomizer::randomizePokemonPalettes);
+            assertEquals(new Random(677).nextLong(), random.nextLong());
+            assertArrayEquals(normal, a.getNormalPalette().toBytes()); assertArrayEquals(shiny, a.getShinyPalette().toBytes());
+            assertFalse(randomizer.isChangesMade());
+        }
+    }
+
+    @Test
+    void normalOnlyLateFailureAndZeroChangeNeverPublishOrPretendToPass() {
+        for (boolean fail : new boolean[]{false, true}) {
+            Species a = speciesWithPalette(4), b = speciesWithPalette(5);
+            var handler = new SelectedHandler(new SpeciesSet(List.of(a, b)));
+            Palette originalA = a.getNormalPalette(), originalB = b.getNormalPalette();
+            byte[] normalA = originalA.toBytes(), normalB = originalB.toBytes();
+            var randomizer = new Gen3to5PaletteRandomizer(handler, paletteSettings(false, false), new Random(677)) {
+                int calls;
+                @Override public void populatePalette(Palette palette,
+                        com.uprfvx.romio.graphics.palettes.PalettePopulator pp, TypeBaseColorList colors,
+                        PalettePartDescription[] parts) {
+                    if (fail) {
+                        super.populatePalette(palette, pp, colors, parts);
+                        if (++calls == 2) throw new IllegalStateException("synthetic late scratch failure");
+                    }
+                }
+            };
+            if (fail) assertThrows(IllegalStateException.class, randomizer::randomizePokemonPalettes);
+            else assertThrows(com.uprfvx.random.exceptions.RandomizationException.class,
+                    randomizer::randomizePokemonPalettes);
+            assertSame(originalA, a.getNormalPalette()); assertSame(originalB, b.getNormalPalette());
+            assertArrayEquals(normalA, a.getNormalPalette().toBytes()); assertArrayEquals(normalB, b.getNormalPalette().toBytes());
+            assertFalse(randomizer.isChangesMade());
+            byte[] before = handler.buffer().clone(); handler.savePokemonPalettes();
+            assertArrayEquals(before, handler.buffer());
+        }
+    }
+
+    @Test
+    void normalOnlyInvalidOwnersAndStaleChannelsStopBeforeEarlierValidMutation() throws Exception {
+        for (int fixture = 0; fixture < 6; fixture++) {
+            Species a = speciesWithPalette(4), b = speciesWithPalette(5);
+            var handler = new SelectedHandler(new SpeciesSet(List.of(a, b)));
+            if (fixture == 0) b.setSpeciesSetIdentityNumber(4);
+            if (fixture == 1) handler.pointer(handler.normalTable + 5 * 8, handler.shinyTable);
+            if (fixture == 2) b.getNormalPalette().set(2, null);
+            if (fixture == 3) b.setNormalPalette(new Palette(15));
+            if (fixture == 4) b.setNormalPalette(null); // loaded snapshot still exists
+            if (fixture == 5) handler.entry.putIntValue("PokemonShinyPalettes", handler.normalTable);
+            Palette normal = a.getNormalPalette(), shiny = a.getShinyPalette();
+            byte[] before = handler.buffer().clone();
+            var randomizer = selected(handler, paletteSettings(false, false), 1);
+            assertThrows(com.uprfvx.random.exceptions.RandomizationException.class, randomizer::randomizePokemonPalettes);
+            assertSame(normal, a.getNormalPalette()); assertSame(shiny, a.getShinyPalette());
+            assertArrayEquals(before, handler.buffer()); assertFalse(randomizer.isChangesMade());
+        }
+    }
+
+    @Test
+    void normalOnlyMissingSnapshotsSharedJavaAndUnavailableDescriptionsArePreserved() throws Exception {
+        for (int fixture = 0; fixture < 5; fixture++) {
+            Species a = speciesWithPalette(4), b = speciesWithPalette(5);
+            var handler = new SelectedHandler(new SpeciesSet(List.of(a, b)));
+            if (fixture == 0) snapshots(handler, "originalCfruDpeNormalPaletteBytes").remove(a);
+            if (fixture == 1) a.setShinyPalette(a.getNormalPalette());
+            if (fixture == 2) a.setNormalPalette(b.getNormalPalette()); // stale and shared: strict stale gate wins
+            Palette normal = a.getNormalPalette();
+            final int kind = fixture;
+            var randomizer = new Gen3to5PaletteRandomizer(handler, paletteSettings(false, false), new Random(677)) {
+                @Override public List<PaletteDescription> getPaletteDescriptions(String key) {
+                    var rows = descriptions(5);
+                    if (kind == 3) rows.set(3, new PaletteDescription("[]"));
+                    if (kind == 4) rows.set(3, new PaletteDescription("[2,3/17]"));
+                    return rows;
+                }
+            };
+            if (fixture == 2) assertThrows(com.uprfvx.random.exceptions.RandomizationException.class,
+                    randomizer::randomizePokemonPalettes);
+            else { randomizer.randomizePokemonPalettes(); assertTrue(randomizer.isChangesMade()); }
+            assertSame(normal, a.getNormalPalette());
+        }
+        var handler = new SelectedHandler(new SpeciesSet(speciesWithPalette(388)));
+        var empty = selected(handler, paletteSettings(false, false), 677);
+        assertThrows(com.uprfvx.random.exceptions.RandomizationException.class, empty::randomizePokemonPalettes);
+        assertFalse(empty.isChangesMade());
+    }
+
+    @Test
+    void nonGen3DpAndBwNormalPalettePathsRetainLegacyBehavior() {
+        for (String id : List.of("DP", "BW")) for (boolean follow : new boolean[]{false, true}) {
+            SpeciesSet species = chain();
+            RomHandler handler = (RomHandler) Proxy.newProxyInstance(RomHandler.class.getClassLoader(),
+                    new Class[]{RomHandler.class}, (proxy, method, args) -> switch (method.getName()) {
+                        case "getPaletteFilesID" -> id;
+                        case "generationOfPokemon" -> id.equals("DP") ? 4 : 5;
+                        case "getSpeciesSetInclFormes" -> species;
+                        case "getRestrictedSpeciesService", "getTypeService" -> null;
+                        default -> throw new UnsupportedOperationException(method.getName());
+                    });
+            byte[] before = species.stream().findFirst().orElseThrow().getNormalPalette().toBytes();
+            var randomizer = new Gen3to5PaletteRandomizer(handler, paletteSettings(false, follow), new Random(677));
+            randomizer.randomizePokemonPalettes(); assertTrue(randomizer.isChangesMade());
+            assertFalse(Arrays.equals(before, species.stream().findFirst().orElseThrow().getNormalPalette().toBytes()));
+        }
+    }
+
+    @Test
+    void normalOnlyUnchangedSettingDoesNotConsumeRngOrTouchLivePalettes() {
+        Species sp = speciesWithPalette(4);
+        var handler = new SelectedHandler(new SpeciesSet(sp));
+        Palette normal = sp.getNormalPalette(), shiny = sp.getShinyPalette();
+        var random = new Random(677);
+        var randomizer = new Gen3to5PaletteRandomizer(handler, new Settings(), random);
+        randomizer.randomizePokemonPalettes();
+        assertFalse(randomizer.isChangesMade()); assertSame(normal, sp.getNormalPalette());
+        assertSame(shiny, sp.getShinyPalette()); assertEquals(new Random(677).nextLong(), random.nextLong());
+    }
+
+    @Test
+    void normalOnlyConvergentGraphRetainsLegacyFirstParentColorsAndDraws() throws Exception {
+        Species a = speciesWithPalette(4), b = speciesWithPalette(5), c = speciesWithPalette(6);
+        link(a, c); link(b, c);
+        var species = new SpeciesSet(List.of(a, b, c));
+        var handler = new SelectedHandler(species);
+        Species x = speciesWithPalette(4), y = speciesWithPalette(5), z = speciesWithPalette(6);
+        link(x, z); link(y, z);
+        var control = new SpeciesSet(List.of(x, y, z));
+        for (Species sp : control) sp.setNormalPalette(new Palette(species.stream()
+                .filter(pk -> pk.getNumber() == sp.getNumber()).findFirst().orElseThrow().getNormalPalette()));
+        var sourceRng = new com.uprfvx.random.random.RandomSource(); sourceRng.seed(677);
+        var legacyRng = new com.uprfvx.random.random.RandomSource(); legacyRng.seed(677);
+        var settings = paletteSettings(false, true);
+        new Gen3to5PaletteRandomizer(handler, settings, sourceRng.getCosmetic()).randomizePokemonPalettes();
+        new Gen3to5PaletteRandomizer(new SyntheticGen3(control, false, "FRLG"), settings,
+                legacyRng.getCosmetic()).randomizePokemonPalettes();
+        assertEquals(legacyRng.callsSinceSeedCosmetic(), sourceRng.callsSinceSeedCosmetic());
+        for (Species sp : control) assertArrayEquals(sp.getNormalPalette().toBytes(), species.stream()
+                .filter(pk -> pk.getNumber() == sp.getNumber()).findFirst().orElseThrow().getNormalPalette().toBytes());
     }
 
     static SpeciesSet chain() {
@@ -1034,7 +1247,8 @@ public class Gen3to5PaletteBoundsTest {
     static Gen3to5PaletteRandomizer selected(SpeciesSet species, boolean types, boolean evolutions,
                                             long seed) throws Exception {
         Settings settings = paletteSettings(types, evolutions);
-        return new Gen3to5PaletteRandomizer(new SyntheticGen3(species, true, "FRLG"), settings, new Random(seed));
+        RomHandler handler = types ? new SyntheticGen3(species, true, "FRLG") : new SelectedHandler(species);
+        return new Gen3to5PaletteRandomizer(handler, settings, new Random(seed));
     }
 
     static Settings paletteSettings(boolean types, boolean evolutions) {

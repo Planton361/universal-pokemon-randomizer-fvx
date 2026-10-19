@@ -11292,6 +11292,79 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /** Read-only normal-channel decision. A blocked model cannot safely reach the copy writer. */
+    public record CfruDpeNormalPaletteEligibility(boolean eligible, boolean blocked, String reason) { }
+
+    public CfruDpeNormalPaletteEligibility getCfruDpeNormalPaletteEligibility(Species species) {
+        if (!useCfruDpeGen9SpeciesCount || !isRomHack || romEntry == null || rom == null
+                || !"BPRE".equals(romEntry.getRomCode())
+                || romEntry.getRomType() != Gen3Constants.RomType_FRLG) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_SELECTED_PROFILE");
+        }
+        if (!hasValidCfruDpePaletteTables()) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_PALETTE_TABLES");
+        }
+        List<Species> owners = getCfruDpePaletteOwners();
+        int count = romEntry.getIntValue("PokemonCount");
+        if (count <= 0 || count > CFRU_DPE_SPECIES_COUNT || pokesInternal == null || internalToPokedex == null) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_NATIVE_OWNER");
+        }
+        Set<Integer> nativeIds = new HashSet<>();
+        boolean selected = false;
+        for (Species other : owners) {
+            int id = other.getSpeciesSetIdentityNumber();
+            // Same native-owner predicates as the writer, checked in one linear pass.
+            // Calling its per-species duplicate scan for every other owner would make
+            // a complete palette preflight cubic in the expanded species count.
+            boolean mapped = id > 0 && id <= CFRU_DPE_MAX_INTERNAL_SPECIES_ID && id <= count
+                    && id < pokesInternal.length && pokesInternal[id] == other
+                    && id < internalToPokedex.length && other.getNumber() > 0
+                    && internalToPokedex[id] == other.getNumber();
+            if (!nativeIds.add(id) || (!mapped && !canPreserveUnmappedCfruDpeOgerponPaletteOwner(other, owners))) {
+                return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_NATIVE_OWNER");
+            }
+            selected |= other == species;
+        }
+        if (!selected || species == null) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "NOT_A_SAVE_OWNER");
+        }
+        int owner = getCfruDpePaletteTableIndexForSave(species);
+        if (owner < 0 || species.getNumber() == SpeciesIDs.unown) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "PRESERVED_SPECIAL_OWNER");
+        }
+        Palette normal = species.getNormalPalette();
+        byte[] original = originalCfruDpeNormalPaletteBytes.get(species);
+        if (normal == null && original == null) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "MISSING_NORMAL_ASSET");
+        }
+        if (!isCompleteCfruDpePairPalette(normal)) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INCOMPLETE_CURRENT_NORMAL");
+        }
+        if (original == null) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "MISSING_NORMAL_SNAPSHOT");
+        }
+        if (original.length != 32 || !Arrays.equals(original, normal.toBytes())) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "STALE_CURRENT_NORMAL");
+        }
+        if (normal == species.getShinyPalette()) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "SHARED_JAVA_PALETTE");
+        }
+        for (Species other : getSpeciesSetInclFormes()) {
+            if (other != species && (normal == other.getNormalPalette() || normal == other.getShinyPalette())) {
+                return new CfruDpeNormalPaletteEligibility(false, false, "SHARED_JAVA_PALETTE");
+            }
+        }
+        int normalTable = romEntry.getIntValue("PokemonNormalPalettes");
+        int shinyTable = romEntry.getIntValue("PokemonShinyPalettes");
+        int entry = (int) ((long) normalTable + (long) owner * 8);
+        if (!matchesCfruDpePairSource(entry, original, normalTable, shinyTable, getCfruDpePaletteTableLength())) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "STALE_NORMAL_SOURCE");
+        }
+        // Unlike GFX-004, normal-only recoloring needs neither a shiny snapshot nor
+        // the first-Dex projection. Native same-Dex forms retain their own save entries.
+        return new CfruDpeNormalPaletteEligibility(true, false, "LOADED_NORMAL_OWNER");
+    }
+
     /** Immutable decision only: no palettes, snapshots or ROM addresses escape this query. */
     public record CfruDpePalettePairEligibility(boolean eligible, String reason) { }
 

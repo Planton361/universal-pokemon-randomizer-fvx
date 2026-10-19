@@ -424,6 +424,90 @@ class Gen3CfruDpePaletteFormOwnerTest {
         assertArrayEquals(base.getShinyPalette().toBytes(), form.getShinyPalette().toBytes());
     }
 
+    @Test void normalChannelQueryUsesLoadedNativeFormsAndIsReadOnly() throws Exception {
+        Fixture f = fixture(); f.loadPokemonPalettes();
+        byte[] before = f.bytes().clone(); String ranges = f.allocatorRanges();
+        for (Species sp : f.owners) {
+            var decision = f.getCfruDpeNormalPaletteEligibility(sp);
+            assertTrue(decision.eligible(), decision.reason()); assertFalse(decision.blocked());
+            assertArrayEquals(raw(sp.getSpeciesSetIdentityNumber(), false), snapshots(f, false).get(sp));
+        }
+        // Same Dex, different native owners and first-Dex projection are all independent.
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(f.owners.get(2)).eligible());
+        assertFalse(f.getCfruDpePalettePairEligibility(f.owners.get(2)).eligible());
+        assertArrayEquals(before, f.bytes()); assertEquals(ranges, f.allocatorRanges());
+    }
+
+    @Test void normalChannelMissingShinyStillCopiesOnlyItsNormalEntry() throws Exception {
+        Fixture f = fixture(); Species sp = f.owners.get(2);
+        int entry = NORMAL + sp.getSpeciesSetIdentityNumber() * 8;
+        f.pointer(SHINY + sp.getSpeciesSetIdentityNumber() * 8, -1);
+        f.loadPokemonPalettes(); byte[] before = f.bytes().clone();
+        assertNull(sp.getShinyPalette()); assertFalse(snapshots(f, true).containsKey(sp));
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(sp).eligible());
+        byte[] changed = sp.getNormalPalette().toBytes(); changed[2] ^= 7;
+        sp.setNormalPalette(new Palette(changed)); f.savePokemonPalettes();
+        assertBudget(f, before, Set.of(entry)); assertArrayEquals(changed, f.decode(entry));
+        byte[] saved = f.bytes().clone(); f.savePokemonPalettes(); assertBudget(f, saved, Set.of(entry));
+        assertArrayEquals(changed, f.decode(entry));
+        assertArrayEquals(raw(sp.getSpeciesSetIdentityNumber(), false), snapshots(f, false).get(sp));
+        f.loadPokemonPalettes(); saved = f.bytes().clone(); f.savePokemonPalettes();
+        assertArrayEquals(saved, f.bytes());
+    }
+
+    @Test void normalChannelMissingSourceNeverInventsSnapshotOrWrite() throws Exception {
+        Fixture f = fixture(); Species sp = f.owners.get(2);
+        f.pointer(NORMAL + sp.getSpeciesSetIdentityNumber() * 8, -1); f.loadPokemonPalettes();
+        byte[] before = f.bytes().clone();
+        var missing = f.getCfruDpeNormalPaletteEligibility(sp);
+        assertFalse(missing.eligible()); assertFalse(missing.blocked());
+        assertNull(sp.getNormalPalette()); assertFalse(snapshots(f, false).containsKey(sp));
+        sp.setNormalPalette(new Palette(raw(1020, false)));
+        assertFalse(f.getCfruDpeNormalPaletteEligibility(sp).eligible());
+        assertFalse(f.getCfruDpeNormalPaletteEligibility(sp).blocked());
+        f.savePokemonPalettes(); assertArrayEquals(before, f.bytes());
+        assertFalse(snapshots(f, false).containsKey(sp));
+    }
+
+    @Test void normalChannelQueryBlocksStaleIncompleteAndGlobalInvalidOwnersReadOnly() throws Exception {
+        for (int kind = 0; kind < 7; kind++) {
+            Fixture f = fixture(); f.loadPokemonPalettes(); Species bad = f.owners.get(2);
+            if (kind == 0) bad.setNormalPalette(new Palette(15));
+            if (kind == 1) bad.getNormalPalette().set(2, null);
+            if (kind == 2) bad.setNormalPalette(null);
+            if (kind == 3) f.pointer(NORMAL + bad.getSpeciesSetIdentityNumber() * 8, SHINY);
+            if (kind == 4) f.entry.putIntValue("PokemonShinyPalettes", NORMAL);
+            if (kind == 5) bad.setSpeciesSetIdentityNumber(19);
+            if (kind == 6) {
+                byte[] changed = bad.getNormalPalette().toBytes(); changed[2] ^= 7;
+                bad.setNormalPalette(new Palette(changed));
+            }
+            byte[] before = f.bytes().clone(); String ranges = f.allocatorRanges();
+            var decision = f.getCfruDpeNormalPaletteEligibility(bad);
+            assertFalse(decision.eligible()); assertTrue(decision.blocked());
+            if (kind == 5) assertTrue(f.getCfruDpeNormalPaletteEligibility(f.owners.getFirst()).blocked());
+            assertArrayEquals(before, f.bytes()); assertEquals(ranges, f.allocatorRanges());
+        }
+    }
+
+    @Test void normalChannelSharedOriginalPayloadCanHaveSeparateNormalOnlyCopies() throws Exception {
+        Fixture f = fixture(); Species a = f.owners.get(1), b = f.owners.get(2);
+        int aEntry = NORMAL + a.getSpeciesSetIdentityNumber() * 8;
+        int bEntry = NORMAL + b.getSpeciesSetIdentityNumber() * 8;
+        f.pointer(bEntry, f.pointerAt(aEntry)); f.loadPokemonPalettes();
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(a).eligible());
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(b).eligible());
+        b.setNormalPalette(a.getNormalPalette());
+        assertFalse(f.getCfruDpeNormalPaletteEligibility(a).eligible());
+        assertFalse(f.getCfruDpeNormalPaletteEligibility(b).eligible());
+        assertFalse(f.getCfruDpeNormalPaletteEligibility(a).blocked());
+        f.loadPokemonPalettes(); byte[] before = f.bytes().clone(), original = a.getNormalPalette().toBytes();
+        byte[] changed = b.getNormalPalette().toBytes(); changed[2] ^= 7;
+        b.setNormalPalette(new Palette(changed)); f.savePokemonPalettes();
+        assertBudget(f, before, Set.of(bEntry)); assertArrayEquals(original, f.decode(aEntry));
+        assertArrayEquals(changed, f.decode(bEntry));
+    }
+
     private static void assertBudget(Fixture f, byte[] before, Set<Integer> entries) {
         List<int[]> allocations = new ArrayList<>();
         for (int entry : entries) {
