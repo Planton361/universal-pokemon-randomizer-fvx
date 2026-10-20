@@ -349,6 +349,7 @@ class Gen3CfruDpePaletteFormOwnerTest {
     void namedZeroDexOgerponTerastalRowsPreserveOtherOwnersChangedPalette(boolean shiny) throws Exception {
         Fixture f = ogerponFixture(); Species valid = f.owners.getFirst();
         f.loadPokemonPalettes();
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(valid).eligible());
         for (Species excluded : f.owners.subList(1, 5)) {
             assertEquals("Ogerpon", excluded.getName()); assertEquals(0, excluded.getNumber());
             assertEquals(0, f.dex[excluded.getSpeciesSetIdentityNumber()]);
@@ -356,6 +357,9 @@ class Gen3CfruDpePaletteFormOwnerTest {
             assertFalse(snapshots(f, false).containsKey(excluded));
             assertFalse(snapshots(f, true).containsKey(excluded));
             assertFalse(f.getCfruDpePalettePairEligibility(excluded).eligible());
+            var decision = f.getCfruDpeNormalPaletteEligibility(excluded);
+            assertFalse(decision.eligible()); assertFalse(decision.blocked());
+            assertEquals("PRESERVED_SPECIAL_OWNER", decision.reason());
         }
         byte[] before = f.bytes().clone();
         byte[] changed = palette(valid, shiny).toBytes(); changed[12] ^= 7;
@@ -394,10 +398,16 @@ class Gen3CfruDpePaletteFormOwnerTest {
                 case 8 -> f.entry.putIntValue("PokemonCount", 1439);
                 case 9 -> { List<Species> conflicting = new ArrayList<>(f.owners); conflicting.add(species(1017, id)); f.select(conflicting); }
             }
+            OwnerState beforeQuery = ownerState(f);
+            var decision = f.getCfruDpeNormalPaletteEligibility(valid);
+            assertTrue(decision.blocked()); assertEquals("INVALID_NATIVE_OWNER", decision.reason());
+            assertOwnerState(f, beforeQuery);
             byte[] changed = valid.getNormalPalette().toBytes(); changed[14] ^= 7;
             valid.setNormalPalette(new Palette(changed)); byte[] before = f.bytes().clone();
+            OwnerState beforeSave = ownerState(f);
             assertThrows(RomIOException.class, f::savePokemonPalettes, "kind=" + kind + " id=" + id);
             assertArrayEquals(before, f.bytes()); // Includes the earlier valid owner and all allocator bytes.
+            assertOwnerState(f, beforeSave);
         }
     }
 
@@ -508,6 +518,111 @@ class Gen3CfruDpePaletteFormOwnerTest {
         assertArrayEquals(changed, f.decode(bEntry));
     }
 
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void namedEggZeroDexSentinelBlocksNormalPreflightAndChangedWriter(boolean shiny) throws Exception {
+        // Public DPE d887185: SPECIES_EGG maps to NATIONAL_DEX_NONE and is named Bad Egg.
+        // It is a native model row, not an unavailable palette on an otherwise mapped owner.
+        Species valid = species(4, 4), egg = species(0, 0x19C), unused = species(0, 0xFC);
+        egg.setName("Bad Egg"); unused.setName("?");
+        Fixture f = new Fixture(List.of(valid, egg, unused));
+        var construct = Gen3RomHandler.class.getDeclaredMethod("constructPokemonList");
+        construct.setAccessible(true); construct.invoke(f);
+        f.owners = f.getSpecies().stream().filter(Objects::nonNull).toList();
+        assertNull(f.getSpecies().getFirst());
+        assertEquals(List.of(valid, egg), f.owners); // Actual name filter retains the sentinel.
+        assertSame(egg, f.internal[0x19C]); assertEquals(0, f.dex[0x19C]);
+        assertEquals(1440, f.internal.length); assertEquals(1440, f.entry.getIntValue("PokemonCount"));
+        OwnerState beforeLoad = ownerState(f);
+        f.loadPokemonPalettes(); // Real defensive loader, never fabricated original snapshots.
+        assertArrayEquals(beforeLoad.memory(), f.bytes()); assertEquals(beforeLoad.ranges(), f.allocatorRanges());
+        assertNotNull(valid.getNormalPalette()); assertNotNull(valid.getShinyPalette());
+        assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
+        assertFalse(snapshots(f, false).containsKey(egg)); assertFalse(snapshots(f, true).containsKey(egg));
+        // Source payloads exist; it is the native-owner mapping that prevents loading them.
+        assertArrayEquals(raw(0x19C, false), f.decode(NORMAL + 0x19C * 8));
+        assertArrayEquals(raw(0x19C, true), f.decode(SHINY + 0x19C * 8));
+        OwnerState beforeQuery = ownerState(f);
+        for (Species owner : f.owners) {
+            var decision = f.getCfruDpeNormalPaletteEligibility(owner);
+            assertFalse(decision.eligible()); assertTrue(decision.blocked());
+            assertEquals("INVALID_NATIVE_OWNER", decision.reason());
+        }
+        assertOwnerState(f, beforeQuery);
+        assertDoesNotThrow(f::savePokemonPalettes); // Unchanged save returns before owner validation.
+        assertOwnerState(f, beforeQuery);
+        byte[] changed = palette(valid, shiny).toBytes(); changed[2] ^= 7;
+        replace(valid, shiny, new Palette(changed));
+        OwnerState beforeSave = ownerState(f);
+        var error = assertThrows(RomIOException.class, f::savePokemonPalettes);
+        assertEquals("CFRU/DPE palette owner is invalid or duplicated", error.getMessage());
+        assertOwnerState(f, beforeSave); assertTrue(f.reservedPaletteIndices.isEmpty());
+    }
+
+    @ParameterizedTest @ValueSource(ints = {0, 1, 2, 3, 4})
+    void rawDuplicateAndBrokenNativeMappingsAgreeAtPreflightAndWriter(int kind) throws Exception {
+        Fixture f = fixture(); f.loadPokemonPalettes(); Species bad = f.owners.getLast();
+        if (kind <= 1) {
+            List<Species> rawOwners = new ArrayList<>(f.owners);
+            rawOwners.add(kind == 0 ? bad : species(bad.getNumber(), bad.getSpeciesSetIdentityNumber()));
+            f.select(rawOwners);
+            assertEquals(f.owners.size() - 1, f.getSpeciesSet().size());
+        }
+        if (kind == 2) f.dex[bad.getSpeciesSetIdentityNumber()] = 0;
+        if (kind == 3) f.dex[bad.getSpeciesSetIdentityNumber()]++;
+        if (kind == 4) f.internal[bad.getSpeciesSetIdentityNumber()] = species(bad.getNumber(), bad.getSpeciesSetIdentityNumber());
+        assertNativeOwnerStopWithoutWrites(f, "INVALID_NATIVE_OWNER");
+    }
+
+    @ParameterizedTest @ValueSource(ints = {-1, 0, 18, 1441, Integer.MAX_VALUE})
+    void invalidCountBoundariesBlockBeforePaletteOrAllocatorWrites(int count) throws Exception {
+        Fixture f = fixture(); f.loadPokemonPalettes(); f.entry.putIntValue("PokemonCount", count);
+        assertNativeOwnerStopWithoutWrites(f, count < 0 || count == Integer.MAX_VALUE
+                ? "INVALID_PALETTE_TABLES" : "INVALID_NATIVE_OWNER");
+    }
+
+    private static void assertNativeOwnerStopWithoutWrites(Fixture f, String reason) throws Exception {
+        Species valid = f.owners.getFirst(); OwnerState beforeQuery = ownerState(f);
+        var decision = f.getCfruDpeNormalPaletteEligibility(valid);
+        assertFalse(decision.eligible()); assertTrue(decision.blocked()); assertEquals(reason, decision.reason());
+        assertOwnerState(f, beforeQuery);
+        byte[] changed = valid.getNormalPalette().toBytes(); changed[2] ^= 7;
+        valid.setNormalPalette(new Palette(changed)); OwnerState beforeSave = ownerState(f);
+        assertThrows(RomIOException.class, f::savePokemonPalettes);
+        assertOwnerState(f, beforeSave); assertTrue(f.reservedPaletteIndices.isEmpty());
+    }
+
+    private record OwnerState(byte[] memory, String ranges, int checkpoints,
+                              List<Palette> palettes, List<byte[]> colors, List<Map<Species, byte[]>> snapshots) { }
+
+    private static OwnerState ownerState(Fixture f) throws Exception {
+        List<Palette> palettes = new ArrayList<>(); List<byte[]> colors = new ArrayList<>();
+        List<Map<Species, byte[]>> originals = new ArrayList<>();
+        for (boolean shiny : new boolean[]{false, true}) {
+            Map<Species, byte[]> copy = new IdentityHashMap<>();
+            snapshots(f, shiny).forEach((sp, bytes) -> copy.put(sp, bytes.clone())); originals.add(copy);
+            for (Species sp : f.owners) {
+                Palette palette = palette(sp, shiny); palettes.add(palette);
+                colors.add(palette == null ? null : palette.toBytes());
+            }
+        }
+        return new OwnerState(f.bytes().clone(), f.allocatorRanges(), f.writeCheckpoints, palettes, colors, originals);
+    }
+
+    private static void assertOwnerState(Fixture f, OwnerState before) throws Exception {
+        assertArrayEquals(before.memory(), f.bytes()); assertEquals(before.ranges(), f.allocatorRanges());
+        assertEquals(before.checkpoints(), f.writeCheckpoints);
+        int index = 0, channel = 0;
+        for (boolean shiny : new boolean[]{false, true}) {
+            Map<Species, byte[]> originals = before.snapshots().get(channel++), current = snapshots(f, shiny);
+            assertEquals(originals.size(), current.size());
+            originals.forEach((sp, bytes) -> assertArrayEquals(bytes, current.get(sp)));
+            for (Species sp : f.owners) {
+                Palette palette = palette(sp, shiny); assertSame(before.palettes().get(index), palette);
+                assertArrayEquals(before.colors().get(index++), palette == null ? null : palette.toBytes());
+            }
+        }
+    }
+
     private static void assertBudget(Fixture f, byte[] before, Set<Integer> entries) {
         List<int[]> allocations = new ArrayList<>();
         for (int entry : entries) {
@@ -560,6 +675,7 @@ class Gen3CfruDpePaletteFormOwnerTest {
         final Gen3RomEntry entry; final Species[] internal = new Species[1440];
         final int[] dex = new int[1440], reverse = new int[1440]; List<Species> owners;
         final List<Integer> reservedPaletteIndices = new ArrayList<>();
+        int writeCheckpoints;
         String failPhase; int failIndex = -1; boolean corruptPayloadAtCheckpoint;
         Fixture(List<Species> selected) throws Exception {
             var constructor = Gen3RomEntry.class.getDeclaredConstructor(String.class); constructor.setAccessible(true);
@@ -599,6 +715,7 @@ class Gen3CfruDpePaletteFormOwnerTest {
             return FREE + prefixLength;
         }
         @Override void cfruDpePaletteWriteCheckpoint(String phase, int index, int offset) {
+            writeCheckpoints++;
             if (phase.equals("allocation-reserved")) reservedPaletteIndices.add(index);
             if (!phase.equals(failPhase) || index != failIndex) return;
             if (corruptPayloadAtCheckpoint) {

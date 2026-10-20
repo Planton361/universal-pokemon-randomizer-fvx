@@ -598,6 +598,35 @@ public class Gen3to5PaletteBoundsTest {
                 if (load) loadPokemonPalettes();
             } catch (ReflectiveOperationException ex) { throw new AssertionError(ex); }
         }
+        SelectedHandler(List<Species> nativeOwners) throws ReflectiveOperationException {
+            // Same generated-memory fixture, but retain native IDs/zero Dex rows and use
+            // the real Species-list constructor instead of a pre-collapsed SpeciesSet.
+            species = null;
+            var constructor = com.uprfvx.romio.romhandlers.romentries.Gen3RomEntry.class.getDeclaredConstructor(String.class);
+            constructor.setAccessible(true); entry = constructor.newInstance("SYNTHETIC native owner list");
+            entry.setRomCode("BPRE"); entry.setRomType(com.uprfvx.romio.constants.Gen3Constants.RomType_FRLG);
+            entry.putIntValue("PokemonCount", 1440);
+            entry.putIntValue("PokemonNormalPalettes", normalTable); entry.putIntValue("PokemonShinyPalettes", shinyTable);
+            Species[] owners = new Species[1440]; int[] dex = new int[1440], reverse = new int[1440];
+            rom = new byte[0x60000];
+            for (Species sp : nativeOwners) {
+                int id = sp.getSpeciesSetIdentityNumber(); owners[id] = sp; dex[id] = sp.getNumber();
+                if (sp.getNumber() > 0 && reverse[sp.getNumber()] == 0) reverse[sp.getNumber()] = id;
+                for (boolean shiny : new boolean[]{false, true}) {
+                    Palette palette = shiny ? sp.getShinyPalette() : sp.getNormalPalette();
+                    if (palette == null) continue;
+                    int target = 0x10000 + id * 128 + (shiny ? 64 : 0);
+                    byte[] compressed = compressors.DSCmp.compressLZ10(palette.toBytes());
+                    System.arraycopy(compressed, 0, rom, target, compressed.length);
+                    pointer((shiny ? shinyTable : normalTable) + id * 8, target);
+                }
+            }
+            set("romEntry", entry); set("pokesInternal", owners); set("internalToPokedex", dex);
+            set("pokedexToInternal", reverse); set("useCfruDpeGen9SpeciesCount", true); set("isRomHack", true);
+            var construct = Gen3RomHandler.class.getDeclaredMethod("constructPokemonList");
+            construct.setAccessible(true); construct.invoke(this);
+            freeSpace(0x50000, 0x10000); loadPokemonPalettes();
+        }
         private void set(String name, Object value) throws ReflectiveOperationException {
             var field = Gen3RomHandler.class.getDeclaredField(name); field.setAccessible(true); field.set(this, value);
         }
@@ -610,12 +639,14 @@ public class Gen3to5PaletteBoundsTest {
         int normalSource(Species sp) { return 0x8000 + sp.getNumber() * 128; }
         void pointer(int entry, int target) { writePointer(entry, target); }
         int pointerAt(int entry) { return readPointer(entry); }
-        int readEntry(Species sp, boolean shiny) { return readPointer((shiny ? shinyTable : normalTable) + sp.getNumber() * 8); }
+        int readEntry(Species sp, boolean shiny) { return readPointer((shiny ? shinyTable : normalTable)
+                + (species == null ? sp.getSpeciesSetIdentityNumber() : sp.getNumber()) * 8); }
         byte[] readback(Species sp, boolean shiny) { return new Palette(compressors.DSDecmp.Decompress(rom, readEntry(sp, shiny))).toBytes(); }
         byte[] buffer() { return rom; }
+        String allocatorRanges() { return getFreedSpace().toString(); }
         @Override public String getPaletteFilesID() { return "FRLG"; }
-        @Override public SpeciesSet getSpeciesSetInclFormes() { return species; }
-        @Override public SpeciesSet getSpeciesSet() { return species; }
+        @Override public SpeciesSet getSpeciesSetInclFormes() { return species == null ? super.getSpeciesSetInclFormes() : species; }
+        @Override public SpeciesSet getSpeciesSet() { return species == null ? super.getSpeciesSet() : species; }
     }
 
     @Test
@@ -1050,6 +1081,114 @@ public class Gen3to5PaletteBoundsTest {
             assertArrayEquals(shiny, handler.readback(b, true));
             assertArrayEquals(Arrays.copyOfRange(buffer, 0, handler.normalTable),
                     Arrays.copyOfRange(handler.buffer(), 0, handler.normalTable));
+        }
+    }
+
+    @Test
+    void normalOnlyNamedEggZeroDexSentinelStopsBothFollowModesBeforeRngOrPublication() throws Exception {
+        for (boolean follow : new boolean[]{false, true}) {
+            Species valid = speciesWithPalette(4), egg = speciesWithPalette(0), unused = speciesWithPalette(0);
+            valid.setName("Charmander"); egg.setName("Bad Egg"); egg.setSpeciesSetIdentityNumber(0x19C);
+            unused.setName("?"); unused.setSpeciesSetIdentityNumber(0xFC);
+            var handler = new SelectedHandler(List.of(valid, egg, unused));
+            assertEquals(Arrays.asList(null, valid, egg), handler.getSpecies());
+            assertSame(egg, ((Species[]) field(handler, "pokesInternal"))[0x19C]);
+            assertEquals(0, ((int[]) field(handler, "internalToPokedex"))[0x19C]);
+            assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
+            assertTrue(snapshots(handler, "originalCfruDpeNormalPaletteBytes").containsKey(valid));
+            assertFalse(snapshots(handler, "originalCfruDpeNormalPaletteBytes").containsKey(egg));
+            assertFalse(snapshots(handler, "originalCfruDpeShinyPaletteBytes").containsKey(egg));
+            assertGlobalNormalOwnerStop(handler, valid, follow);
+        }
+    }
+
+    @Test
+    void normalOnlyRawDuplicateCannotDisappearThroughSpeciesSetBeforePreflight() throws Exception {
+        for (boolean sameObject : new boolean[]{false, true}) for (boolean follow : new boolean[]{false, true}) {
+            Species valid = speciesWithPalette(4), other = speciesWithPalette(7);
+            valid.setName("Charmander"); other.setName("Squirtle");
+            var handler = new SelectedHandler(List.of(valid, other));
+            handler.getSpecies().add(sameObject ? other : speciesWithPalette(7));
+            assertEquals(4, handler.getSpecies().size()); assertEquals(2, handler.getSpeciesSet().size());
+            assertGlobalNormalOwnerStop(handler, valid, follow);
+        }
+    }
+
+    private static void assertGlobalNormalOwnerStop(SelectedHandler handler, Species valid, boolean follow) throws Exception {
+        byte[] memory = handler.buffer().clone(); String ranges = handler.allocatorRanges();
+        List<Palette> palettes = new ArrayList<>(); List<byte[]> colors = new ArrayList<>();
+        List<java.util.Map<Species, byte[]>> originals = new ArrayList<>();
+        for (String name : List.of("originalCfruDpeNormalPaletteBytes", "originalCfruDpeShinyPaletteBytes")) {
+            java.util.Map<Species, byte[]> copy = new java.util.IdentityHashMap<>();
+            snapshots(handler, name).forEach((sp, bytes) -> copy.put(sp, bytes.clone())); originals.add(copy);
+        }
+        for (Species sp : handler.getSpecies()) if (sp != null) {
+            for (Palette palette : new Palette[]{sp.getNormalPalette(), sp.getShinyPalette()}) {
+                palettes.add(palette); colors.add(palette == null ? null : palette.toBytes());
+            }
+        }
+        Random rng = new Random(677);
+        var randomizer = new Gen3to5PaletteRandomizer(handler, paletteSettings(false, follow), rng);
+        var error = assertThrows(com.uprfvx.random.exceptions.RandomizationException.class,
+                randomizer::randomizePokemonPalettes);
+        assertEquals("CFRU/DPE GFX-001/003: INVALID_NATIVE_OWNER", error.getMessage());
+        assertFalse(randomizer.isChangesMade()); assertEquals(new Random(677).nextLong(), rng.nextLong());
+        int index = 0;
+        for (Species sp : handler.getSpecies()) if (sp != null) {
+            for (Palette palette : new Palette[]{sp.getNormalPalette(), sp.getShinyPalette()}) {
+                assertSame(palettes.get(index), palette);
+                assertArrayEquals(colors.get(index++), palette == null ? null : palette.toBytes());
+            }
+        }
+        assertArrayEquals(memory, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
+        byte[] changed = valid.getNormalPalette().toBytes(); changed[2] ^= 7;
+        Palette forced = new Palette(changed); valid.setNormalPalette(forced);
+        assertThrows(com.uprfvx.romio.exceptions.RomIOException.class, handler::savePokemonPalettes);
+        assertSame(forced, valid.getNormalPalette()); assertArrayEquals(changed, forced.toBytes());
+        assertArrayEquals(memory, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
+        int channel = 0;
+        for (String name : List.of("originalCfruDpeNormalPaletteBytes", "originalCfruDpeShinyPaletteBytes")) {
+            var current = snapshots(handler, name); var before = originals.get(channel++);
+            assertEquals(before.size(), current.size()); before.forEach((sp, bytes) -> assertArrayEquals(bytes, current.get(sp)));
+        }
+    }
+
+    @Test
+    void normalOnlyNativeFormsMissingChannelsAndUnchangedOgerponRemainPositiveControls() throws Exception {
+        for (boolean follow : new boolean[]{false, true}) for (int missing : new int[]{0, 1, 2, 3}) {
+            Species valid = speciesWithPalette(4), base = speciesWithPalette(19), form = speciesWithPalette(19);
+            valid.setName("Charmander"); base.setName("Rattata"); form.setName("Rattata");
+            form.setSpeciesSetIdentityNumber(1020);
+            if ((missing & 1) != 0) form.setNormalPalette(null);
+            if ((missing & 2) != 0) form.setShinyPalette(null);
+            List<Species> owners = new ArrayList<>(List.of(valid, base, form));
+            for (int id = 0x592; id <= 0x595; id++) {
+                Species special = speciesWithPalette(0); special.setSpeciesSetIdentityNumber(id);
+                special.setName("Ogerpon"); owners.add(special);
+            }
+            var handler = new SelectedHandler(owners);
+            assertEquals(owners, handler.getSpecies().subList(1, handler.getSpecies().size()));
+            assertNotEquals(base, form); assertTrue(handler.getCfruDpeNormalPaletteEligibility(base).eligible());
+            assertEquals((missing & 1) == 0, handler.getCfruDpeNormalPaletteEligibility(form).eligible());
+            byte[] memory = handler.buffer().clone(); String ranges = handler.allocatorRanges();
+            Palette shiny = form.getShinyPalette(); byte[] normal = valid.getNormalPalette().toBytes();
+            var randomizer = selected(handler, paletteSettings(false, follow), 677);
+            randomizer.randomizePokemonPalettes(); assertTrue(randomizer.isChangesMade());
+            assertFalse(Arrays.equals(normal, valid.getNormalPalette().toBytes()));
+            assertSame(shiny, form.getShinyPalette()); if ((missing & 1) != 0) assertNull(form.getNormalPalette());
+            assertArrayEquals(memory, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
+            handler.savePokemonPalettes();
+            assertArrayEquals(valid.getNormalPalette().toBytes(), handler.readback(valid, false));
+            for (Species special : owners.subList(3, 7)) {
+                assertNull(special.getNormalPalette()); assertNull(special.getShinyPalette());
+                for (int table : new int[]{handler.normalTable, handler.shinyTable}) {
+                    int entry = table + special.getSpeciesSetIdentityNumber() * 8;
+                    assertArrayEquals(Arrays.copyOfRange(memory, entry, entry + 8),
+                            Arrays.copyOfRange(handler.buffer(), entry, entry + 8));
+                }
+                assertFalse(snapshots(handler, "originalCfruDpeNormalPaletteBytes").containsKey(special));
+                assertFalse(snapshots(handler, "originalCfruDpeShinyPaletteBytes").containsKey(special));
+            }
         }
     }
 
