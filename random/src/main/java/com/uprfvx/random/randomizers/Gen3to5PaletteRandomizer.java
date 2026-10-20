@@ -116,6 +116,15 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
             return;
         }
 
+        if (!typeSanity && !shinyFromNormal && romHandler instanceof Gen3RomHandler gen3
+                && gen3.usesCfruDpeRandomPoolPolicy()) {
+            changesMade = false;
+            if (settings.getPokemonPalettesMod() == Settings.PokemonPalettesMod.RANDOM) {
+                randomizeCfruDpeNormalPalettes(gen3, evolutionSanity);
+            }
+            return;
+        }
+
 		copyUpEvolutionsHelper.apply(evolutionSanity, true, new BasicSpeciesPaletteAction(),
 				new EvolvedSpeciesPaletteAction());
 		List<PaletteDescription> paletteDescriptions = getPaletteDescriptions("pokePalettes");
@@ -123,6 +132,93 @@ public class Gen3to5PaletteRandomizer extends PaletteRandomizer {
 		changesMade = !typeBaseColorLists.isEmpty();
 
 	}
+
+    private void randomizeCfruDpeNormalPalettes(Gen3RomHandler handler, boolean followEvolutions) {
+        SpeciesSet all = romHandler.getSpeciesSetInclFormes();
+        List<PaletteDescription> descriptions = getPaletteDescriptions("pokePalettes");
+        Map<Species, PalettePartDescription[]> eligible = new IdentityHashMap<>();
+        Map<String, Integer> preserved = new TreeMap<>();
+        // No RNG use or live palette writes during owner/description/graph preflight.
+        for (Species species : all) {
+            var decision = handler.getCfruDpeNormalPaletteEligibility(species);
+            if (decision.blocked()) {
+                throw new RandomizationException("CFRU/DPE GFX-001/003: " + decision.reason());
+            }
+            if (!decision.eligible()) {
+                preserved.merge(decision.reason(), 1, Integer::sum);
+                continue;
+            }
+            int index = species.getNumber() - 1;
+            PalettePartDescription[] parts = null;
+            if (descriptions != null && index >= 0 && index < descriptions.size()
+                    && descriptions.get(index) != null && !descriptions.get(index).getBody().isBlank()) {
+                try {
+                    PalettePartDescription[] candidate = getPalettePartDescriptions(species, descriptions);
+                    if (hasSafeParts(candidate)) parts = candidate;
+                } catch (NumberFormatException malformedDescription) {
+                    // Preserve this entire asset, never partially apply a malformed description.
+                }
+            }
+            if (parts == null) preserved.merge("UNAVAILABLE_OR_UNSAFE_DESCRIPTION", 1, Integer::sum);
+            else eligible.put(species, parts);
+        }
+        if (followEvolutions) {
+            try {
+                Set<Species> members = Collections.newSetFromMap(new IdentityHashMap<>());
+                members.addAll(all);
+                for (Species species : all) {
+                    for (Evolution edge : species.getEvolutionsFrom()) {
+                        if (edge == null || edge.getFrom() != species || !members.contains(edge.getTo())
+                                || edge.getType() == null || !edge.getTo().getEvolutionsTo().contains(edge)) {
+                            throw new RandomizationException("Invalid outgoing color-plan edge");
+                        }
+                    }
+                    for (Evolution edge : species.getEvolutionsTo()) {
+                        if (edge == null || edge.getTo() != species || !members.contains(edge.getFrom())
+                                || edge.getType() == null || !edge.getFrom().getEvolutionsFrom().contains(edge)) {
+                            throw new RandomizationException("Invalid incoming color-plan edge");
+                        }
+                    }
+                }
+                // GFX-001/003 retain the legacy first-parent rule for convergent graphs.
+                // GFX-004's stricter unique-parent gate is deliberately not reused here.
+                preflightEvolutionTraversal(all);
+            } catch (RandomizationException invalidGraph) {
+                throw new RandomizationException("CFRU/DPE GFX-001/003: INVALID_EVOLUTION_GRAPH");
+            }
+        }
+        if (eligible.isEmpty()) {
+            reportCfruDpeNormalPalettes(0, 0, preserved);
+            throw new RandomizationException("CFRU/DPE GFX-001/003: NO_ELIGIBLE_NORMAL_PALETTES");
+        }
+        // Keep the complete legacy graph and HashMap insertion/iteration order, including
+        // color plans (and their cosmetic RNG consumption) for skipped parents. Never
+        // invent their palettes or filter the evolution helper's SpeciesSet.
+        copyUpEvolutionsHelper.apply(followEvolutions, true,
+                new BasicSpeciesPaletteAction(), new EvolvedSpeciesPaletteAction());
+        Map<Species, Palette> scratch = new LinkedHashMap<>();
+        PalettePopulator populator = new PalettePopulator(random);
+        for (Entry<Species, TypeBaseColorList> entry : typeBaseColorLists.entrySet()) {
+            Species species = entry.getKey();
+            if (!eligible.containsKey(species)) continue;
+            Palette copy = new Palette(species.getNormalPalette());
+            populatePalette(copy, populator, entry.getValue(), eligible.get(species));
+            if (!Arrays.equals(copy.toBytes(), species.getNormalPalette().toBytes())) scratch.put(species, copy);
+        }
+        reportCfruDpeNormalPalettes(eligible.size(), scratch.size(), preserved);
+        if (scratch.isEmpty()) {
+            throw new RandomizationException("CFRU/DPE GFX-001/003: NO_CHANGED_NORMAL_PALETTES");
+        }
+        // Publish only after every scratch operation succeeds. The trusted snapshots,
+        // shiny channels and existing transactional copy writer are untouched.
+        scratch.forEach(Species::setNormalPalette);
+        changesMade = true;
+    }
+
+    private void reportCfruDpeNormalPalettes(int eligible, int changed, Map<String, Integer> preserved) {
+        System.err.println("CFRU/DPE GFX-001/003: eligible=" + eligible
+                + " changedNormal=" + changed + " preserved=" + preserved);
+    }
 
     private void randomizeCfruDpeTypePalettes(boolean evolutionSanity) {
         changesMade = false;

@@ -90,8 +90,160 @@ class DeterministicPaletteReplayTest {
         for(long seed : SEEDS) assertEquals(process(seed,"integration"),process(seed,"integration"),"combined seed="+seed);
     }
 
+    @Test
+    void selectedNormalOnlyReplaysAcrossFreshJvmsWithAndWithoutMissingParent() throws Exception {
+        for (long seed : SEEDS) for (String mode : List.of("gfx001", "gfx003", "gfx001-missing", "gfx003-missing")) {
+            String first = process(seed, mode);
+            for (int run = 1; run < (seed == 677 ? 20 : 2); run++) assertEquals(first, process(seed, mode));
+        }
+    }
+
+    @Test
+    void selectedNormalOnlyMatchesLegacyBytesCallsAndRetainsSkippedParentPlanDraws() throws Exception {
+        for (long seed : SEEDS) for (boolean follow : new boolean[]{false, true}) {
+            NormalOnlyReplay complete = normalOnlyReplay(seed, follow, false);
+            NormalOnlyReplay missing = normalOnlyReplay(seed, follow, true);
+            assertEquals(complete.planCalls(), missing.planCalls());
+        }
+    }
+
+    private record NormalOnlyReplay(String evidence, long planCalls) { }
+
+    private static NormalOnlyReplay normalOnlyReplay(long seed, boolean follow, boolean missing) throws Exception {
+        var a = Gen3to5PaletteBoundsTest.speciesWithPalette(4);
+        var b = Gen3to5PaletteBoundsTest.speciesWithPalette(5);
+        var c = Gen3to5PaletteBoundsTest.speciesWithPalette(6);
+        Gen3to5PaletteBoundsTest.link(a, b); Gen3to5PaletteBoundsTest.link(a, c);
+        // Distinct methods from one parent retain the legacy color owner.
+        var extra = new com.uprfvx.romio.gamedata.Evolution(a, b, com.uprfvx.romio.gamedata.EvolutionType.LEVEL, 30);
+        a.getEvolutionsFrom().add(extra); b.getEvolutionsTo().add(extra);
+        if (missing) { a.setNormalPalette(null); b.setShinyPalette(null); }
+        var species = new com.uprfvx.romio.gamedata.SpeciesSet(List.of(a, b, c));
+        var handler = new Gen3to5PaletteBoundsTest.SelectedHandler(species);
+        var controls = List.of(Gen3to5PaletteBoundsTest.speciesWithPalette(4),
+                Gen3to5PaletteBoundsTest.speciesWithPalette(5), Gen3to5PaletteBoundsTest.speciesWithPalette(6));
+        Gen3to5PaletteBoundsTest.link(controls.get(0), controls.get(1));
+        Gen3to5PaletteBoundsTest.link(controls.get(0), controls.get(2));
+        var extraControl = new com.uprfvx.romio.gamedata.Evolution(controls.get(0), controls.get(1),
+                com.uprfvx.romio.gamedata.EvolutionType.LEVEL, 30);
+        controls.get(0).getEvolutionsFrom().add(extraControl); controls.get(1).getEvolutionsTo().add(extraControl);
+        for (var sp : controls) {
+            var loaded = species.stream().filter(pk -> pk.getNumber() == sp.getNumber()).findFirst().orElseThrow();
+            if (loaded.getNormalPalette() != null) sp.setNormalPalette(new com.uprfvx.romio.graphics.palettes.Palette(loaded.getNormalPalette()));
+        }
+        var shinies = new IdentityHashMap<com.uprfvx.romio.gamedata.Species, com.uprfvx.romio.graphics.palettes.Palette>();
+        species.forEach(sp -> shinies.put(sp, sp.getShinyPalette()));
+        var settings = Gen3to5PaletteBoundsTest.paletteSettings(false, follow);
+        settings.setRomName("SYNTHETIC"); settings.setSelectedEXPCurve(com.uprfvx.romio.gamedata.ExpCurve.MEDIUM_FAST);
+        var restored = com.uprfvx.random.Settings.fromString(settings.toString());
+        assertEquals(com.uprfvx.random.Settings.PokemonPalettesMod.RANDOM, restored.getPokemonPalettesMod());
+        assertEquals(follow, restored.isPokemonPalettesFollowEvolutions());
+        assertFalse(restored.isPokemonPalettesFollowTypes()); assertFalse(restored.isPokemonPalettesShinyFromNormal());
+        RandomSource source = new RandomSource(); source.seed(seed);
+        long[] beforePopulation = {-1};
+        var randomizer = new Gen3to5PaletteRandomizer(handler, restored, source.getCosmetic()) {
+            @Override public void populatePalette(com.uprfvx.romio.graphics.palettes.Palette palette,
+                    com.uprfvx.romio.graphics.palettes.PalettePopulator pp,
+                    com.uprfvx.romio.graphics.palettes.TypeBaseColorList colors,
+                    com.uprfvx.romio.graphics.palettes.PalettePartDescription[] parts) {
+                if (beforePopulation[0] < 0) beforePopulation[0] = source.callsSinceSeedCosmetic();
+                super.populatePalette(palette, pp, colors, parts);
+            }
+        };
+        randomizer.randomizePokemonPalettes(); assertTrue(randomizer.isChangesMade());
+        assertTrue(beforePopulation[0] > 0); assertTrue(source.callsSinceSeedCosmetic() > 0);
+        assertEquals(0, source.callsSinceSeedNonCosmetic());
+        Random gameplay = new Random(seed);
+        for (int i = 0; i < 100; i++) assertEquals(gameplay.nextInt(), source.getNonCosmetic().nextInt());
+        if (!missing) {
+            RandomSource legacy = new RandomSource(); legacy.seed(seed);
+            var control = new Gen3to5PaletteRandomizer(new Gen3to5PaletteBoundsTest.SyntheticGen3(
+                    new com.uprfvx.romio.gamedata.SpeciesSet(controls), false, "FRLG"), restored, legacy.getCosmetic());
+            control.randomizePokemonPalettes();
+            assertEquals(legacy.callsSinceSeedCosmetic(), source.callsSinceSeedCosmetic());
+            for (var sp : species) assertArrayEquals(controls.stream().filter(pk -> pk.getNumber() == sp.getNumber())
+                    .findFirst().orElseThrow().getNormalPalette().toBytes(), sp.getNormalPalette().toBytes());
+        } else assertNull(a.getNormalPalette());
+        StringBuilder evidence = new StringBuilder();
+        for (var sp : species) {
+            assertSame(shinies.get(sp), sp.getShinyPalette());
+            evidence.append(sp.getNormalPalette() == null ? "MISSING" : Base64.getEncoder().encodeToString(sp.getNormalPalette().toBytes())).append(';');
+        }
+        return new NormalOnlyReplay(evidence + " CALLS=" + source.callsSinceSeedCosmetic(), beforePopulation[0]);
+    }
+
+    private static void loadCombinedNormalPaletteSources(CombinedReplayFixture fixture) throws Exception {
+        // The old orchestration fixture assigns Java palettes only. Install generated,
+        // source-owned compressed channels and use the real defensive loader, never an
+        // overridden eligibility decision or a fabricated trusted snapshot.
+        var field = com.uprfvx.romio.romhandlers.Gen3RomHandler.class.getDeclaredField("romEntry");
+        field.setAccessible(true);
+        var entry = (com.uprfvx.romio.romhandlers.romentries.Gen3RomEntry) field.get(fixture);
+        entry.setRomType(com.uprfvx.romio.constants.Gen3Constants.RomType_FRLG);
+        int normal = 0x33000, shiny = 0x37000;
+        entry.putIntValue("PokemonNormalPalettes", normal); entry.putIntValue("PokemonShinyPalettes", shiny);
+        // Local palette adapter only: DPE d887185 has 1440 physical rows and
+        // SPECIES_EGG=0x19C is Bad Egg / NATIONAL_DEX_NONE, not playable Dex 412.
+        int capacity = 1440, eggId = 0x19C;
+        var nativeOwners = Arrays.copyOf(fixture.species, capacity);
+        var egg = new com.uprfvx.romio.gamedata.Species(0);
+        egg.setSpeciesSetIdentityNumber(eggId); egg.setName("Bad Egg");
+        nativeOwners[eggId] = egg;
+        var rawOwners = new ArrayList<>(Arrays.asList(nativeOwners));
+        fixture.setField("pokesInternal", nativeOwners); fixture.setField("speciesList", rawOwners);
+        // Preserve the ordinary Dex projection without giving the sentinel a Dex owner.
+        var dexOwners = nativeOwners.clone(); dexOwners[eggId] = null;
+        fixture.setField("pokes", dexOwners);
+        int[] mapping = new int[capacity];
+        var memory = java.nio.ByteBuffer.wrap(fixture.memory).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (int id = 0; id < mapping.length; id++) {
+            mapping[id] = id == eggId ? 0 : id;
+            memory.putInt(normal + id * 8, 0); memory.putInt(shiny + id * 8, 0);
+        }
+        fixture.setField("pokedexToInternal", mapping); fixture.setField("internalToPokedex", mapping.clone());
+        for (var sp : fixture.pool) for (boolean isShiny : new boolean[]{false, true}) {
+            int source = 0x46000 + sp.getNumber() * 128 + (isShiny ? 64 : 0);
+            byte[] compressed = compressors.DSCmp.compressLZ10(
+                    (isShiny ? sp.getShinyPalette() : sp.getNormalPalette()).toBytes());
+            System.arraycopy(compressed, 0, fixture.memory, source, compressed.length);
+            memory.putInt((isShiny ? shiny : normal) + sp.getNumber() * 8, 0x08000000 + source);
+        }
+        byte[] beforeLoad = fixture.memory.clone();
+        fixture.loadPokemonPalettes();
+        assertArrayEquals(beforeLoad, fixture.memory);
+        assertEquals(capacity, entry.getIntValue("PokemonCount"));
+        assertEquals(capacity, nativeOwners.length); assertEquals(capacity, rawOwners.size());
+        assertSame(egg, rawOwners.get(eggId)); assertSame(egg, nativeOwners[eggId]);
+        assertEquals(0, mapping[eggId]); assertFalse(Arrays.stream(mapping).anyMatch(id -> id == eggId));
+        assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
+        for (String name : List.of("originalCfruDpeNormalPaletteBytes", "originalCfruDpeShinyPaletteBytes")) {
+            field = com.uprfvx.romio.romhandlers.Gen3RomHandler.class.getDeclaredField(name);
+            field.setAccessible(true);
+            var snapshots = (Map<?, ?>) field.get(fixture);
+            assertFalse(snapshots.containsKey(egg));
+        }
+        var preserved = fixture.getCfruDpeNormalPaletteEligibility(egg);
+        assertFalse(preserved.eligible()); assertFalse(preserved.blocked());
+        assertEquals("PRESERVED_SPECIAL_OWNER", preserved.reason());
+        for (var sp : fixture.pool) assertTrue(fixture.getCfruDpeNormalPaletteEligibility(sp).eligible());
+    }
+
     // Kept here because the existing standalone probe is read-only under #724.
     public static void main(String[] args) throws Exception {
+        if (args[1].equals("combined")) {
+            for (int additions = 0; additions < 8; additions++) {
+                var fixture = new CombinedReplayFixture(); loadCombinedNormalPaletteSources(fixture);
+                byte[] bytes = fixture.run(Long.parseLong(args[0]), true, true, additions);
+                System.out.println("COMPOSITION=" + additions + " OUTPUT=" + HexFormat.of().formatHex(
+                        java.security.MessageDigest.getInstance("SHA-256").digest(bytes)));
+            }
+            return;
+        }
+        if (args[1].startsWith("gfx001") || args[1].startsWith("gfx003")) {
+            var replay = normalOnlyReplay(Long.parseLong(args[0]), args[1].startsWith("gfx003"), args[1].endsWith("missing"));
+            System.out.println("SYNTHETIC_GFX_PALETTE=" + replay.evidence());
+            return;
+        }
         if (args[1].equals("integration")) {
             var digest = java.security.MessageDigest.getInstance("SHA-256");
             for(int improvement : new int[]{0,1,2}) for(int palette : new int[]{2,4})
@@ -239,7 +391,7 @@ class DeterministicPaletteReplayTest {
             if (loader instanceof URLClassLoader urls) for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
         }
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("cfru-types") || composition.startsWith("gfx004") || composition.startsWith("gfx-combined") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
+            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("combined") || composition.equals("cfru-types") || composition.startsWith("gfx00") || composition.startsWith("gfx-combined") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
             .redirectErrorStream(true).start();
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly();

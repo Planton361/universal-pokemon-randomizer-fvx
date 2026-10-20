@@ -11292,6 +11292,81 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /** Read-only normal-channel decision. A blocked model cannot safely reach the copy writer. */
+    public record CfruDpeNormalPaletteEligibility(boolean eligible, boolean blocked, String reason) { }
+
+    public CfruDpeNormalPaletteEligibility getCfruDpeNormalPaletteEligibility(Species species) {
+        if (!useCfruDpeGen9SpeciesCount || !isRomHack || romEntry == null || rom == null
+                || !"BPRE".equals(romEntry.getRomCode())
+                || romEntry.getRomType() != Gen3Constants.RomType_FRLG) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_SELECTED_PROFILE");
+        }
+        if (!hasValidCfruDpePaletteTables()) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_PALETTE_TABLES");
+        }
+        List<Species> owners = getCfruDpePaletteOwners();
+        int count = romEntry.getIntValue("PokemonCount");
+        if (count <= 0 || count > CFRU_DPE_SPECIES_COUNT || pokesInternal == null || internalToPokedex == null) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_NATIVE_OWNER");
+        }
+        Set<Integer> nativeIds = new HashSet<>();
+        boolean selected = false;
+        for (Species other : owners) {
+            int id = other.getSpeciesSetIdentityNumber();
+            // Same native-owner predicates as the writer, checked in one linear pass.
+            // Calling its per-species duplicate scan for every other owner would make
+            // a complete palette preflight cubic in the expanded species count.
+            boolean mapped = id > 0 && id <= CFRU_DPE_MAX_INTERNAL_SPECIES_ID && id <= count
+                    && id < pokesInternal.length && pokesInternal[id] == other
+                    && id < internalToPokedex.length && other.getNumber() > 0
+                    && internalToPokedex[id] == other.getNumber();
+            if (!nativeIds.add(id) || (id == CFRU_DPE_SPECIES_EGG_INTERNAL_ID
+                    ? !canPreserveCfruDpeBadEggPaletteSentinel(other, owners)
+                    : !mapped && !canPreserveUnmappedCfruDpeOgerponPaletteOwner(other, owners))) {
+                return new CfruDpeNormalPaletteEligibility(false, true, "INVALID_NATIVE_OWNER");
+            }
+            selected |= other == species;
+        }
+        if (!selected || species == null) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "NOT_A_SAVE_OWNER");
+        }
+        int owner = getCfruDpePaletteTableIndexForSave(species);
+        if (owner < 0 || species.getNumber() == SpeciesIDs.unown) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "PRESERVED_SPECIAL_OWNER");
+        }
+        Palette normal = species.getNormalPalette();
+        byte[] original = originalCfruDpeNormalPaletteBytes.get(species);
+        if (normal == null && original == null) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "MISSING_NORMAL_ASSET");
+        }
+        if (!isCompleteCfruDpePairPalette(normal)) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "INCOMPLETE_CURRENT_NORMAL");
+        }
+        if (original == null) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "MISSING_NORMAL_SNAPSHOT");
+        }
+        if (original.length != 32 || !Arrays.equals(original, normal.toBytes())) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "STALE_CURRENT_NORMAL");
+        }
+        if (normal == species.getShinyPalette()) {
+            return new CfruDpeNormalPaletteEligibility(false, false, "SHARED_JAVA_PALETTE");
+        }
+        for (Species other : getSpeciesSetInclFormes()) {
+            if (other != species && (normal == other.getNormalPalette() || normal == other.getShinyPalette())) {
+                return new CfruDpeNormalPaletteEligibility(false, false, "SHARED_JAVA_PALETTE");
+            }
+        }
+        int normalTable = romEntry.getIntValue("PokemonNormalPalettes");
+        int shinyTable = romEntry.getIntValue("PokemonShinyPalettes");
+        int entry = (int) ((long) normalTable + (long) owner * 8);
+        if (!matchesCfruDpePairSource(entry, original, normalTable, shinyTable, getCfruDpePaletteTableLength())) {
+            return new CfruDpeNormalPaletteEligibility(false, true, "STALE_NORMAL_SOURCE");
+        }
+        // Unlike GFX-004, normal-only recoloring needs neither a shiny snapshot nor
+        // the first-Dex projection. Native same-Dex forms retain their own save entries.
+        return new CfruDpeNormalPaletteEligibility(true, false, "LOADED_NORMAL_OWNER");
+    }
+
     /** Immutable decision only: no palettes, snapshots or ROM addresses escape this query. */
     public record CfruDpePalettePairEligibility(boolean eligible, String reason) { }
 
@@ -11548,7 +11623,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         for (Species pk : owners) {
             int owner = getCfruDpePaletteTableIndexForSave(pk);
-            if (owner < 0) {
+            if (owner < 0 || pk.getSpeciesSetIdentityNumber() == CFRU_DPE_SPECIES_EGG_INTERNAL_ID) {
+                if (canPreserveCfruDpeBadEggPaletteSentinel(pk, owners)) continue;
                 if (canPreserveUnmappedCfruDpeOgerponPaletteOwner(pk, owners)) continue;
                 throw new RomIOException("CFRU/DPE palette owner is invalid or duplicated");
             }
@@ -11839,6 +11915,44 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             this.tailLength = tailLength;
             this.originalBytes = originalBytes;
         }
+    }
+
+    /**
+     * DPE d887185: SPECIES_EGG=0x19C, named Bad Egg, maps to NATIONAL_DEX_NONE.
+     * Immutable technical row only; never supplies a load/save owner or palette provenance.
+     */
+    private boolean canPreserveCfruDpeBadEggPaletteSentinel(Species pk, List<Species> owners) {
+        if (!useCfruDpeGen9SpeciesCount || !isRomHack || romEntry == null || rom == null
+                || !"BPRE".equals(romEntry.getRomCode())
+                || romEntry.getRomType() != Gen3Constants.RomType_FRLG || romEntry.getVersion() != 0
+                || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT
+                || !hasValidCfruDpePaletteTables()
+                || pokesInternal == null || pokesInternal.length != CFRU_DPE_SPECIES_COUNT
+                || internalToPokedex == null || internalToPokedex.length != CFRU_DPE_SPECIES_COUNT
+                || pokedexToInternal == null || pokedexToInternal.length != CFRU_DPE_SPECIES_COUNT
+                || pk == null || pk.getSpeciesSetIdentityNumber() != CFRU_DPE_SPECIES_EGG_INTERNAL_ID
+                || pokesInternal[CFRU_DPE_SPECIES_EGG_INTERNAL_ID] != pk
+                || pk.getNumber() != 0 || internalToPokedex[CFRU_DPE_SPECIES_EGG_INTERNAL_ID] != 0
+                || !"Bad Egg".equals(pk.getName()) || !pk.isBaseForme()
+                || pk.getFormeNumber() != 0 || pk.isActuallyCosmetic()
+                || pk.getNormalPalette() != null || pk.getShinyPalette() != null
+                || originalCfruDpeNormalPaletteBytes.containsKey(pk)
+                || originalCfruDpeShinyPaletteBytes.containsKey(pk)
+                || owners.stream().filter(other -> other.getSpeciesSetIdentityNumber()
+                    == CFRU_DPE_SPECIES_EGG_INTERNAL_ID).count() != 1) {
+            return false;
+        }
+        // Check raw native slots as well as the uncollapsed owner list. Neither an alias
+        // object nor a reverse Dex mapping may acquire this sentinel's table entry.
+        for (int id = 0; id < pokesInternal.length; id++) {
+            Species other = pokesInternal[id];
+            if (id != CFRU_DPE_SPECIES_EGG_INTERNAL_ID && other != null
+                    && (other == pk || other.getSpeciesSetIdentityNumber() == CFRU_DPE_SPECIES_EGG_INTERNAL_ID)) {
+                return false;
+            }
+            if (pokedexToInternal[id] == CFRU_DPE_SPECIES_EGG_INTERNAL_ID) return false;
+        }
+        return true;
     }
 
     /** DPE d887185 omits Dex mappings for these four named, unsupported Terastal rows. */
