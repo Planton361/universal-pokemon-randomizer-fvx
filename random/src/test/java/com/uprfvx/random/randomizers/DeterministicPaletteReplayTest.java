@@ -182,10 +182,22 @@ class DeterministicPaletteReplayTest {
         entry.setRomType(com.uprfvx.romio.constants.Gen3Constants.RomType_FRLG);
         int normal = 0x33000, shiny = 0x37000;
         entry.putIntValue("PokemonNormalPalettes", normal); entry.putIntValue("PokemonShinyPalettes", shiny);
-        int[] mapping = new int[1440];
+        // Local palette adapter only: DPE d887185 has 1440 physical rows and
+        // SPECIES_EGG=0x19C is Bad Egg / NATIONAL_DEX_NONE, not playable Dex 412.
+        int capacity = 1440, eggId = 0x19C;
+        var nativeOwners = Arrays.copyOf(fixture.species, capacity);
+        var egg = new com.uprfvx.romio.gamedata.Species(0);
+        egg.setSpeciesSetIdentityNumber(eggId); egg.setName("Bad Egg");
+        nativeOwners[eggId] = egg;
+        var rawOwners = new ArrayList<>(Arrays.asList(nativeOwners));
+        fixture.setField("pokesInternal", nativeOwners); fixture.setField("speciesList", rawOwners);
+        // Preserve the ordinary Dex projection without giving the sentinel a Dex owner.
+        var dexOwners = nativeOwners.clone(); dexOwners[eggId] = null;
+        fixture.setField("pokes", dexOwners);
+        int[] mapping = new int[capacity];
         var memory = java.nio.ByteBuffer.wrap(fixture.memory).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         for (int id = 0; id < mapping.length; id++) {
-            mapping[id] = id;
+            mapping[id] = id == eggId ? 0 : id;
             memory.putInt(normal + id * 8, 0); memory.putInt(shiny + id * 8, 0);
         }
         fixture.setField("pokedexToInternal", mapping); fixture.setField("internalToPokedex", mapping.clone());
@@ -196,7 +208,23 @@ class DeterministicPaletteReplayTest {
             System.arraycopy(compressed, 0, fixture.memory, source, compressed.length);
             memory.putInt((isShiny ? shiny : normal) + sp.getNumber() * 8, 0x08000000 + source);
         }
+        byte[] beforeLoad = fixture.memory.clone();
         fixture.loadPokemonPalettes();
+        assertArrayEquals(beforeLoad, fixture.memory);
+        assertEquals(capacity, entry.getIntValue("PokemonCount"));
+        assertEquals(capacity, nativeOwners.length); assertEquals(capacity, rawOwners.size());
+        assertSame(egg, rawOwners.get(eggId)); assertSame(egg, nativeOwners[eggId]);
+        assertEquals(0, mapping[eggId]); assertFalse(Arrays.stream(mapping).anyMatch(id -> id == eggId));
+        assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
+        for (String name : List.of("originalCfruDpeNormalPaletteBytes", "originalCfruDpeShinyPaletteBytes")) {
+            field = com.uprfvx.romio.romhandlers.Gen3RomHandler.class.getDeclaredField(name);
+            field.setAccessible(true);
+            var snapshots = (Map<?, ?>) field.get(fixture);
+            assertFalse(snapshots.containsKey(egg));
+        }
+        var preserved = fixture.getCfruDpeNormalPaletteEligibility(egg);
+        assertFalse(preserved.eligible()); assertFalse(preserved.blocked());
+        assertEquals("PRESERVED_SPECIAL_OWNER", preserved.reason());
         for (var sp : fixture.pool) assertTrue(fixture.getCfruDpeNormalPaletteEligibility(sp).eligible());
     }
 
