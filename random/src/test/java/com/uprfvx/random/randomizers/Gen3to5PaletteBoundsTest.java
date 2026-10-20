@@ -1085,21 +1085,115 @@ public class Gen3to5PaletteBoundsTest {
     }
 
     @Test
-    void normalOnlyNamedEggZeroDexSentinelStopsBothFollowModesBeforeRngOrPublication() throws Exception {
-        for (boolean follow : new boolean[]{false, true}) {
-            Species valid = speciesWithPalette(4), egg = speciesWithPalette(0), unused = speciesWithPalette(0);
-            valid.setName("Charmander"); egg.setName("Bad Egg"); egg.setSpeciesSetIdentityNumber(0x19C);
-            unused.setName("?"); unused.setSpeciesSetIdentityNumber(0xFC);
-            var handler = new SelectedHandler(List.of(valid, egg, unused));
-            assertEquals(Arrays.asList(null, valid, egg), handler.getSpecies());
-            assertSame(egg, ((Species[]) field(handler, "pokesInternal"))[0x19C]);
-            assertEquals(0, ((int[]) field(handler, "internalToPokedex"))[0x19C]);
-            assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
-            assertTrue(snapshots(handler, "originalCfruDpeNormalPaletteBytes").containsKey(valid));
-            assertFalse(snapshots(handler, "originalCfruDpeNormalPaletteBytes").containsKey(egg));
-            assertFalse(snapshots(handler, "originalCfruDpeShinyPaletteBytes").containsKey(egg));
+    void normalOnlyCanonicalBadEggRecolorsSavesReopensAndReplaysBothFollowModes() throws Exception {
+        for (boolean follow : new boolean[]{false, true}) for (long seed : new long[]{1, 677, 724, 20261020}) {
+            byte[] replay = null; long nextDraw = 0;
+            for (int repetition = 0; repetition < 2; repetition++) {
+                SelectedHandler handler = badEggHandler();
+                Species valid = handler.getSpecies().get(1), child = handler.getSpecies().get(2), egg = handler.getSpecies().get(3);
+                assertSame(egg, ((Species[]) field(handler, "pokesInternal"))[0x19C]);
+                assertEquals(0, ((int[]) field(handler, "internalToPokedex"))[0x19C]);
+                assertTrue(handler.getCfruDpeNormalPaletteEligibility(valid).eligible());
+                assertFalse(handler.getCfruDpeNormalPaletteEligibility(egg).blocked());
+                assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
+                byte[] memory = handler.buffer().clone(); String ranges = handler.allocatorRanges();
+                byte[] original = valid.getNormalPalette().toBytes(), originalChild = child.getNormalPalette().toBytes();
+                byte[] shiny = valid.getShinyPalette().toBytes(), childShiny = child.getShinyPalette().toBytes();
+                Random rng = new Random(seed);
+                var randomizer = new Gen3to5PaletteRandomizer(handler, paletteSettings(false, follow), rng);
+                java.io.ByteArrayOutputStream report = new java.io.ByteArrayOutputStream();
+                java.io.PrintStream previous = System.err;
+                try (var capture = new java.io.PrintStream(report)) {
+                    System.setErr(capture); randomizer.randomizePokemonPalettes();
+                } finally { System.setErr(previous); }
+                assertTrue(randomizer.isChangesMade());
+                assertTrue(report.toString(java.nio.charset.StandardCharsets.UTF_8)
+                        .matches("(?s).*changedNormal=[1-9][0-9]* .*"));
+                assertArrayEquals(memory, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
+                assertFalse(Arrays.equals(original, valid.getNormalPalette().toBytes()));
+                assertFalse(Arrays.equals(originalChild, child.getNormalPalette().toBytes()));
+                assertArrayEquals(shiny, valid.getShinyPalette().toBytes());
+                assertArrayEquals(childShiny, child.getShinyPalette().toBytes());
+                assertArrayEquals(original, snapshots(handler, "originalCfruDpeNormalPaletteBytes").get(valid));
+                assertArrayEquals(originalChild, snapshots(handler, "originalCfruDpeNormalPaletteBytes").get(child));
+                assertFalse(snapshots(handler, "originalCfruDpeNormalPaletteBytes").containsKey(egg));
+                assertFalse(snapshots(handler, "originalCfruDpeShinyPaletteBytes").containsKey(egg));
+                handler.savePokemonPalettes(); // Actual transactional copy writer, no synthetic save override.
+                assertNormalCopyBudget(handler, memory, List.of(valid, child));
+                assertNull(egg.getNormalPalette()); assertNull(egg.getShinyPalette());
+                assertArrayEquals(original, snapshots(handler, "originalCfruDpeNormalPaletteBytes").get(valid));
+                SelectedHandler reopened = badEggHandler();
+                System.arraycopy(handler.buffer(), 0, reopened.buffer(), 0, handler.buffer().length);
+                reopened.loadPokemonPalettes(); // Fresh native model, actual loader and snapshot capture.
+                for (int index : new int[]{1, 2}) {
+                    Species expected = handler.getSpecies().get(index), actual = reopened.getSpecies().get(index);
+                    assertArrayEquals(expected.getNormalPalette().toBytes(), actual.getNormalPalette().toBytes());
+                    assertArrayEquals(expected.getShinyPalette().toBytes(), actual.getShinyPalette().toBytes());
+                }
+                Species readEgg = reopened.getSpecies().get(3);
+                assertNull(readEgg.getNormalPalette()); assertNull(readEgg.getShinyPalette());
+                assertFalse(snapshots(reopened, "originalCfruDpeNormalPaletteBytes").containsKey(readEgg));
+                assertFalse(snapshots(reopened, "originalCfruDpeShinyPaletteBytes").containsKey(readEgg));
+                byte[] saved = reopened.buffer().clone(); reopened.savePokemonPalettes();
+                assertArrayEquals(saved, reopened.buffer());
+                long draw = rng.nextLong();
+                if (repetition == 0) { replay = saved; nextDraw = draw; }
+                else { assertArrayEquals(replay, saved); assertEquals(nextDraw, draw); }
+            }
+        }
+    }
+
+    @Test
+    void normalOnlyBadEggCorruptionStopsBothFollowModesBeforeRngAndForcedWriterMutation() throws Exception {
+        for (boolean follow : new boolean[]{false, true}) for (int kind = 0; kind < 12; kind++) {
+            SelectedHandler handler = badEggHandler(); Species valid = handler.getSpecies().get(1), egg = handler.getSpecies().get(3);
+            Species[] internal = (Species[]) field(handler, "pokesInternal");
+            int[] dex = (int[]) field(handler, "internalToPokedex");
+            switch (kind) {
+                case 0 -> handler.getSpecies().add(egg);
+                case 1 -> { Species other = speciesWithPalette(0); other.setSpeciesSetIdentityNumber(0x19C); handler.getSpecies().add(other); }
+                case 2 -> egg.setName("Impostor");
+                case 3 -> { egg.setSpeciesSetIdentityNumber(413); internal[413] = egg; internal[0x19C] = null; }
+                case 4 -> dex[0x19C] = 4;
+                case 5 -> egg.setNormalPalette(new Palette(valid.getNormalPalette()));
+                case 6 -> egg.setShinyPalette(new Palette(valid.getShinyPalette()));
+                case 7 -> snapshots(handler, "originalCfruDpeNormalPaletteBytes").put(egg, valid.getNormalPalette().toBytes());
+                case 8 -> snapshots(handler, "originalCfruDpeShinyPaletteBytes").put(egg, valid.getShinyPalette().toBytes());
+                case 9 -> internal[413] = egg;
+                case 10 -> ((int[]) field(handler, "pokedexToInternal"))[1] = 0x19C;
+                case 11 -> handler.entry.putIntValue("PokemonCount", 1439);
+                default -> throw new AssertionError(kind);
+            }
             assertGlobalNormalOwnerStop(handler, valid, follow);
         }
+    }
+
+    private static SelectedHandler badEggHandler() throws Exception {
+        Species valid = speciesWithPalette(4), child = speciesWithPalette(5), egg = speciesWithPalette(0), unused = speciesWithPalette(0);
+        valid.setName("Charmander"); child.setName("Charmeleon"); link(valid, child);
+        egg.setName("Bad Egg"); egg.setSpeciesSetIdentityNumber(0x19C);
+        unused.setName("?"); unused.setSpeciesSetIdentityNumber(0xFC);
+        var handler = new SelectedHandler(List.of(valid, child, egg, unused));
+        assertEquals(Arrays.asList(null, valid, child, egg), handler.getSpecies());
+        return handler;
+    }
+
+    private static void assertNormalCopyBudget(SelectedHandler handler, byte[] before, List<Species> changed) {
+        List<int[]> allowed = new ArrayList<>();
+        for (Species sp : changed) {
+            int entry = handler.normalTable + sp.getSpeciesSetIdentityNumber() * 8;
+            int pointer = handler.pointerAt(entry);
+            int length = compressors.DSCmp.compressLZ10(handler.readback(sp, false)).length;
+            assertTrue(pointer >= 0x50000 && pointer + length <= handler.buffer().length);
+            allowed.add(new int[]{entry, entry + 4}); allowed.add(new int[]{pointer, pointer + length});
+            assertArrayEquals(sp.getNormalPalette().toBytes(), handler.readback(sp, false));
+        }
+        for (int offset = 0; offset < before.length; offset++) if (before[offset] != handler.buffer()[offset]) {
+            boolean inBudget = false;
+            for (int[] range : allowed) if (offset >= range[0] && offset < range[1]) inBudget = true;
+            assertTrue(inBudget, "write outside normal pointer/new payload budget: " + offset);
+        }
+        // Entire sentinel rows, shiny table/payloads, tags, source data and adjacent bytes are outside this budget.
     }
 
     @Test
