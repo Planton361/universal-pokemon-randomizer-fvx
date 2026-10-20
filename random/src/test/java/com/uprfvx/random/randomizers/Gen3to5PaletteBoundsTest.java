@@ -18,6 +18,8 @@ import com.uprfvx.romio.graphics.palettes.PaletteDescription;
 import com.uprfvx.romio.graphics.palettes.PalettePartDescription;
 import com.uprfvx.romio.romhandlers.RomHandler;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
@@ -29,6 +31,61 @@ import static org.junit.jupiter.api.Assertions.*;
 
 
 public class Gen3to5PaletteBoundsTest {
+
+    @ParameterizedTest @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void actualNormalRandomizerThenIntroSyncChecksOwnershipBeforeSave(boolean follow, boolean intro) throws Exception {
+        int sourceId = com.uprfvx.romio.constants.SpeciesIDs.nidoranFemale;
+        Species source = speciesWithPalette(sourceId), child = speciesWithPalette(sourceId + 1);
+        Species target = speciesWithPalette(com.uprfvx.romio.constants.SpeciesIDs.pikachu);
+        source.setName("Nidoran F"); child.setName("Nidorina"); target.setName("Pikachu");
+        target.setNormalPalette(new Palette(16, new Color(224, 64, 16)));
+        link(source, child);
+        var handler = new SelectedHandler(List.of(source, child, target));
+        handler.configureIntro(List.of(source, target));
+        byte[] memory = handler.buffer().clone(); String ranges = handler.allocatorRanges();
+        byte[] original = source.getNormalPalette().toBytes(), targetColors = target.getNormalPalette().toBytes();
+        assertFalse(Arrays.equals(original, targetColors));
+        var originals = snapshots(handler, "originalCfruDpeNormalPaletteBytes");
+        byte[] snapshot = originals.get(source);
+        assertArrayEquals(original, snapshot);
+        for (Species sp : List.of(source, child, target))
+            assertTrue(handler.getCfruDpeNormalPaletteEligibility(sp).eligible());
+        int entry = handler.normalTable + sourceId * 8;
+        int originalPointer = handler.pointerAt(entry), targetPointer = handler.readEntry(target, false);
+        assertNotEquals(originalPointer, targetPointer);
+        var randomizer = selected(handler, paletteSettings(false, follow), 677);
+        randomizer.randomizePokemonPalettes(); assertTrue(randomizer.isChangesMade());
+        Palette recolored = source.getNormalPalette(); byte[] changed = recolored.toBytes();
+        assertFalse(Arrays.equals(original, changed)); assertFalse(Arrays.equals(targetColors, changed));
+        assertArrayEquals(memory, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
+        assertSame(snapshot, originals.get(source)); assertArrayEquals(original, snapshot);
+        if (intro) {
+            assertTrue(handler.setIntroPokemon(target));
+            assertEquals(targetPointer, handler.pointerAt(entry));
+            assertFalse(Arrays.equals(memory, handler.buffer()));
+            // Intro copies the compressed target source, not its newly randomized Java colors.
+            assertArrayEquals(targetColors, handler.readback(source, false));
+        } else assertEquals(originalPointer, handler.pointerAt(entry));
+        assertSame(recolored, source.getNormalPalette()); assertArrayEquals(changed, recolored.toBytes());
+        assertSame(snapshot, originals.get(source)); assertArrayEquals(original, snapshot);
+        assertEquals(ranges, handler.allocatorRanges());
+        byte[] beforeSave = handler.buffer().clone();
+        if (intro) {
+            var error = assertThrows(com.uprfvx.romio.exceptions.RomIOException.class, handler::savePokemonPalettes);
+            assertEquals("CFRU/DPE changed palette has invalid or stale source ownership", error.getMessage());
+            assertEquals("validateChangedCfruDpePaletteSource", error.getStackTrace()[0].getMethodName());
+            assertArrayEquals(beforeSave, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
+            assertEquals(targetPointer, handler.pointerAt(entry));
+        } else {
+            assertDoesNotThrow(handler::savePokemonPalettes);
+            for (Species sp : List.of(source, child, target)) {
+                assertArrayEquals(sp.getNormalPalette().toBytes(), handler.readback(sp, false));
+                assertArrayEquals(sp.getShinyPalette().toBytes(), handler.readback(sp, true));
+            }
+        }
+        assertSame(recolored, source.getNormalPalette()); assertArrayEquals(changed, recolored.toBytes());
+        assertSame(snapshot, originals.get(source)); assertArrayEquals(original, snapshot);
+    }
 
     // Stage A remains in the parent commit. Stage B fixtures now run the real defensive loader
     // against generated compressed buffers, not manually asserted Java palette provenance.
@@ -637,6 +694,17 @@ public class Gen3to5PaletteBoundsTest {
             pointer((shiny ? shinyTable : normalTable) + sp.getNumber() * 8, target);
         }
         int normalSource(Species sp) { return 0x8000 + sp.getNumber() * 128; }
+        void configureIntro(List<Species> owners) {
+            entry.putIntValue("PokemonFrontImages", 0x8000);
+            entry.putIntValue("IntroImageOffset", 0xC000);
+            entry.putIntValue("IntroCryOffset", 0xC020); entry.putIntValue("IntroOtherOffset", 0xC024);
+            for (Species sp : owners) {
+                int asset = 0xE000 + sp.getSpeciesSetIdentityNumber() * 64;
+                byte[] compressed = compressors.DSCmp.compressLZ10(new byte[0x800]);
+                System.arraycopy(compressed, 0, rom, asset, compressed.length);
+                pointer(0x8000 + sp.getSpeciesSetIdentityNumber() * 8, asset);
+            }
+        }
         void pointer(int entry, int target) { writePointer(entry, target); }
         int pointerAt(int entry) { return readPointer(entry); }
         int readEntry(Species sp, boolean shiny) { return readPointer((shiny ? shinyTable : normalTable)

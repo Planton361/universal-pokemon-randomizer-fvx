@@ -1,6 +1,7 @@
 package com.uprfvx.romio.romhandlers;
 
 import com.uprfvx.romio.constants.Gen3Constants;
+import com.uprfvx.romio.constants.SpeciesIDs;
 import com.uprfvx.romio.exceptions.RomIOException;
 import com.uprfvx.romio.gamedata.Species;
 import com.uprfvx.romio.graphics.palettes.Palette;
@@ -17,6 +18,81 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Generated memory only; real Gen3 loader, snapshots, allocator and copy-save writer. */
 class Gen3CfruDpePaletteFormOwnerTest {
     private static final int NORMAL = 0x100, SHINY = 0x4000, FREE = 0x50000;
+
+    @ParameterizedTest @ValueSource(ints = {0, 1, 2, 3, 4, 5})
+    void introPointerOwnershipConflictAndDecodedColorControls(int control) throws Exception {
+        // 0: stale normal; 1: different pointer/equal original; 2: unchanged shared
+        // compressed source; 3: equal current; 4: valid normal but stale changed shiny;
+        // 5: no intro sync. These are method-level synthetic saves, not full-file saves.
+        Species source = species(SpeciesIDs.nidoranFemale, SpeciesIDs.nidoranFemale);
+        Species target = species(SpeciesIDs.pikachu, SpeciesIDs.pikachu);
+        Fixture f = new Fixture(List.of(source, target));
+        int sourceEntry = NORMAL + source.getSpeciesSetIdentityNumber() * 8;
+        int targetEntry = NORMAL + target.getSpeciesSetIdentityNumber() * 8;
+        int originalPointer = f.pointerAt(sourceEntry), targetPointer = f.pointerAt(targetEntry);
+        assertNotEquals(originalPointer, targetPointer);
+        byte[] original = raw(source.getSpeciesSetIdentityNumber(), false);
+        byte[] recolored = original.clone(); recolored[2] ^= 31;
+        if (control == 1 || control == 4) f.payloadAt(targetPointer, original);
+        if (control == 2) f.pointer(targetEntry, originalPointer);
+        if (control == 3) f.payloadAt(targetPointer, recolored);
+        f.configureIntro(source, target);
+        byte[] beforeLoad = f.bytes().clone(); f.loadPokemonPalettes();
+        assertArrayEquals(beforeLoad, f.bytes());
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(source).eligible());
+        assertTrue(f.getCfruDpeNormalPaletteEligibility(target).eligible());
+        byte[] snapshot = snapshots(f, false).get(source);
+        assertArrayEquals(original, snapshot);
+        source.setNormalPalette(new Palette(recolored));
+        if (control == 4) {
+            byte[] shiny = source.getShinyPalette().toBytes(); shiny[4] ^= 7;
+            source.setShinyPalette(new Palette(shiny));
+            f.pointer(SHINY + source.getSpeciesSetIdentityNumber() * 8,
+                    f.pointerAt(SHINY + target.getSpeciesSetIdentityNumber() * 8));
+        }
+        Palette javaPalette = source.getNormalPalette();
+        OwnerState beforeIntro = ownerState(f);
+        if (control != 5) {
+            assertTrue(f.setIntroPokemon(target));
+            assertEquals(f.pointerAt(targetEntry), f.pointerAt(sourceEntry));
+            if (control != 2) assertNotEquals(originalPointer, f.pointerAt(sourceEntry));
+            assertFalse(Arrays.equals(beforeIntro.memory(), f.bytes()));
+            assertEquals(beforeIntro.ranges(), f.allocatorRanges());
+            assertEquals(beforeIntro.checkpoints(), f.writeCheckpoints);
+        } else assertEquals(originalPointer, f.pointerAt(sourceEntry));
+        assertSame(javaPalette, source.getNormalPalette());
+        assertArrayEquals(recolored, source.getNormalPalette().toBytes());
+        assertSame(snapshot, snapshots(f, false).get(source)); assertArrayEquals(original, snapshot);
+        if (control == 0) {
+            assertFalse(Arrays.equals(original, f.decode(sourceEntry)));
+            assertFalse(Arrays.equals(recolored, f.decode(sourceEntry)));
+        }
+        if (control == 4) {
+            // Normal is explicitly acceptable; the additional changed Shiny channel
+            // must still be checked globally before any normal copy is allocated.
+            assertArrayEquals(original, f.decode(sourceEntry));
+            int shinyEntry = SHINY + source.getSpeciesSetIdentityNumber() * 8;
+            assertFalse(Arrays.equals(snapshots(f, true).get(source), f.decode(shinyEntry)));
+            assertFalse(Arrays.equals(source.getShinyPalette().toBytes(), f.decode(shinyEntry)));
+        }
+        // Capture AFTER the intentional intro write: a rejected palette save must not
+        // undo that write, allocate, publish any further pointer, or touch Java state.
+        OwnerState beforeSave = ownerState(f);
+        if (control == 0 || control == 4) {
+            RomIOException error = assertThrows(RomIOException.class, f::savePokemonPalettes);
+            assertEquals("CFRU/DPE changed palette has invalid or stale source ownership", error.getMessage());
+            assertEquals("validateChangedCfruDpePaletteSource", error.getStackTrace()[0].getMethodName());
+            assertOwnerState(f, beforeSave); assertTrue(f.reservedPaletteIndices.isEmpty());
+        } else {
+            assertDoesNotThrow(f::savePokemonPalettes);
+            assertBudget(f, beforeSave.memory(), Set.of(sourceEntry));
+            assertArrayEquals(recolored, f.decode(sourceEntry));
+            assertArrayEquals(beforeSave.colors().get(1), target.getNormalPalette().toBytes());
+            assertSame(snapshot, snapshots(f, false).get(source)); assertArrayEquals(original, snapshot);
+            if (control == 2) assertArrayEquals(original, f.decode(targetEntry));
+            f.loadPokemonPalettes(); assertArrayEquals(recolored, source.getNormalPalette().toBytes());
+        }
+    }
 
     @Test void sameDexNativeFormsLoadDistinctPairsAndNoopIsByteIdentical() throws Exception {
         Fixture f = fixture(); byte[] before = f.bytes().clone();
@@ -792,6 +868,20 @@ class Gen3CfruDpePaletteFormOwnerTest {
             select(selected);
         }
         void pointer(int entry, int target) { writePointer(entry, target); }
+        void payloadAt(int offset, byte[] colors) {
+            byte[] compressed = DSCmp.compressLZ10(colors);
+            System.arraycopy(compressed, 0, rom, offset, compressed.length);
+        }
+        void configureIntro(Species source, Species target) {
+            entry.putIntValue("PokemonFrontImages", 0x8000);
+            entry.putIntValue("IntroImageOffset", 0xC000);
+            entry.putIntValue("IntroCryOffset", 0xC020); entry.putIntValue("IntroOtherOffset", 0xC024);
+            for (Species sp : List.of(source, target)) {
+                int asset = 0xE000 + sp.getSpeciesSetIdentityNumber() * 64;
+                payloadAt(asset, new byte[0x800]);
+                pointer(0x8000 + sp.getSpeciesSetIdentityNumber() * 8, asset);
+            }
+        }
         int pointerAt(int entry) { return readPointer(entry, true); }
         byte[] decode(int entry) { return new Palette(DSDecmp.Decompress(rom, pointerAt(entry))).toBytes(); }
         byte[] bytes() { return rom; }
