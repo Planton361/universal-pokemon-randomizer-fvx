@@ -23,8 +23,37 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class IntroPokemonDecisionTest {
+
+    @Test
+    public void missingOakWitnessStopsFullRandomizerBeforeRestrictionsOrOtherMutations() throws Exception {
+        class Fixture extends com.uprfvx.romio.romhandlers.CfruDpeEvolutionFixture {
+            boolean watching; int restrictionsAccess;
+            Fixture() throws Exception {super();}
+            @Override public RestrictedSpeciesService getRestrictedSpeciesService() {
+                if(watching) restrictionsAccess++;
+                return super.getRestrictedSpeciesService();
+            }
+            @Override public int generationOfPokemon() {return 3;}
+            @Override public java.util.List<Integer> getMoveTutorMoves() {return java.util.List.of();}
+            @Override public java.util.List<com.uprfvx.romio.gamedata.Trainer> getTrainers() {return java.util.List.of();}
+            @Override public boolean canChangeStaticPokemon() {return false;}
+            @Override public java.util.List<com.uprfvx.romio.gamedata.InGameTrade> getInGameTrades() {return java.util.List.of();}
+            @Override public java.util.List<com.uprfvx.romio.gamedata.Move> getMoves() {return java.util.List.of();}
+        }
+        Fixture f=new Fixture();var settings=new Settings();settings.setRandomizeIntroMon(true);
+        java.util.ResourceBundle bundle=new java.util.ListResourceBundle() {
+            @Override protected Object[][] getContents() {return new Object[0][];}
+        };
+        var randomizer=new com.uprfvx.random.GameRandomizer(settings,null,f,bundle,false);
+        byte[] before=f.memory.clone();f.watching=true;
+        var result=randomizer.randomize("synthetic-unused",new java.io.PrintStream(java.io.OutputStream.nullOutputStream()),1234);
+        assertFalse(result.wasSaveSuccessful());
+        assertEquals(0,f.restrictionsAccess);assertTrue(result.getException().getMessage().contains("explicit independent witness"));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(before,f.memory);
+    }
 
     @Test
     public void randomizeIntroPokemonRetriesInvalidSpeciesAndNeverAcceptsSpeciesZero() {
@@ -37,7 +66,7 @@ public class IntroPokemonDecisionTest {
 
         assertSame(valid, handler.acceptedIntroSpecies);
         assertSame(valid, randomizer.getIntroSpecies());
-        assertEquals(List.of(invalid, valid), handler.introAttempts);
+        assertEquals(List.of(valid), handler.introAttempts);
     }
 
     @Test
@@ -48,7 +77,7 @@ public class IntroPokemonDecisionTest {
 
         randomizer.randomizeIntroPokemon();
 
-        assertEquals(List.of(invalid), handler.introAttempts);
+        assertEquals(List.of(), handler.introAttempts);
         assertNull(handler.acceptedIntroSpecies);
         assertNull(randomizer.getIntroSpecies());
         assertFalse(randomizer.isChangesMade());
@@ -84,7 +113,7 @@ public class IntroPokemonDecisionTest {
 
         randomizer.randomizeIntroPokemon();
 
-        assertEquals(List.of(invalidIdentity), handler.introAttempts);
+        assertEquals(List.of(), handler.introAttempts);
         assertNull(handler.acceptedIntroSpecies);
         assertFalse(randomizer.isChangesMade());
     }
