@@ -13,6 +13,150 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Source-shaped slots, synthetic bound witness and memory; no ROM/file ingress. */
 class Gen3CfruDpeEasierTimeEvolutionTest {
+    // #78 parser-only synthetic input. None of these values attest a real output.
+    private static final class OakFixture {
+        final byte[] memory = new byte[0x200000];
+        final Properties p = new Properties();
+        static final int D = 0x180000, B = 0x180100, SB = 0x180200, SC = 0x180300,
+                CB = 0x180400, CC = 0x180500, FRONT = 0x20000, PALETTE = 0x24000;
+        OakFixture() {
+            memory[0xac]='B'; memory[0xad]='P'; memory[0xae]='R'; memory[0xaf]='E';
+            put32(0x128, 0x08000000 + FRONT); put32(0x130, 0x08000000 + PALETTE);
+            for (int i=0;i<1440;i++) { put32(FRONT+i*8,0x08040000); put16(FRONT+i*8+4,8); put32(PALETTE+i*8,0x08040200); }
+            memory[0x40000]=0x10;memory[0x40001]=8; // one all-literal LZ10 group
+            memory[0x40200]=0x10;memory[0x40201]=32; // four all-literal LZ10 groups
+            System.arraycopy("CFROAK01".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,memory,D,8);
+            put32(D+8,0x08000000+D); put32(D+16,1); put32(D+28,0x08000000+B);
+            put32(D+36,0x08000001+SB); put32(D+40,0x08000001+SC);
+            put32(D+44,0x08000001+CB); put32(D+48,0x08000001+CC);
+            put32(D+52,0x08000128); put32(D+56,0x08000130);
+            int[] offs={12,14,20,22,24,26,32,34,60,62,64,66,68,70,92,94};
+            int[] vals={1,96,1440,29,92,2,180,1,8,8,28,20,24,4,29,0};
+            for(int i=0;i<offs.length;i++) put16(D+offs[i],vals[i]);
+            byte[] bits=HexFormat.of().parseHex("feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0f0000e0fffffffffffffffffffffffffffdffffebfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb3f0000fd03dfffffffffffffffffdf21ffffff1f000000000080ffffffffffffffff7fffffffffffaf780000fefefdffffffffffffffffffffffff7ffe0bfffb6fffffff0f000000c0ffffffffffffffbfffffffffffffffffc39f");
+            System.arraycopy(bits,0,memory,B,bits.length);
+            bridge(SB,SC); bridge(CB,CC);
+            hook(0x130f2c,SB);hook(0x12fa78,CB);
+            // Synthetic inherited #77 evolution and Pickup roots and physical objects.
+            put32(0x42f6c,0x08050000);put32(0x42ec4,0x47184b00);put32(0x42ec8,0x08030001);
+            System.arraycopy("CFRUEVO1".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,memory,0x35000,8);
+            put32(0x35008,0x08035000);put32(0x3500c,0x08030001);
+            int[] evo={1,32,28,1,220,160};for(int i=0;i<evo.length;i++)put16(0x35010+2*i,evo[i]);
+            memory[0x3501c]=(byte)220;
+            for(int at:new int[]{0x14c1c,0x15a28,0x15c6c,0x15c98,0x1d054})put32(at,0x08082000);
+            put32(0x82000+0xe5*4,0x08083001);
+            int[] pickop={0xb510,0x4804,0x4b04,0xf000,0xf803,0xbc10,0xbc01,0x4700,0x4718,0x46c0};
+            for(int i=0;i<pickop.length;i++)put16(0x83000+2*i,pickop[i]);
+            put32(0x83014,0x08084000);put32(0x83018,0x08083101);
+            put32(0x84000,0x31555043);put16(0x84004,1);put16(0x84006,64);put32(0x84008,6);put32(0x8400c,1);
+            int[] picktables={0x84100,0x84140,0x84180,0x841c0};
+            int[] pickcounts={18,11,9,2};for(int i=0;i<4;i++) {put32(0x84010+4*i,0x08000000+picktables[i]);put16(0x84020+2*i,pickcounts[i]);}
+            int[] shape={4,2,4,10,10,9,2,1,100,0,0,0};for(int i=0;i<shape.length;i++)memory[0x84028+i]=(byte)shape[i];
+            put32(0x84034,779);put32(0x84038,0x08083101);put32(0x8403c,0x08083001);
+            int[] ceilings={19661,26214,32768,39322,45875,52429,58982,61604,64225,64881,65536};
+            for(int i=0;i<ceilings.length;i++)put32(i<9?0x84180+4*i:0x841c0+4*(i-9),ceilings[i]);
+            set("schema","OAK_OWNERSHIP_WITNESS_V1"); set("version","1");
+            set("cfru.sha","196058edbc2b8b7d8c725b715b1f967ba60f5c83");
+            set("dpe.sha","d887185de1f6ae6a78e85c4311bbadde17041d00");
+            set("build.id","synthetic-build"); set("config.id","synthetic-config"); set("config.sha256","0".repeat(64));
+            set("input.size",memory.length); set("selector.offset",92); set("selector.width",2);
+            range("descriptor",D,D+96); range("bitmap",B,B+180); range("sprite.bridge",SB,SB+28);
+            range("sprite.consumer",SC,SC+64); range("cry.bridge",CB,CB+28); range("cry.consumer",CC,CC+64);
+            set("insertions.count",1); range("insertions.0",D,D+0x1000);
+            String[] types={"EVOLUTION_CODE","EVOLUTION_DATA","PICKUP_CODE","PICKUP_DATA","FRONT_TABLE",
+                    "PALETTE_TABLE","FRONT_ASSET","PALETTE_ASSET","SPRITE_HOOK","CRY_HOOK","OTHER_CODE","OTHER_DATA",
+                    "EVOLUTION_RECORD","PICKUP_DATA"};
+            int[] starts={0x30000,0x50000,0x83000,0x82000,FRONT,PALETTE,0x40000,0x40200,0x130f2c,0x12fa78,0x34000,0x37000,
+                    0x35000,0x84000};
+            int[] lengths={0x80,1440*128,0x200,0x400,1440*8,1440*8,0x100,0x100,20,20,0x80,0x80,32,0x200};
+            set("protected.count",types.length);
+            for(int i=0;i<types.length;i++) {set("protected."+i+".type",types[i]);range("protected."+i,starts[i],starts[i]+lengths[i]);}
+            digest();
+        }
+        void hook(int at,int target) {
+            int[] op={0xb510,0x4c03,0xf000,0xf803,0xbc10,0xbc02,0x4708,0x4720};
+            for(int i=0;i<op.length;i++)put16(at+2*i,op[i]);put32(at+16,0x08000001+target);
+        }
+        void bridge(int at,int consumer) {
+            int[] op={0xb510,0x4904,0x4b04,0xf000,0xf803,0xbc10,0xbc01,0x4700,0x4718,0x46c0};
+            for(int i=0;i<op.length;i++)put16(at+2*i,op[i]);
+            put32(at+20,0x08000000+D);put32(at+24,0x08000001+consumer);
+        }
+        void put16(int at,int n) {memory[at]=(byte)n;memory[at+1]=(byte)(n>>>8);}
+        void put32(int at,int n) {put16(at,n);put16(at+2,n>>>16);}
+        void set(String k,Object v) {p.setProperty(k,v.toString());}
+        void range(String k,int start,int end) {set(k+".start",start);set(k+".end",end);}
+        void digest() {
+            try {set("input.sha256",HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(memory)));}
+            catch(java.security.NoSuchAlgorithmException e) {throw new AssertionError(e);}
+        }
+        byte[] serialized() throws Exception {
+            var out=new java.io.ByteArrayOutputStream();p.store(out,null);return out.toByteArray();
+        }
+        Gen3RomHandler.OakOwnershipWitness parse() throws Exception {
+            return Gen3RomHandler.OakOwnershipWitness.read(new java.io.ByteArrayInputStream(serialized()),memory);
+        }
+    }
+
+    @Test void oakWitnessAcceptsOnlyStructurallyValidSyntheticInputWithoutMutatingIt() throws Exception {
+        var f=new OakFixture();byte[] before=f.memory.clone();
+        assertNotNull(f.parse());assertArrayEquals(before,f.memory);
+        // Binding is input-specific; stale bytes fail even if the supplied schema is valid.
+        f.memory[0x50000]^=1;assertThrows(RomIOException.class,f::parse);
+    }
+
+    @Test void oakWitnessRejectsMissingUnknownDuplicateAndLegacy77Fields() throws Exception {
+        for(String key:new String[]{"schema","version","cfru.sha","dpe.sha","build.id","config.id","config.sha256",
+                "input.size","input.sha256","selector.offset","selector.width","descriptor.start","bitmap.end",
+                "sprite.bridge.start","sprite.consumer.end","cry.bridge.start","cry.consumer.end",
+                "insertions.count","protected.count","protected.0.type"}) {
+            var f=new OakFixture();f.p.remove(key);assertThrows(RomIOException.class,f::parse,key);
+        }
+        var unknown=new OakFixture();unknown.set("unexpected","value");assertThrows(RomIOException.class,unknown::parse);
+        assertThrows(RomIOException.class,()->Gen3RomHandler.OakOwnershipWitness.read(null,unknown.memory));
+        assertThrows(RomIOException.class,()->Gen3RomHandler.OakOwnershipWitness.read(new java.io.ByteArrayInputStream(new byte[65537]),unknown.memory));
+        var dup=new OakFixture();byte[] prefix=dup.serialized();var out=new java.io.ByteArrayOutputStream();
+        out.write(prefix);out.write("schema=OAK_OWNERSHIP_WITNESS_V1\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+        assertThrows(RomIOException.class,()->Gen3RomHandler.OakOwnershipWitness.read(new java.io.ByteArrayInputStream(out.toByteArray()),dup.memory));
+        var legacy=new Gen3CfruDpeEvolutionPreservationTest.WitnessFixture();legacy.attest(220);
+        var encoded=new java.io.ByteArrayOutputStream();legacy.witness.store(encoded,null);
+        assertNotNull(Gen3RomHandler.EvolutionOwnershipWitness.parse(legacy.witness));
+        assertThrows(RomIOException.class,()->Gen3RomHandler.OakOwnershipWitness.read(new java.io.ByteArrayInputStream(encoded.toByteArray()),legacy.memory));
+    }
+
+    @Test void oakWitnessRejectsBadIdentityLayoutAndOwnerCoverage() throws Exception {
+        String[][] changes={{"cfru.sha","e27e2113e4d59dc76cf5da8d4c43b067addae348"}, {"dpe.sha","0".repeat(40)},
+                {"version","2"},{"selector.offset","91"},{"selector.width","4"},{"config.sha256","bad"},
+                {"build.id",""},{"input.size","1"},{"descriptor.end",Integer.toString(OakFixture.D+95)},
+                {"bitmap.end",Integer.toString(OakFixture.B+179)},{"sprite.bridge.end",Integer.toString(OakFixture.SB+24)},
+                {"protected.0.type","OTHER_DATA"},{"protected.0.type","FORGED"},
+                {"protected.1.start","196608"},{"protected.4.end",Integer.toString(OakFixture.FRONT+8)},
+                {"protected.6.end",Integer.toString(0x40008)},{"protected.7.end",Integer.toString(0x40208)},
+                {"sprite.consumer.start",Integer.toString(OakFixture.SB)},
+                {"cry.consumer.start","2097152"},{"insertions.0.end",Integer.toString(OakFixture.CB)},
+                {"protected.8.start","1"}};
+        for(String[] c:changes) {var f=new OakFixture();f.set(c[0],c[1]);assertThrows(RomIOException.class,f::parse,Arrays.toString(c));}
+        var overlap=new OakFixture();overlap.set("insertions.count",2);overlap.range("insertions.1",OakFixture.D,OakFixture.D+0x1000);
+        assertThrows(RomIOException.class,overlap::parse);
+        var crossing=new OakFixture();crossing.set("insertions.count",2);crossing.range("insertions.1",0x40080,0x40180);
+        assertThrows(RomIOException.class,crossing::parse);
+        var duplicateType=new OakFixture();duplicateType.set("protected.3.type","FRONT_TABLE");
+        assertThrows(RomIOException.class,duplicateType::parse);
+    }
+
+    @Test void oakWitnessRejectsForgedBytesEvenWithRecomputedInputDigest() throws Exception {
+        for(int offset:new int[]{OakFixture.D,OakFixture.D+8,OakFixture.D+12,OakFixture.D+16,OakFixture.D+24,
+                OakFixture.D+28,OakFixture.D+36,OakFixture.D+40,OakFixture.D+44,OakFixture.D+48,
+                OakFixture.D+52,OakFixture.D+72,OakFixture.D+92,OakFixture.D+94,OakFixture.B,
+                OakFixture.SB,OakFixture.SB+20,OakFixture.SB+24,OakFixture.CB,OakFixture.CB+20,OakFixture.CB+24,
+                0x128,0x130,OakFixture.FRONT,OakFixture.FRONT+4,OakFixture.PALETTE,0x40000,0x40200,0xac,0x42f6c,0x42ec4,0x35000,
+                0x130f2c,0x130f3c,0x12fa78,0x12fa88,0x14c1c,0x82000+0xe5*4,0x83000,0x83014,0x84000,0x84020,0x84180}) {
+            var f=new OakFixture();f.memory[offset]^=1;f.digest();assertThrows(RomIOException.class,f::parse,"offset "+offset);
+        }
+        var duplicate=new OakFixture();System.arraycopy(duplicate.memory,OakFixture.D,duplicate.memory,OakFixture.D+0x700,8);
+        duplicate.digest();assertThrows(RomIOException.class,duplicate::parse);
+    }
+
     private static final Set<Integer> LEVEL = Set.of(4,8,9,10,11,12,13,14,16,18,20,21,22,23,28,31,32,35,41,42);
     private static final int RECORD = Gen3CfruDpeEvolutionPreservationTest.WitnessFixture.RECORD;
 

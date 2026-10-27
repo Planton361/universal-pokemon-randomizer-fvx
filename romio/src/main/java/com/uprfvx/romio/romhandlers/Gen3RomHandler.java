@@ -378,6 +378,301 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    /**
+     * A structural, input-bound #78 witness candidate, NOT an attestation or a
+     * write capability. The independently reviewed full link/insertion and
+     * source-to-output provenance remain an external prerequisite. This parser
+     * deliberately has no production ingress or selector-writing path.
+     *
+     * All intervals are half-open, physical input offsets. Named owners cover
+     * whole objects/functions, not merely the bytes used by this parser.
+     */
+    static final class OakOwnershipWitness {
+        private static final String BITMAP_SHA = "7b0c3b997e23687bed98ab9dc3cf3e9ba42a37c1441271c34278b370a07d85c1";
+        private static final Set<String> PROTECTED_TYPES = Set.of("EVOLUTION_CODE", "EVOLUTION_DATA",
+                "PICKUP_CODE", "PICKUP_DATA", "EVOLUTION_RECORD", "FRONT_TABLE", "PALETTE_TABLE", "FRONT_ASSET",
+                "PALETTE_ASSET", "SPRITE_HOOK", "CRY_HOOK", "OTHER_CODE", "OTHER_DATA");
+        private final String buildId, configId, configSha256, inputSha256;
+        private final List<EvolutionOwner> insertions, protectedOwners;
+        private final EvolutionOwner descriptor, bitmap, spriteBridge, spriteConsumer, cryBridge, cryConsumer;
+
+        private static RomIOException error(String reason) {
+            return new RomIOException("Oak #78 witness: " + reason + "; independent output ownership remains unaccepted");
+        }
+
+        private static int number(Properties p, String key) {
+            String v = p.getProperty(key, "");
+            if (!v.matches("(?:0|[1-9][0-9]{0,9}|0x[0-9a-fA-F]{1,8})")) throw error("invalid number");
+            try {
+                long n = v.startsWith("0x") ? Long.parseLong(v.substring(2), 16) : Long.parseLong(v);
+                if (n > Integer.MAX_VALUE) throw error("number overflow");
+                return (int) n;
+            } catch (NumberFormatException e) { throw error("number overflow"); }
+        }
+
+        private static EvolutionOwner range(Properties p, String name, String type, int size, int alignment) {
+            int start = number(p, name + ".start"), end = number(p, name + ".end");
+            if (start >= end || end > size || start % alignment != 0 || end % alignment != 0)
+                throw error("invalid owner bounds");
+            return new EvolutionOwner(type, start, end);
+        }
+
+        private static void fields(Set<String> keys, String prefix) {
+            keys.add(prefix + ".start"); keys.add(prefix + ".end");
+        }
+
+        static OakOwnershipWitness read(InputStream input, byte[] original) {
+            if (input == null) throw error("missing witness");
+            try {
+                byte[] text = input.readNBytes(65537);
+                if (text.length > 65536) throw error("witness too large");
+                Properties p = new Properties() {
+                    @Override public synchronized Object put(Object k, Object v) {
+                        if (containsKey(k)) throw error("duplicate field");
+                        return super.put(k, v);
+                    }
+                };
+                p.load(new java.io.ByteArrayInputStream(text));
+                return new OakOwnershipWitness(p, original);
+            } catch (IOException | IllegalArgumentException e) { throw error("invalid witness encoding"); }
+        }
+
+        private OakOwnershipWitness(Properties p, byte[] original) {
+            Set<String> keys = new HashSet<>(Set.of("schema", "version", "cfru.sha", "dpe.sha", "build.id",
+                    "config.id", "config.sha256", "input.size", "input.sha256", "selector.offset",
+                    "selector.width", "insertions.count", "protected.count"));
+            if (!"OAK_OWNERSHIP_WITNESS_V1".equals(p.getProperty("schema")) || number(p, "version") != 1
+                    || !"196058edbc2b8b7d8c725b715b1f967ba60f5c83".equals(p.getProperty("cfru.sha"))
+                    || !"d887185de1f6ae6a78e85c4311bbadde17041d00".equals(p.getProperty("dpe.sha")))
+                throw error("schema or source revision mismatch");
+            for (String k : List.of("build.id", "config.id"))
+                if (!p.getProperty(k, "").matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) throw error("invalid identity");
+            for (String k : List.of("config.sha256", "input.sha256"))
+                if (!p.getProperty(k, "").matches("[0-9a-f]{64}")) throw error("invalid digest");
+            buildId = p.getProperty("build.id"); configId = p.getProperty("config.id");
+            configSha256 = p.getProperty("config.sha256"); inputSha256 = p.getProperty("input.sha256");
+            int size = number(p, "input.size");
+            if (original == null || size != original.length || size < 0x130f34 || size > 0x2000000
+                    || !inputSha256.equals(HexFormat.of().formatHex(sha256(original)))
+                    || !romCode(original, "BPRE") || original[Gen3Constants.romVersionOffset] != 0)
+                throw error("input identity/profile mismatch");
+            if (number(p, "selector.offset") != 92 || number(p, "selector.width") != 2)
+                throw error("selector budget mismatch");
+            for (String n : List.of("descriptor", "bitmap", "sprite.bridge", "sprite.consumer", "cry.bridge", "cry.consumer")) fields(keys, n);
+            descriptor = range(p, "descriptor", "DESCRIPTOR", size, 4);
+            bitmap = range(p, "bitmap", "BITMAP", size, 4);
+            spriteBridge = range(p, "sprite.bridge", "SPRITE_BRIDGE", size, 4);
+            cryBridge = range(p, "cry.bridge", "CRY_BRIDGE", size, 4);
+            spriteConsumer = range(p, "sprite.consumer", "SPRITE_CONSUMER", size, 2);
+            cryConsumer = range(p, "cry.consumer", "CRY_CONSUMER", size, 2);
+            if (descriptor.end - descriptor.start != 96 || bitmap.end - bitmap.start != 180
+                    || spriteBridge.end - spriteBridge.start != 28 || cryBridge.end - cryBridge.start != 28)
+                throw error("object extent mismatch");
+            int count = number(p, "insertions.count"), protectedCount = number(p, "protected.count");
+            if (count < 1 || count > 16 || protectedCount < PROTECTED_TYPES.size() || protectedCount > 4096)
+                throw error("missing or excessive owner ranges");
+            List<EvolutionOwner> envelopes = new ArrayList<>(), protectedRanges = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                String n = "insertions." + i; fields(keys, n);
+                envelopes.add(range(p, n, "INSERTION", size, 4));
+            }
+            Set<String> required = new HashSet<>(PROTECTED_TYPES);
+            for (int i = 0; i < protectedCount; i++) {
+                String n = "protected." + i; fields(keys, n); keys.add(n + ".type");
+                String type = p.getProperty(n + ".type", "");
+                if (!PROTECTED_TYPES.contains(type)) throw error("unknown owner type");
+                required.remove(type);
+                protectedRanges.add(range(p, n, type, size, 1));
+            }
+            if (!required.isEmpty() || p.size() != keys.size() || !p.stringPropertyNames().equals(keys))
+                throw error("incomplete or unknown fields/owners");
+            for (int i = 0; i < envelopes.size(); i++) for (int j = 0; j < i; j++)
+                if (envelopes.get(i).overlaps(envelopes.get(j))) throw error("overlapping insertions");
+            for (EvolutionOwner owner : protectedRanges) for (EvolutionOwner envelope : envelopes)
+                if (owner.overlaps(envelope) && !envelope.contains(owner.start, owner.end - owner.start))
+                    throw error("protected owner crosses insertion boundary");
+            List<EvolutionOwner> oak = List.of(descriptor, bitmap, spriteBridge, spriteConsumer, cryBridge, cryConsumer);
+            for (EvolutionOwner o : oak)
+                if (envelopes.stream().filter(e -> e.contains(o.start, o.end - o.start)).count() != 1)
+                    throw error("owner outside unique insertion");
+            List<EvolutionOwner> all = new ArrayList<>(protectedRanges); all.addAll(oak);
+            all.add(new EvolutionOwner("HEADER", 0xa0, 0xc0));
+            all.add(new EvolutionOwner("FRONT_ROOT", 0x128, 0x12c));
+            all.add(new EvolutionOwner("PALETTE_ROOT", 0x130, 0x134));
+            all.add(new EvolutionOwner("EVOLUTION_HOOK", CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8));
+            all.add(new EvolutionOwner("EVOLUTION_ROOT", CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4));
+            for (int at : CFRU_PICKUP_REPOINTS) all.add(new EvolutionOwner("PICKUP_ROOT", at, at + 4));
+            for (int i = 0; i < all.size(); i++) for (int j = 0; j < i; j++)
+                if (all.get(i).overlaps(all.get(j))) throw error("overlapping physical owners");
+            for (String type : List.of("FRONT_TABLE", "PALETTE_TABLE", "SPRITE_HOOK", "CRY_HOOK"))
+                if (protectedRanges.stream().filter(o -> o.type.equals(type)).count() != 1) throw error("ambiguous native owner");
+            EvolutionOwner front = protectedRanges.stream().filter(o -> o.type.equals("FRONT_TABLE")).findFirst().orElseThrow();
+            EvolutionOwner palette = protectedRanges.stream().filter(o -> o.type.equals("PALETTE_TABLE")).findFirst().orElseThrow();
+            EvolutionOwner sh = protectedRanges.stream().filter(o -> o.type.equals("SPRITE_HOOK")).findFirst().orElseThrow();
+            EvolutionOwner ch = protectedRanges.stream().filter(o -> o.type.equals("CRY_HOOK")).findFirst().orElseThrow();
+            if (front.end - front.start != 1440 * 8 || palette.end - palette.start != 1440 * 8
+                    || sh.start != 0x130f2c || sh.end - sh.start != 20 || ch.start != 0x12fa78 || ch.end - ch.start != 20
+                    || pointer(original, 0x128, false) != front.start || pointer(original, 0x130, false) != palette.start)
+                throw error("native owner coverage mismatch");
+            // Every nonempty native row must point into a declared full asset owner.
+            // These intervals are independently attested extents, not inferred lengths.
+            for (EvolutionOwner table : List.of(front, palette)) {
+                String assetType = table == front ? "FRONT_ASSET" : "PALETTE_ASSET";
+                for (int id = 0; id < 1440; id++) {
+                    int at = table.start + id * 8;
+                    if (IOFunctions.readFullInt(original, at) == 0) continue;
+                    int asset = pointer(original, at, false);
+                    List<EvolutionOwner> assetOwners = protectedRanges.stream()
+                            .filter(o -> o.type.equals(assetType) && o.contains(asset, 1)).toList();
+                    if (assetOwners.size() != 1) throw error("native asset owner missing or ambiguous");
+                    int decodedSize = table == front ? IOFunctions.read2ByteInt(original, at + 4) : 32;
+                    validateCompressedAsset(original, assetOwners.getFirst(), asset, decodedSize);
+                }
+            }
+            validateHook(original, sh, spriteBridge);
+            validateHook(original, ch, cryBridge);
+            validateInheritedOwners(original, protectedRanges);
+            validateBytes(original, envelopes);
+            insertions = List.copyOf(envelopes); protectedOwners = List.copyOf(protectedRanges);
+        }
+
+        // Verify the entire encoded LZ10 stream remains within its declared
+        // owner. This validates bounds, not decoded graphics or provenance.
+        private static void validateCompressedAsset(byte[] b, EvolutionOwner owner, int at, int expected) {
+            if (expected <= 0 || !owner.contains(at, 4) || (b[at] & 255) != 0x10)
+                throw error("invalid compressed asset header");
+            int size = (b[at+1]&255) | ((b[at+2]&255)<<8) | ((b[at+3]&255)<<16);
+            if (size != expected) throw error("compressed asset size mismatch");
+            int pos = at + 4, produced = 0;
+            while (produced < size) {
+                if (!owner.contains(pos, 1)) throw error("compressed asset exceeds owner");
+                int flags = b[pos++] & 255;
+                for (int mask = 0x80; mask != 0 && produced < size; mask >>= 1) {
+                    if ((flags & mask) == 0) {
+                        if (!owner.contains(pos, 1)) throw error("compressed literal exceeds owner");
+                        pos++; produced++;
+                    } else {
+                        if (!owner.contains(pos, 2)) throw error("compressed reference exceeds owner");
+                        int first = b[pos++] & 255, second = b[pos++] & 255;
+                        int length = (first >> 4) + 3, distance = ((first & 15) << 8 | second) + 1;
+                        if (distance > produced || length > size - produced) throw error("invalid compressed reference");
+                        produced += length;
+                    }
+                }
+            }
+        }
+
+        // Source-owned FunctionWrap 0/1 sequence and its exact Thumb target.
+        private static void validateHook(byte[] b, EvolutionOwner hook, EvolutionOwner bridge) {
+            int[] words = {0xb510,0x4c03,0xf000,0xf803,0xbc10,0xbc02,0x4708,0x4720};
+            for (int i=0;i<words.length;i++)
+                if (IOFunctions.read2ByteInt(b,hook.start+2*i) != words[i]) throw error("Oak hook mismatch");
+            if (pointer(b,hook.start+16,true) != bridge.start) throw error("Oak hook target mismatch");
+        }
+
+        private static EvolutionOwner one(List<EvolutionOwner> owners, String type) {
+            List<EvolutionOwner> found = owners.stream().filter(o -> o.type.equals(type)).toList();
+            if (found.size() != 1) throw error("missing or ambiguous inherited owner");
+            return found.getFirst();
+        }
+
+        private static void covered(List<EvolutionOwner> owners, String type, int at, int length) {
+            if (owners.stream().filter(o -> o.type.equals(type) && o.contains(at, length)).count() != 1)
+                throw error("inherited owner does not cover live object");
+        }
+
+        // Link inherited #77 owners to their rooted structures. Full code and asset
+        // extents still come from the independent witness, never from pointer scans.
+        private static void validateInheritedOwners(byte[] b, List<EvolutionOwner> owners) {
+            EvolutionOwner table = one(owners, "EVOLUTION_DATA"), record = one(owners, "EVOLUTION_RECORD");
+            if (table.end - table.start != 1440 * 128 || record.end - record.start != 32
+                    || pointer(b, CFRU_EVOLUTION_TABLE_POINTER, false) != table.start
+                    || b[CFRU_EVOLUTION_HOOK] != 0 || (b[CFRU_EVOLUTION_HOOK + 1] & 255) != 0x4b
+                    || (b[CFRU_EVOLUTION_HOOK + 2] & 255) != 0x18 || (b[CFRU_EVOLUTION_HOOK + 3] & 255) != 0x47)
+                throw error("inherited evolution layout mismatch");
+            int c = pointer(b, CFRU_EVOLUTION_HOOK + 4, true), r = record.start;
+            covered(owners, "EVOLUTION_CODE", c, 2);
+            if (!Arrays.equals(b, r, r + 8, "CFRUEVO1".getBytes(StandardCharsets.US_ASCII), 0, 8)
+                    || pointer(b, r + 8, false) != r || pointer(b, r + 12, true) != c)
+                throw error("inherited evolution record mismatch");
+            int[] fields = {1,32,28,1,220,160};
+            for (int i=0;i<fields.length;i++) if (IOFunctions.read2ByteInt(b,r+16+2*i) != fields[i])
+                throw error("inherited evolution record fields mismatch");
+            if (((b[r+28]&255) != 220 && (b[r+28]&255) != 160) || b[r+29] != 0 || b[r+30] != 0 || b[r+31] != 0)
+                throw error("inherited evolution tail mismatch");
+
+            int dispatch = pointer(b, CFRU_PICKUP_REPOINTS[0], false);
+            for (int at : CFRU_PICKUP_REPOINTS) if (pointer(b, at, false) != dispatch) throw error("pickup dispatch mismatch");
+            covered(owners, "PICKUP_DATA", dispatch, 1024);
+            int bridge = pointer(b, dispatch + 0xe5 * 4, true);
+            covered(owners, "PICKUP_CODE", bridge, 28);
+            for (int i=0;i<CFRU_PICKUP_BRIDGE.length;i++)
+                if (IOFunctions.read2ByteInt(b, bridge+2*i) != CFRU_PICKUP_BRIDGE[i]) throw error("pickup bridge mismatch");
+            int descriptor = pointer(b, bridge+20, false), consumer = pointer(b, bridge+24, true);
+            covered(owners, "PICKUP_DATA", descriptor, 64); covered(owners, "PICKUP_CODE", consumer, 2);
+            if (IOFunctions.readFullInt(b,descriptor) != 0x31555043 || IOFunctions.read2ByteInt(b,descriptor+4) != 1
+                    || IOFunctions.read2ByteInt(b,descriptor+6) != 64 || IOFunctions.readFullInt(b,descriptor+8) != 6
+                    || IOFunctions.readFullInt(b,descriptor+12) != 1 || IOFunctions.readFullInt(b,descriptor+52) != 779
+                    || pointer(b,descriptor+56,true) != consumer || pointer(b,descriptor+60,true) != bridge)
+                throw error("pickup descriptor mismatch");
+            int[] counts = {18,11,9,2}, sizes = {36,22,36,8};
+            int[] shape = {4,2,4,10,10,9,2,1,100,0,0,0}, tables = new int[4];
+            List<EvolutionOwner> live = new ArrayList<>(List.of(new EvolutionOwner("dispatch",dispatch,dispatch+1024),
+                    new EvolutionOwner("bridge",bridge,bridge+28), new EvolutionOwner("consumer",consumer,consumer+2),
+                    new EvolutionOwner("descriptor",descriptor,descriptor+64)));
+            for (int i=0;i<shape.length;i++) if ((b[descriptor+40+i]&255) != shape[i]) throw error("pickup shape mismatch");
+            for (int i=0;i<4;i++) {
+                if (IOFunctions.read2ByteInt(b,descriptor+32+2*i) != counts[i]) throw error("pickup count mismatch");
+                tables[i] = pointer(b,descriptor+16+4*i,false);
+                covered(owners,"PICKUP_DATA",tables[i],sizes[i]);
+                live.add(new EvolutionOwner("pickup table",tables[i],tables[i]+sizes[i]));
+            }
+            for (int i=0;i<CFRU_PICKUP_CEILINGS.length;i++) {
+                int at = i<9 ? tables[2]+i*4 : tables[3]+(i-9)*4;
+                if (IOFunctions.readFullInt(b,at) != CFRU_PICKUP_CEILINGS[i]) throw error("pickup ceilings mismatch");
+            }
+            for (int i=0;i<live.size();i++) for(int j=0;j<i;j++)
+                if (live.get(i).overlaps(live.get(j))) throw error("overlapping inherited pickup objects");
+        }
+
+        private static int pointer(byte[] b, int at, boolean thumb) {
+            long v = Integer.toUnsignedLong(IOFunctions.readFullInt(b, at));
+            if (v < 0x08000000L || v >= 0x08000000L + b.length || (v & (thumb ? 1 : 3)) != (thumb ? 1 : 0))
+                throw error("invalid pointer");
+            return ((int) (v - 0x08000000L)) & ~1;
+        }
+
+        private void validateBytes(byte[] b, List<EvolutionOwner> envelopes) {
+            int d = descriptor.start;
+            byte[] magic = "CFROAK01".getBytes(StandardCharsets.US_ASCII);
+            if (!Arrays.equals(b, d, d + 8, magic, 0, 8) || pointer(b, d + 8, false) != d
+                    || pointer(b, d + 28, false) != bitmap.start || pointer(b, d + 36, true) != spriteBridge.start
+                    || pointer(b, d + 40, true) != spriteConsumer.start || pointer(b, d + 44, true) != cryBridge.start
+                    || pointer(b, d + 48, true) != cryConsumer.start
+                    || IOFunctions.readFullInt(b, d + 16) != 1 || IOFunctions.readFullInt(b, d + 52) != 0x08000128
+                    || IOFunctions.readFullInt(b, d + 56) != 0x08000130) throw error("descriptor identity/pointers mismatch");
+            int[] offsets = {12,14,20,22,24,26,32,34,60,62,64,66,68,70,92,94};
+            int[] values = {1,96,1440,29,92,2,180,1,8,8,28,20,24,4,29,0};
+            for (int i = 0; i < offsets.length; i++)
+                if (IOFunctions.read2ByteInt(b, d + offsets[i]) != values[i]) throw error("descriptor field mismatch");
+            for (int i = 72; i < 92; i++) if (b[d + i] != 0) throw error("descriptor reserved bytes");
+            if (!BITMAP_SHA.equals(HexFormat.of().formatHex(sha256(Arrays.copyOfRange(b, bitmap.start, bitmap.end)))))
+                throw error("bitmap mismatch");
+            int[] op = {0xb510,0x4904,0x4b04,0xf000,0xf803,0xbc10,0xbc01,0x4700,0x4718,0x46c0};
+            for (EvolutionOwner bridge : List.of(spriteBridge, cryBridge)) {
+                EvolutionOwner consumer = bridge == spriteBridge ? spriteConsumer : cryConsumer;
+                for (int i = 0; i < op.length; i++)
+                    if (IOFunctions.read2ByteInt(b, bridge.start + 2*i) != op[i]) throw error("bridge instructions mismatch");
+                if (pointer(b, bridge.start + 20, false) != d || pointer(b, bridge.start + 24, true) != consumer.start)
+                    throw error("bridge binding mismatch");
+            }
+            int matches = 0;
+            for (EvolutionOwner e : envelopes) for (int i = e.start; i <= e.end - 8; i++)
+                if (Arrays.equals(b, i, i + 8, magic, 0, 8)) matches++;
+            if (matches != 1) throw error("ambiguous descriptor");
+        }
+    }
+
     /** No shared raw-field/graph plan is authorized for these two transformations. */
     public void preflightCfruEvolutionOptions(boolean easier, boolean removeTime) {
         if (useCfruDpeGen9SpeciesCount && easier && removeTime) {
