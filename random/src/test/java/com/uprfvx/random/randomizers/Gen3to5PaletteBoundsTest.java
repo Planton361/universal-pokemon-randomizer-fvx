@@ -60,28 +60,19 @@ public class Gen3to5PaletteBoundsTest {
         assertArrayEquals(memory, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
         assertSame(snapshot, originals.get(source)); assertArrayEquals(original, snapshot);
         if (intro) {
-            assertTrue(handler.setIntroPokemon(target));
-            assertEquals(targetPointer, handler.pointerAt(entry));
-            assertFalse(Arrays.equals(memory, handler.buffer()));
-            // Intro copies the compressed target source, not its newly randomized Java colors.
-            assertArrayEquals(targetColors, handler.readback(source, false));
-        } else assertEquals(originalPointer, handler.pointerAt(entry));
+            // This legacy fixture has no #78 witness; it must now fail closed.
+            assertThrows(com.uprfvx.romio.exceptions.RomIOException.class,()->handler.setIntroPokemon(target));
+            assertArrayEquals(memory,handler.buffer());
+        }
+        assertEquals(originalPointer, handler.pointerAt(entry));
         assertSame(recolored, source.getNormalPalette()); assertArrayEquals(changed, recolored.toBytes());
         assertSame(snapshot, originals.get(source)); assertArrayEquals(original, snapshot);
         assertEquals(ranges, handler.allocatorRanges());
         byte[] beforeSave = handler.buffer().clone();
-        if (intro) {
-            var error = assertThrows(com.uprfvx.romio.exceptions.RomIOException.class, handler::savePokemonPalettes);
-            assertEquals("CFRU/DPE changed palette has invalid or stale source ownership", error.getMessage());
-            assertEquals("validateChangedCfruDpePaletteSource", error.getStackTrace()[0].getMethodName());
-            assertArrayEquals(beforeSave, handler.buffer()); assertEquals(ranges, handler.allocatorRanges());
-            assertEquals(targetPointer, handler.pointerAt(entry));
-        } else {
-            assertDoesNotThrow(handler::savePokemonPalettes);
-            for (Species sp : List.of(source, child, target)) {
-                assertArrayEquals(sp.getNormalPalette().toBytes(), handler.readback(sp, false));
-                assertArrayEquals(sp.getShinyPalette().toBytes(), handler.readback(sp, true));
-            }
+        assertDoesNotThrow(handler::savePokemonPalettes);
+        for (Species sp : List.of(source, child, target)) {
+            assertArrayEquals(sp.getNormalPalette().toBytes(), handler.readback(sp, false));
+            assertArrayEquals(sp.getShinyPalette().toBytes(), handler.readback(sp, true));
         }
         assertSame(recolored, source.getNormalPalette()); assertArrayEquals(changed, recolored.toBytes());
         assertSame(snapshot, originals.get(source)); assertArrayEquals(original, snapshot);
@@ -594,7 +585,7 @@ public class Gen3to5PaletteBoundsTest {
         return settings;
     }
 
-    static Gen3to5PaletteRandomizer selected(SelectedHandler handler, Settings settings, long seed) {
+    static Gen3to5PaletteRandomizer selected(Gen3RomHandler handler, Settings settings, long seed) {
         return new Gen3to5PaletteRandomizer(handler, settings, new Random(seed));
     }
 
@@ -623,6 +614,200 @@ public class Gen3to5PaletteBoundsTest {
     @SuppressWarnings("unchecked")
     private static java.util.Map<Species, byte[]> snapshots(Gen3RomHandler handler, String name) throws ReflectiveOperationException {
         return (java.util.Map<Species, byte[]>) field(handler, name);
+    }
+
+    private static final class SyntheticOakFixture {
+        final byte[] memory;
+        final java.util.Properties p = new java.util.Properties();
+        static final int D = 0x180000, B = 0x180100, SB = 0x180200, SC = 0x180300,
+                CB = 0x180400, CC = 0x180500, FRONT = 0x20000, PALETTE = 0x24000,
+                BACK = 0x27000, SHINY = 0x2a000;
+        SyntheticOakFixture() { this(0x200000); }
+        SyntheticOakFixture(int size) {
+            memory = new byte[size];
+            memory[0xac]='B'; memory[0xad]='P'; memory[0xae]='R'; memory[0xaf]='E';
+            put32(0x128,0x08000000+FRONT);put32(0x12c,0x08000000+BACK);
+            put32(0x130,0x08000000+PALETTE);put32(0x134,0x08000000+SHINY);
+            for (int i=0;i<1440;i++) {
+                put32(FRONT+i*8,0x08040000);put16(FRONT+i*8+4,8);put32(PALETTE+i*8,0x08040200);
+                put32(BACK+i*8,0x08040400);put16(BACK+i*8+4,8);put32(SHINY+i*8,0x08040600);
+            }
+            memory[0x40000]=0x10;memory[0x40001]=8;memory[0x40200]=0x10;memory[0x40201]=32;
+            memory[0x40400]=0x10;memory[0x40401]=8;memory[0x40600]=0x10;memory[0x40601]=32;
+            System.arraycopy("CFROAK01".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,memory,D,8);
+            put32(D+8,0x08000000+D); put32(D+16,1); put32(D+28,0x08000000+B);
+            put32(D+36,0x08000001+SB); put32(D+40,0x08000001+SC);
+            put32(D+44,0x08000001+CB); put32(D+48,0x08000001+CC);
+            put32(D+52,0x08000128); put32(D+56,0x08000130);
+            int[] offs={12,14,20,22,24,26,32,34,60,62,64,66,68,70,92,94};
+            int[] vals={1,96,1440,29,92,2,180,1,8,8,28,20,24,4,29,0};
+            for(int i=0;i<offs.length;i++) put16(D+offs[i],vals[i]);
+            byte[] bits=java.util.HexFormat.of().parseHex("feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0f0000e0fffffffffffffffffffffffffffdffffebfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb3f0000fd03dfffffffffffffffffdf21ffffff1f000000000080ffffffffffffffff7fffffffffffaf780000fefefdffffffffffffffffffffffff7ffe0bfffb6fffffff0f000000c0ffffffffffffffbfffffffffffffffffc39f");
+            System.arraycopy(bits,0,memory,B,bits.length);
+            put32(0x3ea7c,0x08090000);put32(0x43e20,0x08090000);
+            for(int i=0;i<1440;i++)put32(0x90000+4*i,0x08093000);
+            memory[0x93002]=(byte)255;
+            bridge(SB,SC); bridge(CB,CC);
+            hook(0x130f2c,SB);hook(0x12fa78,CB);
+            // Synthetic inherited #77 evolution and Pickup roots and physical objects.
+            put32(0x42f6c,0x08050000);put32(0x42ec4,0x47184b00);put32(0x42ec8,0x08030001);
+            System.arraycopy("CFRUEVO1".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,memory,0x35000,8);
+            put32(0x35008,0x08035000);put32(0x3500c,0x08030001);
+            int[] evo={1,32,28,1,220,160};for(int i=0;i<evo.length;i++)put16(0x35010+2*i,evo[i]);
+            memory[0x3501c]=(byte)220;
+            for(int at:new int[]{0x14c1c,0x15a28,0x15c6c,0x15c98,0x1d054})put32(at,0x08082000);
+            put32(0x82000+0xe5*4,0x08083001);
+            int[] pickop={0xb510,0x4804,0x4b04,0xf000,0xf803,0xbc10,0xbc01,0x4700,0x4718,0x46c0};
+            for(int i=0;i<pickop.length;i++)put16(0x83000+2*i,pickop[i]);
+            put32(0x83014,0x08084000);put32(0x83018,0x08083101);
+            put32(0x84000,0x31555043);put16(0x84004,1);put16(0x84006,64);put32(0x84008,6);put32(0x8400c,1);
+            int[] picktables={0x84100,0x84140,0x84180,0x841c0};
+            int[] pickcounts={18,11,9,2};for(int i=0;i<4;i++) {put32(0x84010+4*i,0x08000000+picktables[i]);put16(0x84020+2*i,pickcounts[i]);}
+            int[] shape={4,2,4,10,10,9,2,1,100,0,0,0};for(int i=0;i<shape.length;i++)memory[0x84028+i]=(byte)shape[i];
+            put32(0x84034,779);put32(0x84038,0x08083101);put32(0x8403c,0x08083001);
+            int[] ceilings={19661,26214,32768,39322,45875,52429,58982,61604,64225,64881,65536};
+            for(int i=0;i<ceilings.length;i++)put32(i<9?0x84180+4*i:0x841c0+4*(i-9),ceilings[i]);
+            set("schema","OAK_OWNERSHIP_WITNESS_V1"); set("version","1");
+            set("cfru.sha","196058edbc2b8b7d8c725b715b1f967ba60f5c83");
+            set("dpe.sha","d887185de1f6ae6a78e85c4311bbadde17041d00");
+            set("build.id","synthetic-build"); set("config.id","synthetic-config"); set("config.sha256","0".repeat(64));
+            set("input.size",memory.length); set("selector.offset",92); set("selector.width",2);
+            range("descriptor",D,D+96); range("bitmap",B,B+180); range("sprite.bridge",SB,SB+28);
+            range("sprite.consumer",SC,SC+64); range("cry.bridge",CB,CB+28); range("cry.consumer",CC,CC+64);
+            set("insertions.count",1); range("insertions.0",D,D+0x1000);
+            String[] types={"EVOLUTION_CODE","EVOLUTION_DATA","PICKUP_CODE","PICKUP_DATA","FRONT_TABLE",
+                    "PALETTE_TABLE","FRONT_ASSET","PALETTE_ASSET","SPRITE_HOOK","CRY_HOOK","OTHER_CODE","OTHER_DATA",
+                    "EVOLUTION_RECORD","PICKUP_DATA","LEARNSET_TABLE","LEARNSET_ASSET","BACK_TABLE","BACK_ASSET","SHINY_TABLE","SHINY_ASSET"};
+            int[] starts={0x30000,0x50000,0x83000,0x82000,FRONT,PALETTE,0x40000,0x40200,0x130f2c,0x12fa78,0x34000,0x37000,
+                    0x35000,0x84000,0x90000,0x93000,BACK,0x40400,SHINY,0x40600};
+            int[] lengths={0x80,1440*128,0x200,0x400,1440*8,1440*8,0x100,0x100,20,20,0x80,0x80,32,0x200,1440*4,0x200,1440*8,0x100,1440*8,0x100};
+            set("protected.count",types.length);
+            for(int i=0;i<types.length;i++) {set("protected."+i+".type",types[i]);range("protected."+i,starts[i],starts[i]+lengths[i]);}
+            digest();
+        }
+        void hook(int at,int target) {
+            int[] op={0xb510,0x4c03,0xf000,0xf803,0xbc10,0xbc02,0x4708,0x4720};
+            for(int i=0;i<op.length;i++)put16(at+2*i,op[i]);put32(at+16,0x08000001+target);
+        }
+        void bridge(int at,int consumer) {
+            int[] op={0xb510,0x4904,0x4b04,0xf000,0xf803,0xbc10,0xbc01,0x4700,0x4718,0x46c0};
+            for(int i=0;i<op.length;i++)put16(at+2*i,op[i]);
+            put32(at+20,0x08000000+D);put32(at+24,0x08000001+consumer);
+        }
+        void put16(int at,int n) {memory[at]=(byte)n;memory[at+1]=(byte)(n>>>8);}
+        void put32(int at,int n) {put16(at,n);put16(at+2,n>>>16);}
+        void set(String k,Object v) {p.setProperty(k,v.toString());}
+        void range(String k,int start,int end) {set(k+".start",start);set(k+".end",end);}
+        void digest() {
+            try {set("input.sha256",java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(memory)));}
+            catch(java.security.NoSuchAlgorithmException e) {throw new AssertionError(e);}
+        }
+        byte[] serialized() throws Exception {
+            var out=new java.io.ByteArrayOutputStream();p.store(out,null);return out.toByteArray();
+        }
+    }
+
+    static class OakPaletteHandler extends Gen3RomHandler {
+        final List<Species> owners;
+        final SyntheticOakFixture fixture;
+        OakPaletteHandler(List<Species> owners,boolean intro) throws Exception {
+            this.owners=owners;fixture=new SyntheticOakFixture();rom=fixture.memory;
+            var ctor=com.uprfvx.romio.romhandlers.romentries.Gen3RomEntry.class.getDeclaredConstructor(String.class);
+            ctor.setAccessible(true);var entry=ctor.newInstance("synthetic Oak GFX");entry.setRomCode("BPRE");
+            entry.setRomType(com.uprfvx.romio.constants.Gen3Constants.RomType_FRLG);
+            entry.putIntValue("PokemonCount",1440);entry.putIntValue("PokemonFrontImages",SyntheticOakFixture.FRONT);
+            entry.putIntValue("PokemonNormalPalettes",SyntheticOakFixture.PALETTE);
+            entry.putIntValue("PokemonShinyPalettes",SyntheticOakFixture.SHINY);
+            Species[] nativeOwners=new Species[1440];int[] dex=new int[1440],reverse=new int[1440];
+            for(Species sp:owners) {
+                int id=sp.getSpeciesSetIdentityNumber();nativeOwners[id]=sp;dex[id]=sp.getNumber();reverse[sp.getNumber()]=id;
+                for(boolean shiny:new boolean[]{false,true}) {
+                    int asset=(shiny?0xb8000:0xb0000)+id*128;
+                    byte[] data=compressors.DSCmp.compressLZ10((shiny?sp.getShinyPalette():sp.getNormalPalette()).toBytes());
+                    System.arraycopy(data,0,rom,asset,data.length);
+                    writePointer((shiny?SyntheticOakFixture.SHINY:SyntheticOakFixture.PALETTE)+id*8,asset);
+                }
+            }
+            fixture.set("protected.count",22);fixture.set("protected.20.type","PALETTE_ASSET");fixture.range("protected.20",0xb0000,0xb2000);
+            fixture.set("protected.21.type","SHINY_ASSET");fixture.range("protected.21",0xb8000,0xba000);
+            setField("romEntry",entry);setField("pokesInternal",nativeOwners);setField("internalToPokedex",dex);
+            setField("pokedexToInternal",reverse);setField("useCfruDpeGen9SpeciesCount",true);setField("isRomHack",true);
+            var construct=Gen3RomHandler.class.getDeclaredMethod("constructPokemonList");construct.setAccessible(true);construct.invoke(this);
+            freeSpace(0x1a0000,0x10000);fixture.digest();originalRom=rom.clone();loadPokemonPalettes();
+            if(intro) {
+                var install=Gen3RomHandler.class.getDeclaredMethod("installOakWitness",java.io.InputStream.class,java.util.function.Supplier.class);
+                install.setAccessible(true);install.invoke(this,new java.io.ByteArrayInputStream(fixture.serialized()),null);
+            }
+        }
+        void setField(String name,Object value) throws Exception {var f=Gen3RomHandler.class.getDeclaredField(name);f.setAccessible(true);f.set(this,value);}
+        byte[] memory() {return rom;}
+        int ptr(int offset) {return readPointer(offset,true);}
+        byte[] palette(Species sp) {return new Palette(compressors.DSDecmp.Decompress(rom,ptr(SyntheticOakFixture.PALETTE+sp.getSpeciesSetIdentityNumber()*8))).toBytes();}
+        @Override public String getPaletteFilesID() {return "FRLG";}
+    }
+
+    @ParameterizedTest @CsvSource({"false,false","false,true","true,false","true,true"})
+    void nativeOakIntroAndNormalPaletteRandomizationComposeAndReplay(boolean follow,boolean intro) throws Exception {
+        byte[] replay=null;long next=0;
+        for(int repeat=0;repeat<2;repeat++) {
+            Species source=speciesWithPalette(29),child=speciesWithPalette(30),target=speciesWithPalette(25);
+            source.setName("Nidoran F");child.setName("Nidorina");target.setName("Pikachu");link(source,child);
+            var handler=new OakPaletteHandler(List.of(source,child,target),intro);
+            int normal=handler.ptr(SyntheticOakFixture.PALETTE+29*8),shiny=handler.ptr(SyntheticOakFixture.SHINY+29*8);
+            byte[] front=Arrays.copyOfRange(handler.memory(),SyntheticOakFixture.FRONT+29*8,SyntheticOakFixture.FRONT+29*8+8);
+            Random rng=new Random(677);var randomizer=new Gen3to5PaletteRandomizer(handler,paletteSettings(false,follow),rng);
+            byte[] before=handler.memory().clone();randomizer.randomizePokemonPalettes();assertTrue(randomizer.isChangesMade());
+            assertArrayEquals(before,handler.memory());
+            if(intro) {
+                assertTrue(handler.setIntroPokemon(target));byte[] expected=before.clone();
+                expected[SyntheticOakFixture.D+92]=25;expected[SyntheticOakFixture.D+93]=0;assertArrayEquals(expected,handler.memory());
+            } else assertEquals(29,(handler.memory()[SyntheticOakFixture.D+92]&255));
+            assertEquals(normal,handler.ptr(SyntheticOakFixture.PALETTE+29*8));
+            assertEquals(shiny,handler.ptr(SyntheticOakFixture.SHINY+29*8));
+            assertArrayEquals(front,Arrays.copyOfRange(handler.memory(),SyntheticOakFixture.FRONT+29*8,SyntheticOakFixture.FRONT+29*8+8));
+            handler.savePokemonPalettes();for(Species sp:List.of(source,child,target))assertArrayEquals(sp.getNormalPalette().toBytes(),handler.palette(sp));
+            if(repeat==0) {replay=handler.memory().clone();next=rng.nextLong();}
+            else {assertArrayEquals(replay,handler.memory());assertEquals(next,rng.nextLong());}
+        }
+    }
+
+    @Test void fullRandomizerRegistersBoundSyntheticOwnersBeforeRestrictions() throws Exception {
+        Species source=speciesWithPalette(29);source.setName("Nidoran F");source.setGeneration(1);
+        source.setHp(50);source.setAttack(50);source.setDefense(50);source.setSpeed(50);source.setSpatk(50);source.setSpdef(50);
+        class Fixture extends OakPaletteHandler {
+            int restrictionCalls;
+            Fixture() throws Exception {super(List.of(source),false);}
+            @Override public java.util.Map<Integer,java.util.List<com.uprfvx.romio.gamedata.MoveLearnt>> getMovesLearnt() {
+                return java.util.Map.of(29,java.util.List.of(new com.uprfvx.romio.gamedata.MoveLearnt(33,1)));
+            }
+            @Override public com.uprfvx.romio.services.RestrictedSpeciesService getRestrictedSpeciesService() {
+                return new com.uprfvx.romio.services.RestrictedSpeciesService(this) {
+                    @Override public void setRestrictions(com.uprfvx.romio.gamedata.GenRestrictions r,
+                            com.uprfvx.romio.services.SpecialFormExclusionOptions options) {
+                        restrictionCalls++;
+                        assertThrows(IllegalStateException.class,()->getFreedSpace().free(SyntheticOakFixture.D,1));
+                        assertThrows(IllegalStateException.class,()->getFreedSpace().free(SyntheticOakFixture.PALETTE,1));
+                        throw new com.uprfvx.romio.exceptions.RomIOException("synthetic restriction stop");
+                    }
+                };
+            }
+            @Override public int generationOfPokemon() {return 3;}
+            @Override public java.util.List<Integer> getMoveTutorMoves() {return java.util.List.of();}
+            @Override public java.util.List<com.uprfvx.romio.gamedata.Trainer> getTrainers() {return java.util.List.of();}
+            @Override public boolean canChangeStaticPokemon() {return false;}
+            @Override public java.util.List<com.uprfvx.romio.gamedata.InGameTrade> getInGameTrades() {return java.util.List.of();}
+            @Override public java.util.List<com.uprfvx.romio.gamedata.Move> getMoves() {return java.util.List.of();}
+        }
+        var f=new Fixture();var settings=new Settings();settings.setRandomizeIntroMon(true);
+        java.util.ResourceBundle bundle=new java.util.ListResourceBundle() {@Override protected Object[][] getContents(){return new Object[0][];}};
+        var randomizer=new com.uprfvx.random.GameRandomizer(settings,null,f,bundle,false);byte[] before=f.memory().clone();
+        java.nio.file.Path synthetic=java.nio.file.Files.createTempFile("synthetic-oak-witness-", ".properties");
+        try {
+            java.nio.file.Files.write(synthetic,f.fixture.serialized());System.setProperty("uprfvx.cfruOakOwnership",synthetic.toString());
+            var result=randomizer.randomize("unused-synthetic",new java.io.PrintStream(java.io.OutputStream.nullOutputStream()),677);
+            assertFalse(result.wasSaveSuccessful());assertEquals("synthetic restriction stop",result.getException().getMessage());
+            assertEquals(1,f.restrictionCalls);assertArrayEquals(before,f.memory());
+        } finally {System.clearProperty("uprfvx.cfruOakOwnership");java.nio.file.Files.deleteIfExists(synthetic);}
     }
 
     static final class SelectedHandler extends Gen3RomHandler {

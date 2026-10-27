@@ -14,19 +14,24 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Source-shaped slots, synthetic bound witness and memory; no ROM/file ingress. */
 class Gen3CfruDpeEasierTimeEvolutionTest {
     // #78 parser-only synthetic input. None of these values attest a real output.
-    private static final class OakFixture {
+    static final class OakFixture {
         final byte[] memory;
         final Properties p = new Properties();
         static final int D = 0x180000, B = 0x180100, SB = 0x180200, SC = 0x180300,
-                CB = 0x180400, CC = 0x180500, FRONT = 0x20000, PALETTE = 0x24000;
+                CB = 0x180400, CC = 0x180500, FRONT = 0x20000, PALETTE = 0x24000,
+                BACK = 0x27000, SHINY = 0x2a000;
         OakFixture() { this(0x200000); }
         OakFixture(int size) {
             memory = new byte[size];
             memory[0xac]='B'; memory[0xad]='P'; memory[0xae]='R'; memory[0xaf]='E';
-            put32(0x128, 0x08000000 + FRONT); put32(0x130, 0x08000000 + PALETTE);
-            for (int i=0;i<1440;i++) { put32(FRONT+i*8,0x08040000); put16(FRONT+i*8+4,8); put32(PALETTE+i*8,0x08040200); }
-            memory[0x40000]=0x10;memory[0x40001]=8; // one all-literal LZ10 group
-            memory[0x40200]=0x10;memory[0x40201]=32; // four all-literal LZ10 groups
+            put32(0x128,0x08000000+FRONT);put32(0x12c,0x08000000+BACK);
+            put32(0x130,0x08000000+PALETTE);put32(0x134,0x08000000+SHINY);
+            for (int i=0;i<1440;i++) {
+                put32(FRONT+i*8,0x08040000);put16(FRONT+i*8+4,8);put32(PALETTE+i*8,0x08040200);
+                put32(BACK+i*8,0x08040400);put16(BACK+i*8+4,8);put32(SHINY+i*8,0x08040600);
+            }
+            memory[0x40000]=0x10;memory[0x40001]=8;memory[0x40200]=0x10;memory[0x40201]=32;
+            memory[0x40400]=0x10;memory[0x40401]=8;memory[0x40600]=0x10;memory[0x40601]=32;
             System.arraycopy("CFROAK01".getBytes(java.nio.charset.StandardCharsets.US_ASCII),0,memory,D,8);
             put32(D+8,0x08000000+D); put32(D+16,1); put32(D+28,0x08000000+B);
             put32(D+36,0x08000001+SB); put32(D+40,0x08000001+SC);
@@ -70,10 +75,10 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
             set("insertions.count",1); range("insertions.0",D,D+0x1000);
             String[] types={"EVOLUTION_CODE","EVOLUTION_DATA","PICKUP_CODE","PICKUP_DATA","FRONT_TABLE",
                     "PALETTE_TABLE","FRONT_ASSET","PALETTE_ASSET","SPRITE_HOOK","CRY_HOOK","OTHER_CODE","OTHER_DATA",
-                    "EVOLUTION_RECORD","PICKUP_DATA","LEARNSET_TABLE","LEARNSET_ASSET"};
+                    "EVOLUTION_RECORD","PICKUP_DATA","LEARNSET_TABLE","LEARNSET_ASSET","BACK_TABLE","BACK_ASSET","SHINY_TABLE","SHINY_ASSET"};
             int[] starts={0x30000,0x50000,0x83000,0x82000,FRONT,PALETTE,0x40000,0x40200,0x130f2c,0x12fa78,0x34000,0x37000,
-                    0x35000,0x84000,0x90000,0x93000};
-            int[] lengths={0x80,1440*128,0x200,0x400,1440*8,1440*8,0x100,0x100,20,20,0x80,0x80,32,0x200,1440*4,0x200};
+                    0x35000,0x84000,0x90000,0x93000,BACK,0x40400,SHINY,0x40600};
+            int[] lengths={0x80,1440*128,0x200,0x400,1440*8,1440*8,0x100,0x100,20,20,0x80,0x80,32,0x200,1440*4,0x200,1440*8,0x100,1440*8,0x100};
             set("protected.count",types.length);
             for(int i=0;i<types.length;i++) {set("protected."+i+".type",types[i]);range("protected."+i,starts[i],starts[i]+lengths[i]);}
             digest();
@@ -185,9 +190,9 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
 
     @Test void oakWitnessRequiresCoverageForBothDistinctLearnsetTables() throws Exception {
         var f=new OakFixture();System.arraycopy(f.memory,0x90000,f.memory,0x95000,1440*4);
-        f.put32(0x43e20,0x08095000);f.set("protected.count",17);f.set("protected.16.type","LEARNSET_TABLE");
-        f.range("protected.16",0x95000,0x95000+1440*4);f.digest();assertNotNull(f.parse());
-        f.range("protected.16",0x95000,0x95004);assertThrows(RomIOException.class,f::parse);
+        f.put32(0x43e20,0x08095000);f.set("protected.count",21);f.set("protected.20.type","LEARNSET_TABLE");
+        f.range("protected.20",0x95000,0x95000+1440*4);f.digest();assertNotNull(f.parse());
+        f.range("protected.20",0x95000,0x95004);assertThrows(RomIOException.class,f::parse);
     }
 
     @Test void oakWitnessRejectsSourceOwnerInLearnsetAllocationArena() throws Exception {
@@ -238,6 +243,133 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
         f.fault=null;f.rewrite();
         assertArrayEquals(Arrays.copyOfRange(before,280,300),Arrays.copyOfRange(f.rom,280,300));
         assertEquals(260,f.readPointer(AbstractGBRomHandlerDataRewriterTransactionTest.PRIMARY));
+    }
+
+    static class OakHandler extends Gen3RomHandler {
+        int fault;
+        @Override protected void writeOakIntroSelector(int offset,int species) {
+            if(fault==1) throw new RomIOException("synthetic prewrite failure");
+            super.writeOakIntroSelector(offset,species);
+            if(fault==2) throw new RomIOException("synthetic postwrite failure");
+            if(fault==3) rom[offset]^=1;
+        }
+    }
+    static OakHandler oakHandler(OakFixture f) throws Exception {
+        var handler=new OakHandler();
+        var entryCtor=com.uprfvx.romio.romhandlers.romentries.Gen3RomEntry.class.getDeclaredConstructor(String.class);
+        entryCtor.setAccessible(true);var entry=entryCtor.newInstance("synthetic Oak");
+        entry.setRomCode("BPRE");entry.setRomType(com.uprfvx.romio.constants.Gen3Constants.RomType_FRLG);
+        entry.putIntValue("PokemonCount",1440);
+        for(var pair:Map.of("romEntry",entry,"isRomHack",true,"useCfruDpeGen9SpeciesCount",true).entrySet()) {
+            var field=Gen3RomHandler.class.getDeclaredField(pair.getKey());field.setAccessible(true);field.set(handler,pair.getValue());
+        }
+        for(String name:List.of("rom","originalRom")) {
+            var field=AbstractGBRomHandler.class.getDeclaredField(name);field.setAccessible(true);field.set(handler,f.memory.clone());
+        }
+        return handler;
+    }
+
+    static void installSyntheticOak(Gen3RomHandler handler,OakFixture fixture) throws Exception {
+        var method=Gen3RomHandler.class.getDeclaredMethod("installOakWitness",java.io.InputStream.class,java.util.function.Supplier.class);
+        method.setAccessible(true);
+        try {method.invoke(handler,new java.io.ByteArrayInputStream(fixture.serialized()),null);}
+        catch(java.lang.reflect.InvocationTargetException e) {
+            if(e.getCause() instanceof RuntimeException r) throw r;throw e;
+        }
+    }
+
+    @Test void oakPreflightRegistersEveryOwnerWithoutMutatingBytesAndCanRepeat() throws Exception {
+        var fixture=new OakFixture();var h=oakHandler(fixture);byte[] before=h.rom.clone();
+        int[] owners={OakFixture.D,OakFixture.B,OakFixture.SB,OakFixture.SC,OakFixture.CB,OakFixture.CC,
+                0x30000,0x50000,0x83000,0x82000,OakFixture.FRONT,OakFixture.PALETTE,
+                0x40000,0x40200,0x130f2c,0x12fa78,0x34000,0x37000,0x35000,0x84000,
+                0x90000,0x93000,OakFixture.BACK,0x40400,OakFixture.SHINY,0x40600,0xa0,0x128,0x12c,0x130,0x134,0x42ec4,0x42f6c,0x43e20,0x3ea7c,0x14c1c};
+        for(int at:owners) h.getFreedSpace().free(at,1);
+        var old=h.getFreedSpace().snapshot();installSyntheticOak(h,fixture);h.preflightCfruDpeOakIntro();
+        h.getFreedSpace().restore(old);
+        for(int at:owners) {
+            assertThrows(IllegalStateException.class,()->h.getFreedSpace().free(at,1),"owner "+at);
+            assertThrows(IllegalStateException.class,()->h.freeSpace(at,1),"owner "+at);
+        }
+        assertArrayEquals(before,h.rom);
+        h.getFreedSpace().free(0x3ffff,1);assertEquals(0x3ffff,h.getFreedSpace().findAndUnfree(1));
+        h.rom[OakFixture.SC]^=1;assertThrows(RomIOException.class,h::preflightCfruDpeOakIntro);
+    }
+
+    @Test void oakPreflightRejectsMissingStaleAndActiveCollisionBeforeAnyMutation() throws Exception {
+        var fixture=new OakFixture();var missing=oakHandler(fixture);byte[] before=missing.rom.clone();
+        assertThrows(RomIOException.class,missing::preflightCfruDpeOakIntro);assertArrayEquals(before,missing.rom);
+        var stale=oakHandler(fixture);stale.rom[OakFixture.SC]^=1;byte[] staleBefore=stale.rom.clone();
+        assertThrows(RomIOException.class,()->installSyntheticOak(stale,fixture));assertArrayEquals(staleBefore,stale.rom);
+        var active=oakHandler(fixture);active.getFreedSpace().free(OakFixture.SC,64);
+        assertEquals(OakFixture.SC,active.getFreedSpace().findAndUnfree(8));String ledger=active.getFreedSpace().toString();
+        assertThrows(IllegalStateException.class,()->installSyntheticOak(active,fixture));
+        assertArrayEquals(before,active.rom);assertEquals(ledger,active.getFreedSpace().toString());
+        active.getFreedSpace().free(OakFixture.D,1); // failed batch installed no partial protection
+        var rebound=oakHandler(fixture);installSyntheticOak(rebound,fixture);
+        var orig=AbstractGBRomHandler.class.getDeclaredField("originalRom");orig.setAccessible(true);orig.set(rebound,fixture.memory.clone());
+        assertThrows(RomIOException.class,rebound::preflightCfruDpeOakIntro);
+    }
+
+    private static Species oakSpecies(int id) {
+        var species=new Species(id);species.setSpeciesSetIdentityNumber(id);return species;
+    }
+
+    @Test void oakSelectorWritesOnlyNativeTwoBytesAndRejectsInvalidSpecies() throws Exception {
+        var fixture=new OakFixture();var h=oakHandler(fixture);installSyntheticOak(h,fixture);
+        for(int id:new int[]{277,413,1439,29}) {
+            byte[] expected=h.rom.clone();expected[OakFixture.D+92]=(byte)id;expected[OakFixture.D+93]=(byte)(id>>>8);
+            assertTrue(h.setIntroPokemon(oakSpecies(id)));assertArrayEquals(expected,h.rom);
+        }
+        for(int id:new int[]{0,252,385,410,1440,65535}) {
+            byte[] before=h.rom.clone();assertFalse(h.setIntroPokemon(oakSpecies(id)));assertArrayEquals(before,h.rom);
+        }
+    }
+
+    @Test void oakSelectorWriteFailuresReadbackAndStaleOwnerRollBack() throws Exception {
+        for(int fault=1;fault<=3;fault++) {
+            var fixture=new OakFixture();var h=oakHandler(fixture);installSyntheticOak(h,fixture);
+            byte[] before=h.rom.clone();String ledger=h.getFreedSpace().toString();h.fault=fault;
+            assertThrows(RomIOException.class,()->h.setIntroPokemon(oakSpecies(277)));
+            assertArrayEquals(before,h.rom);assertEquals(ledger,h.getFreedSpace().toString());
+            h.fault=0;assertTrue(h.setIntroPokemon(oakSpecies(277)));
+        }
+        for(int offset:new int[]{OakFixture.B,OakFixture.SB,OakFixture.SC,OakFixture.CB,OakFixture.CC,
+                0x130f2c,0x12fa78,0x128,0x12c,0x130,0x134,OakFixture.D+94,OakFixture.D+92}) {
+            var fixture=new OakFixture();var h=oakHandler(fixture);installSyntheticOak(h,fixture);h.rom[offset]^=1;
+            byte[] before=h.rom.clone();assertThrows(RomIOException.class,()->h.setIntroPokemon(oakSpecies(277)));
+            assertArrayEquals(before,h.rom);
+        }
+        var missing=oakHandler(new OakFixture());byte[] before=missing.rom.clone();
+        assertThrows(RomIOException.class,()->missing.setIntroPokemon(oakSpecies(29)));assertArrayEquals(before,missing.rom);
+    }
+
+    @Test void emptyRestrictedPoolFailsBeforeOwnershipRegistration() throws Exception {
+        var fixture=new OakFixture();var h=oakHandler(fixture);h.getFreedSpace().free(OakFixture.SC,32);
+        String ledger=h.getFreedSpace().toString();byte[] before=h.rom.clone();
+        var method=Gen3RomHandler.class.getDeclaredMethod("installOakWitness",java.io.InputStream.class,java.util.function.Supplier.class);
+        method.setAccessible(true);
+        var failure=assertThrows(java.lang.reflect.InvocationTargetException.class,()->method.invoke(h,
+                new java.io.ByteArrayInputStream(fixture.serialized()),(java.util.function.Supplier<java.util.Collection<Species>>)List::of));
+        assertTrue(failure.getCause() instanceof RomIOException);assertArrayEquals(before,h.rom);assertEquals(ledger,h.getFreedSpace().toString());
+        assertEquals(OakFixture.SC,h.getFreedSpace().findAndUnfree(8));
+    }
+
+    @Test void vanillaFireRedIntroPathKeepsItsExistingPointerAndByteBudget() throws Exception {
+        var h=oakHandler(new OakFixture());var entry=h.getRomEntry();
+        entry.putIntValue("PokemonCount",386);entry.putIntValue("PokemonFrontImages",OakFixture.FRONT);
+        entry.putIntValue("PokemonNormalPalettes",OakFixture.PALETTE);entry.putIntValue("IntroImageOffset",0x110010);
+        entry.putIntValue("IntroCryOffset",0x110000);entry.putIntValue("IntroOtherOffset",0x110020);
+        for(var pair:Map.of("isRomHack",false,"useCfruDpeGen9SpeciesCount",false).entrySet()) {
+            var field=Gen3RomHandler.class.getDeclaredField(pair.getKey());field.setAccessible(true);field.set(h,pair.getValue());
+        }
+        int[] mapping=new int[386];mapping[25]=25;
+        var map=Gen3RomHandler.class.getDeclaredField("pokedexToInternal");map.setAccessible(true);map.set(h,mapping);
+        byte[] expected=h.rom.clone();h.preflightCfruDpeOakIntro();assertArrayEquals(expected,h.rom);
+        expected[0x110000]=25;expected[0x110020]=25;
+        int[] pointers={0x08000000+OakFixture.FRONT+25*8,0x08000000+OakFixture.PALETTE+25*8};
+        for(int i=0;i<2;i++)for(int j=0;j<4;j++)expected[0x110010+i*4+j]=(byte)(pointers[i]>>>(8*j));
+        assertTrue(h.setIntroPokemon(oakSpecies(25)));assertArrayEquals(expected,h.rom);
     }
 
     private static final Set<Integer> LEVEL = Set.of(4,8,9,10,11,12,13,14,16,18,20,21,22,23,28,31,32,35,41,42);

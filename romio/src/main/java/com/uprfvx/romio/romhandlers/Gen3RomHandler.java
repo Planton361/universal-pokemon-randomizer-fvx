@@ -391,9 +391,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         private static final String BITMAP_SHA = "7b0c3b997e23687bed98ab9dc3cf3e9ba42a37c1441271c34278b370a07d85c1";
         private static final Set<String> PROTECTED_TYPES = Set.of("EVOLUTION_CODE", "EVOLUTION_DATA",
                 "PICKUP_CODE", "PICKUP_DATA", "EVOLUTION_RECORD", "FRONT_TABLE", "PALETTE_TABLE", "FRONT_ASSET",
-                "PALETTE_ASSET", "SPRITE_HOOK", "CRY_HOOK", "LEARNSET_TABLE", "LEARNSET_ASSET", "OTHER_CODE", "OTHER_DATA");
+                "PALETTE_ASSET", "BACK_TABLE", "BACK_ASSET", "SHINY_TABLE", "SHINY_ASSET", "SPRITE_HOOK", "CRY_HOOK", "LEARNSET_TABLE", "LEARNSET_ASSET", "OTHER_CODE", "OTHER_DATA");
         private final String buildId, configId, configSha256, inputSha256;
-        private final List<EvolutionOwner> insertions, protectedOwners;
+        private final List<EvolutionOwner> insertions, protectedOwners, allOwners;
         private final EvolutionOwner descriptor, bitmap, spriteBridge, spriteConsumer, cryBridge, cryConsumer;
 
         private static RomIOException error(String reason) {
@@ -498,7 +498,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             List<EvolutionOwner> all = new ArrayList<>(protectedRanges); all.addAll(oak);
             all.add(new EvolutionOwner("HEADER", 0xa0, 0xc0));
             all.add(new EvolutionOwner("FRONT_ROOT", 0x128, 0x12c));
+            all.add(new EvolutionOwner("BACK_ROOT", 0x12c, 0x130));
             all.add(new EvolutionOwner("PALETTE_ROOT", 0x130, 0x134));
+            all.add(new EvolutionOwner("SHINY_ROOT", 0x134, 0x138));
             all.add(new EvolutionOwner("EVOLUTION_HOOK", CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8));
             all.add(new EvolutionOwner("EVOLUTION_ROOT", CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4));
             all.add(new EvolutionOwner("LEARNSET_RUNTIME_ROOT", CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION,
@@ -508,20 +510,25 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             for (int at : CFRU_PICKUP_REPOINTS) all.add(new EvolutionOwner("PICKUP_ROOT", at, at + 4));
             for (int i = 0; i < all.size(); i++) for (int j = 0; j < i; j++)
                 if (all.get(i).overlaps(all.get(j))) throw error("overlapping physical owners");
-            for (String type : List.of("FRONT_TABLE", "PALETTE_TABLE", "SPRITE_HOOK", "CRY_HOOK"))
+            for (String type : List.of("FRONT_TABLE", "BACK_TABLE", "PALETTE_TABLE", "SHINY_TABLE", "SPRITE_HOOK", "CRY_HOOK"))
                 if (protectedRanges.stream().filter(o -> o.type.equals(type)).count() != 1) throw error("ambiguous native owner");
             EvolutionOwner front = protectedRanges.stream().filter(o -> o.type.equals("FRONT_TABLE")).findFirst().orElseThrow();
             EvolutionOwner palette = protectedRanges.stream().filter(o -> o.type.equals("PALETTE_TABLE")).findFirst().orElseThrow();
+            EvolutionOwner back = protectedRanges.stream().filter(o -> o.type.equals("BACK_TABLE")).findFirst().orElseThrow();
+            EvolutionOwner shiny = protectedRanges.stream().filter(o -> o.type.equals("SHINY_TABLE")).findFirst().orElseThrow();
             EvolutionOwner sh = protectedRanges.stream().filter(o -> o.type.equals("SPRITE_HOOK")).findFirst().orElseThrow();
             EvolutionOwner ch = protectedRanges.stream().filter(o -> o.type.equals("CRY_HOOK")).findFirst().orElseThrow();
-            if (front.end - front.start != 1440 * 8 || palette.end - palette.start != 1440 * 8
+            if (front.end - front.start != 1440 * 8 || back.end - back.start != 1440 * 8
+                    || palette.end - palette.start != 1440 * 8 || shiny.end - shiny.start != 1440 * 8
                     || sh.start != 0x130f2c || sh.end - sh.start != 20 || ch.start != 0x12fa78 || ch.end - ch.start != 20
-                    || pointer(original, 0x128, false) != front.start || pointer(original, 0x130, false) != palette.start)
+                    || pointer(original, 0x128, false) != front.start || pointer(original, 0x12c, false) != back.start
+                    || pointer(original, 0x130, false) != palette.start || pointer(original, 0x134, false) != shiny.start)
                 throw error("native owner coverage mismatch");
             // Every nonempty native row must point into a declared full asset owner.
             // These intervals are independently attested extents, not inferred lengths.
-            for (EvolutionOwner table : List.of(front, palette)) {
-                String assetType = table == front ? "FRONT_ASSET" : "PALETTE_ASSET";
+            for (EvolutionOwner table : List.of(front, back, palette, shiny)) {
+                String assetType = table == front ? "FRONT_ASSET" : table == back ? "BACK_ASSET"
+                        : table == palette ? "PALETTE_ASSET" : "SHINY_ASSET";
                 for (int id = 0; id < 1440; id++) {
                     int at = table.start + id * 8;
                     if (IOFunctions.readFullInt(original, at) == 0) continue;
@@ -529,16 +536,17 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     List<EvolutionOwner> assetOwners = protectedRanges.stream()
                             .filter(o -> o.type.equals(assetType) && o.contains(asset, 1)).toList();
                     if (assetOwners.size() != 1) throw error("native asset owner missing or ambiguous");
-                    int decodedSize = table == front ? IOFunctions.read2ByteInt(original, at + 4) : 32;
+                    int decodedSize = table == front || table == back ? IOFunctions.read2ByteInt(original, at + 4) : 32;
                     validateCompressedAsset(original, assetOwners.getFirst(), asset, decodedSize);
                 }
             }
             validateHook(original, sh, spriteBridge);
             validateHook(original, ch, cryBridge);
             validateInheritedOwners(original, protectedRanges);
-            validateLearnsetOwners(original, protectedRanges, oak);
+            validateLearnsetOwners(original, protectedRanges, all);
             validateBytes(original, envelopes);
             insertions = List.copyOf(envelopes); protectedOwners = List.copyOf(protectedRanges);
+            allOwners = List.copyOf(all);
         }
 
         // This only reserves declared ranges in a supplied allocator. It does
@@ -551,9 +559,16 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             allocator.protectRanges(ranges);
         }
 
+        private void protectAllOwners(FreedSpace allocator) {
+            List<FreedSpace.ProtectedRange> ranges = new ArrayList<>();
+            for (EvolutionOwner owner : allOwners)
+                ranges.add(new FreedSpace.ProtectedRange(owner.type, owner.start, owner.end));
+            allocator.protectRanges(ranges);
+        }
+
         // Both source roots and every nonempty pointer in either native table
         // must be owned; an arbitrary OTHER_DATA range cannot attest learnsets.
-        private static void validateLearnsetOwners(byte[] b, List<EvolutionOwner> owners, List<EvolutionOwner> oak) {
+        private static void validateLearnsetOwners(byte[] b, List<EvolutionOwner> owners, List<EvolutionOwner> all) {
             int fallback = pointer(b, CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION, false);
             int runtime = pointer(b, CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION, false);
             Set<Integer> tables = new HashSet<>(List.of(fallback, runtime));
@@ -581,8 +596,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             // No Oak object may be located there, even if its bytes look occupied now.
             EvolutionOwner allocator = new EvolutionOwner("LEARNSET_ALLOCATOR", CFRU_DPE_LEARNSET_REPOINT_FREE_SPACE_START,
                     CFRU_DPE_LEARNSET_REPOINT_FREE_SPACE_END);
-            for (EvolutionOwner owner : oak) if (owner.overlaps(allocator))
-                throw error("Oak owner overlaps learnset allocator");
+            for (EvolutionOwner owner : all) if (owner.overlaps(allocator))
+                throw error("owner overlaps learnset allocator");
         }
 
         // Verify the entire encoded LZ10 stream remains within its declared
@@ -720,6 +735,67 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 if (Arrays.equals(b, i, i + 8, magic, 0, 8)) matches++;
             if (matches != 1) throw error("ambiguous descriptor");
         }
+    }
+
+    private static final String CFRU_OAK_OWNERSHIP_PROPERTY = "uprfvx.cfruOakOwnership";
+    private OakOwnershipWitness oakOwnershipWitness;
+    private byte[] oakWitnessInput;
+    private int oakSelectedSpecies = 29;
+
+    /** Must run before restrictions, updaters, allocations, or randomization. */
+    public void preflightCfruDpeOakIntro() { preflightCfruDpeOakIntro(null); }
+
+    public void preflightCfruDpeOakIntro(java.util.function.Supplier<? extends Collection<Species>> pool) {
+        if (!usesCfruDpeRandomPoolPolicy()) return;
+        if (oakOwnershipWitness != null) {
+            if (oakWitnessInput != originalRom) throw OakOwnershipWitness.error("input changed after preflight");
+            validatePristineOakOwners(oakOwnershipWitness);
+            validateOakPool(oakOwnershipWitness, pool);
+            return;
+        }
+        String path = System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY);
+        if (path == null || path.isBlank()) throw OakOwnershipWitness.error("explicit independent witness required");
+        try (InputStream input = Files.newInputStream(Path.of(path))) {
+            installOakWitness(input, pool);
+        } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
+            throw OakOwnershipWitness.error("cannot read explicitly selected witness");
+        }
+    }
+
+    private void installOakWitness(InputStream input, java.util.function.Supplier<? extends Collection<Species>> pool) {
+        if (!useCfruDpeGen9SpeciesCount || romEntry == null || !isRomHack
+                || !"BPRE".equals(romEntry.getRomCode()) || romEntry.getVersion() != 0
+                || romEntry.getRomType() != Gen3Constants.RomType_FRLG || romEntry.getIntValue("PokemonCount") != 1440)
+            throw OakOwnershipWitness.error("selected profile mismatch");
+        OakOwnershipWitness candidate = OakOwnershipWitness.read(input, originalRom);
+        validatePristineOakOwners(candidate);
+        validateOakPool(candidate, pool);
+        candidate.protectAllOwners(freedSpace);
+        oakWitnessInput = originalRom;
+        oakOwnershipWitness = candidate;
+    }
+
+    private void validateOakPool(OakOwnershipWitness witness, java.util.function.Supplier<? extends Collection<Species>> pool) {
+        if (pool == null) return;
+        Collection<Species> candidates = pool.get();
+        if (candidates == null || candidates.stream().noneMatch(species -> oakEligible(witness, species)))
+            throw OakOwnershipWitness.error("no eligible intro species in restricted pool");
+    }
+
+    private boolean oakEligible(OakOwnershipWitness witness, Species species) {
+        if (species == null || originalRom == null) return false;
+        int id = species.getSpeciesSetIdentityNumber();
+        return id > 0 && id < CFRU_DPE_SPECIES_COUNT
+                && (originalRom[witness.bitmap.start + (id >> 3)] & (1 << (id & 7))) != 0;
+    }
+
+    private void validatePristineOakOwners(OakOwnershipWitness witness) {
+        if (originalRom == null || rom == null || originalRom.length != rom.length
+                || !witness.inputSha256.equals(HexFormat.of().formatHex(sha256(originalRom))))
+            throw OakOwnershipWitness.error("input identity changed");
+        for (EvolutionOwner owner : witness.allOwners)
+            if (!Arrays.equals(originalRom, owner.start, owner.end, rom, owner.start, owner.end))
+                throw OakOwnershipWitness.error("attested owner changed before preflight");
     }
 
     /** No shared raw-field/graph plan is authorized for these two transformations. */
@@ -1086,7 +1162,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private static final Map<String, Integer> SPECIES_ID_BY_NORMALIZED_NAME = speciesIdsByNormalizedName();
 
     // Misc.
-    private final FreedSpace freedSpace = new FreedSpace();
+    private FreedSpace freedSpace = new FreedSpace();
 
     @Override
     public boolean detectRom(byte[] rom) {
@@ -1116,6 +1192,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public void midLoadingSetUp() {
+        freedSpace = new FreedSpace();
+        oakOwnershipWitness = null; oakWitnessInput = null; oakSelectedSpecies = 29;
         super.midLoadingSetUp();
         evolutionOwnershipWitness = null;
         cfruEvolutionEasierApplied = false;
@@ -10345,6 +10423,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     @Override
     public boolean setIntroPokemon(Species pk) {
+        if (useCfruDpeGen9SpeciesCount) return setCfruDpeOakIntro(pk);
         int imageTableOffset = romEntry.getIntValue("PokemonFrontImages");
         int paletteTableOffset = romEntry.getIntValue("PokemonNormalPalettes");
         int cryOffset = romEntry.getIntValue("IntroCryOffset");
@@ -10423,6 +10502,43 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
         return true;
     }
+
+    private boolean setCfruDpeOakIntro(Species species) {
+        if (oakOwnershipWitness == null || oakWitnessInput != originalRom)
+            throw OakOwnershipWitness.error("preflight required before selector write");
+        OakOwnershipWitness w = oakOwnershipWitness;
+        if (!oakEligible(w, species)) return false;
+        if (rom == null || originalRom == null || rom.length != originalRom.length
+                || !w.inputSha256.equals(HexFormat.of().formatHex(sha256(originalRom))))
+            throw OakOwnershipWitness.error("input identity changed");
+        for (EvolutionOwner o : w.allOwners) {
+            if (!(o == w.bitmap || o == w.spriteBridge || o == w.spriteConsumer || o == w.cryBridge || o == w.cryConsumer
+                    || Set.of("SPRITE_HOOK", "CRY_HOOK", "FRONT_ROOT", "BACK_ROOT", "PALETTE_ROOT", "SHINY_ROOT").contains(o.type)))
+                continue;
+            if (!Arrays.equals(originalRom, o.start, o.end, rom, o.start, o.end))
+                throw OakOwnershipWitness.error("immutable Oak owner changed");
+        }
+        int d = w.descriptor.start, selector = d + 92;
+        if (!Arrays.equals(originalRom, d, selector, rom, d, selector)
+                || !Arrays.equals(originalRom, d + 94, d + 96, rom, d + 94, d + 96)
+                || IOFunctions.read2ByteInt(rom, selector) != oakSelectedSpecies)
+            throw OakOwnershipWitness.error("descriptor or selector changed after preflight");
+        int selected = species.getSpeciesSetIdentityNumber();
+        byte oldLow = rom[selector], oldHigh = rom[selector + 1];
+        try {
+            writeOakIntroSelector(selector, selected);
+            if (IOFunctions.read2ByteInt(rom, selector) != selected)
+                throw OakOwnershipWitness.error("selector readback failed");
+            oakSelectedSpecies = selected;
+            return true;
+        } catch (RuntimeException | Error failure) {
+            rom[selector] = oldLow; rom[selector + 1] = oldHigh;
+            throw failure;
+        }
+    }
+
+    // Override only for deterministic in-memory fault-injection tests.
+    protected void writeOakIntroSelector(int offset, int species) { writeWord(offset, species); }
 
     static int getIntroPokemonInternalSpeciesId(Species species, int[] pokedexToInternal,
                                                 boolean useSpeciesSetIdentity) {
@@ -12686,6 +12802,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 		newData[newData.length - 1] = (byte) 0xFF;
 		return newData;
 	}
+
+    @Override
+    protected void freeSpace(int offset, int length) {
+        // AbstractGBRomHandler clears bytes before calling free(); check first.
+        freedSpace.checkFreeRange(offset, length);
+        super.freeSpace(offset, length);
+    }
 
     @Override
     protected FreedSpace getFreedSpace() {

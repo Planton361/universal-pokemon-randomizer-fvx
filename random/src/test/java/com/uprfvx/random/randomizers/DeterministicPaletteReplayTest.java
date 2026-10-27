@@ -41,6 +41,12 @@ class DeterministicPaletteReplayTest {
     }
 
     @Test
+    void oakSelectorAndNormalPalettesReplayAcrossFreshJvms() throws Exception {
+        for (long seed : SEEDS) for (String mode : List.of("oak-off", "oak-on", "oak-off-follow", "oak-on-follow"))
+            assertEquals(process(seed, mode), process(seed, mode), "seed=" + seed + " mode=" + mode);
+    }
+
+    @Test
     void vanillaPaletteOwnerReplaysInFreshProcesses() throws Exception {
         // ROM-free generic RomHandler proxy, no CFRU policy or target-only adapter.
         for (long seed : SEEDS) assertEquals(process(seed, "palette"), process(seed, "palette"));
@@ -230,6 +236,21 @@ class DeterministicPaletteReplayTest {
 
     // Kept here because the existing standalone probe is read-only under #724.
     public static void main(String[] args) throws Exception {
+        if (args[1].startsWith("oak-")) {
+            boolean intro = args[1].startsWith("oak-on"), follow = args[1].endsWith("follow");
+            var a=Gen3to5PaletteBoundsTest.speciesWithPalette(29);a.setName("Nidoran F");
+            var b=Gen3to5PaletteBoundsTest.speciesWithPalette(30);b.setName("Nidorina");
+            var target=Gen3to5PaletteBoundsTest.speciesWithPalette(25);target.setName("Pikachu");
+            Gen3to5PaletteBoundsTest.link(a,b);
+            var handler=new Gen3to5PaletteBoundsTest.OakPaletteHandler(List.of(a,b,target),intro);
+            Random random=new Random(Long.parseLong(args[0]));
+            new Gen3to5PaletteRandomizer(handler,Gen3to5PaletteBoundsTest.paletteSettings(false,follow),random).randomizePokemonPalettes();
+            if (intro && !handler.setIntroPokemon(target)) throw new AssertionError("synthetic selector rejected");
+            handler.savePokemonPalettes();
+            System.out.println("SYNTHETIC_GFX_PALETTE=" + HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(handler.memory())) + " NEXT=" + random.nextLong());
+            return;
+        }
         if (args[1].equals("combined")) {
             for (int additions = 0; additions < 8; additions++) {
                 var fixture = new CombinedReplayFixture(); loadCombinedNormalPaletteSources(fixture);
@@ -391,7 +412,7 @@ class DeterministicPaletteReplayTest {
             if (loader instanceof URLClassLoader urls) for (var url : urls.getURLs()) classpath.add(Path.of(url.toURI()).toString());
         }
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("combined") || composition.equals("cfru-types") || composition.startsWith("gfx00") || composition.startsWith("gfx-combined") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
+            "-cp", String.join(File.pathSeparator, classpath), ((composition.equals("combined") || composition.equals("cfru-types") || composition.startsWith("gfx00") || composition.startsWith("gfx-combined") || composition.startsWith("oak-") || composition.equals("integration")) ? DeterministicPaletteReplayTest.class : PaletteReplayProcessProbe.class).getName(), Long.toString(seed), composition)
             .redirectErrorStream(true).start();
         if (!process.waitFor(30, TimeUnit.SECONDS)) {
             process.destroyForcibly();

@@ -20,7 +20,7 @@ class Gen3CfruDpePaletteFormOwnerTest {
     private static final int NORMAL = 0x100, SHINY = 0x4000, FREE = 0x50000;
 
     @ParameterizedTest @ValueSource(ints = {0, 1, 2, 3, 4, 5})
-    void introPointerOwnershipConflictAndDecodedColorControls(int control) throws Exception {
+    void forgedPointerOwnershipConflictAndDecodedColorControls(int control) throws Exception {
         // 0: stale normal; 1: different pointer/equal original; 2: unchanged shared
         // compressed source; 3: equal current; 4: valid normal but stale changed shiny;
         // 5: no intro sync. These are method-level synthetic saves, not full-file saves.
@@ -53,10 +53,12 @@ class Gen3CfruDpePaletteFormOwnerTest {
         Palette javaPalette = source.getNormalPalette();
         OwnerState beforeIntro = ownerState(f);
         if (control != 5) {
-            assertTrue(f.setIntroPokemon(target));
+            // Model the historical stale-pointer corruption directly; the new
+            // intro setter requires an independently bound Oak witness.
+            f.pointer(sourceEntry, f.pointerAt(targetEntry));
             assertEquals(f.pointerAt(targetEntry), f.pointerAt(sourceEntry));
             if (control != 2) assertNotEquals(originalPointer, f.pointerAt(sourceEntry));
-            assertFalse(Arrays.equals(beforeIntro.memory(), f.bytes()));
+            assertEquals(control == 2, Arrays.equals(beforeIntro.memory(), f.bytes()));
             assertEquals(beforeIntro.ranges(), f.allocatorRanges());
             assertEquals(beforeIntro.checkpoints(), f.writeCheckpoints);
         } else assertEquals(originalPointer, f.pointerAt(sourceEntry));

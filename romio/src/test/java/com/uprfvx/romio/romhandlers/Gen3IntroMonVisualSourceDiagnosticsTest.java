@@ -9,7 +9,10 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.Arrays;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -109,51 +112,54 @@ public class Gen3IntroMonVisualSourceDiagnosticsTest {
     }
 
     @Test
-    public void cfruDpeSetIntroPokemonAcceptsExtendedIdentityViaVisualPointerTable() throws Exception {
-        Gen3RomHandler romHandler = cfruDpeRomHandler();
-        Species rowlet = species(0, SpeciesIDs.rowlet, "Rowlet");
-
-        assertTrue(romHandler.setIntroPokemon(rowlet));
-
-        byte[] rom = fieldValue(romHandler, "rom", byte[].class);
-        assertEquals(IMAGE_TABLE_OFFSET + SpeciesIDs.rowlet * 8, readPointer(rom, INTRO_IMAGE_OFFSET));
-        assertEquals(PALETTE_TABLE_OFFSET + SpeciesIDs.rowlet * 8, readPointer(rom, INTRO_IMAGE_OFFSET + 4));
-        assertEquals(ROWLET_FRONT_ASSET, readPointer(rom,
-                IMAGE_TABLE_OFFSET + SpeciesIDs.nidoranFemale * 8));
-        assertEquals(ROWLET_PALETTE_ASSET, readPointer(rom,
-                PALETTE_TABLE_OFFSET + SpeciesIDs.nidoranFemale * 8));
-        assertEquals(0x7F, rom[INTRO_CRY_OFFSET] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_OTHER_OFFSET] & 0xFF);
+    public void cfruDpeSetIntroPokemonUsesOnlyBoundNativeSelector() throws Exception {
+        var fixture = new Gen3CfruDpeEasierTimeEvolutionTest.OakFixture();
+        var handler = Gen3CfruDpeEasierTimeEvolutionTest.oakHandler(fixture);
+        Gen3CfruDpeEasierTimeEvolutionTest.installSyntheticOak(handler, fixture);
+        handler.preflightCfruDpeOakIntro();
+        byte[] before = fieldValue(handler, "rom", byte[].class).clone();
+        Species treecko = species(252, 277, "Treecko");
+        assertTrue(handler.setIntroPokemon(treecko));
+        byte[] expected = before.clone();
+        expected[Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.D + 92] = 21;
+        expected[Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.D + 93] = 1;
+        assertArrayEquals(expected, fieldValue(handler, "rom", byte[].class));
+        for (int table : new int[]{Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.FRONT,
+                Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.PALETTE,
+                Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.SHINY}) {
+            int row = table + SpeciesIDs.nidoranFemale * 8;
+            assertArrayEquals(Arrays.copyOfRange(before, row, row + 8),
+                    Arrays.copyOfRange(fieldValue(handler, "rom", byte[].class), row, row + 8));
+        }
     }
 
     @Test
-    public void cfruDpeSetIntroPokemonRejectsMissingExtendedIdentityWithoutWriting() throws Exception {
-        Gen3RomHandler romHandler = cfruDpeRomHandler();
-        Species invalid = species(0, 0, "Invalid");
-
-        assertFalse(romHandler.setIntroPokemon(invalid));
-
-        byte[] rom = fieldValue(romHandler, "rom", byte[].class);
-        assertEquals(0x7F, rom[INTRO_CRY_OFFSET] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_IMAGE_OFFSET] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_IMAGE_OFFSET + 4] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_OTHER_OFFSET] & 0xFF);
+    public void cfruDpeSetIntroPokemonRejectsMissingIdentityAndWitnessWithoutWriting() throws Exception {
+        var fixture = new Gen3CfruDpeEasierTimeEvolutionTest.OakFixture();
+        var handler = Gen3CfruDpeEasierTimeEvolutionTest.oakHandler(fixture);
+        byte[] before = fieldValue(handler, "rom", byte[].class).clone();
+        assertThrows(com.uprfvx.romio.exceptions.RomIOException.class,
+                () -> handler.setIntroPokemon(species(0, 0, "Invalid")));
+        assertArrayEquals(before, fieldValue(handler, "rom", byte[].class));
+        Gen3CfruDpeEasierTimeEvolutionTest.installSyntheticOak(handler, fixture);
+        assertFalse(handler.setIntroPokemon(species(0, 0, "Invalid")));
+        assertArrayEquals(before, fieldValue(handler, "rom", byte[].class));
     }
 
     @Test
-    public void cfruDpeSetIntroPokemonRejectsExtendedIdentityWithInvalidVisualPointers() throws Exception {
-        Gen3RomHandler romHandler = cfruDpeRomHandler(false, true);
-        Species rowlet = species(0, SpeciesIDs.rowlet, "Rowlet");
-
-        assertFalse(romHandler.setIntroPokemon(rowlet));
-
-        byte[] rom = fieldValue(romHandler, "rom", byte[].class);
-        assertEquals(0x7F, rom[INTRO_CRY_OFFSET] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_IMAGE_OFFSET] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_IMAGE_OFFSET + 4] & 0xFF);
-        assertEquals(0x7F, rom[INTRO_OTHER_OFFSET] & 0xFF);
-        assertEquals(0x7F, rom[IMAGE_TABLE_OFFSET + SpeciesIDs.nidoranFemale * 8] & 0xFF);
-        assertEquals(0x7F, rom[PALETTE_TABLE_OFFSET + SpeciesIDs.nidoranFemale * 8] & 0xFF);
+    public void cfruDpeSetIntroPokemonRejectsForgedOakOwnersBeforeWriting() throws Exception {
+        for (int offset : new int[]{Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.D + 12,
+                Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.B,
+                Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.SB,
+                Gen3CfruDpeEasierTimeEvolutionTest.OakFixture.CB + 24}) {
+            var fixture = new Gen3CfruDpeEasierTimeEvolutionTest.OakFixture();
+            fixture.memory[offset] ^= 1; fixture.digest();
+            var handler = Gen3CfruDpeEasierTimeEvolutionTest.oakHandler(fixture);
+            byte[] before = fieldValue(handler, "rom", byte[].class).clone();
+            assertThrows(com.uprfvx.romio.exceptions.RomIOException.class,
+                    () -> Gen3CfruDpeEasierTimeEvolutionTest.installSyntheticOak(handler, fixture));
+            assertArrayEquals(before, fieldValue(handler, "rom", byte[].class));
+        }
     }
 
     @Test

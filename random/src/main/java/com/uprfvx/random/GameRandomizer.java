@@ -37,6 +37,10 @@ import com.uprfvx.romio.romhandlers.Gen1RomHandler;
 import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 import com.uprfvx.romio.services.SpecialFormExclusionOptions;
+import com.uprfvx.romio.services.SpecialFormPredicates;
+import com.uprfvx.romio.gamedata.Species;
+import com.uprfvx.romio.gamedata.SpeciesSet;
+import com.uprfvx.romio.gamedata.GenRestrictions;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -207,6 +211,11 @@ public class GameRandomizer {
             final long startTime = System.currentTimeMillis();
             randomSource.seed(seed);
 
+            if (settings.isRandomizeIntroMon() && romHandler instanceof Gen3RomHandler gen3
+                    && gen3.usesCfruDpeRandomPoolPolicy()) {
+                gen3.preflightCfruDpeOakIntro(() -> oakIntroPool(gen3));
+            }
+
             if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
                 if (settings.isMakeEvolutionsEasier() && settings.isRemoveTimeBasedEvolutions()
                         && settings.isChangeImpossibleEvolutions()) {
@@ -269,6 +278,33 @@ public class GameRandomizer {
         }
 
         return results;
+    }
+
+    // Mirrors RestrictedSpeciesService's read-only candidate construction; it
+    // deliberately does not call setRestrictions/saveOriginalData before the gate.
+    private SpeciesSet oakIntroPool(Gen3RomHandler gen3) {
+        var options = new SpecialFormExclusionOptions(settings.isAllowMegaForms(),
+                settings.isAllowGigantamaxForms(), settings.isAllowRegionalFormsAcrossGenLimit());
+        GenRestrictions restrictions = settings.isLimitPokemon() ? settings.getCurrentRestrictions() : null;
+        SpeciesSet all = gen3.getSpeciesSetInclFormes();
+        SpeciesSet candidates = new SpeciesSet();
+        if (restrictions == null) {
+            candidates.addAll(all.filter(sp -> SpecialFormPredicates.isSpeciesAllowed(sp, null, options)));
+        } else {
+            for (int gen = 1; gen <= GenRestrictions.MAX_GENERATION; gen++) {
+                if (!restrictions.isGenAllowed(gen)) continue;
+                final int selectedGeneration = gen;
+                candidates.addAll(all.filter(sp -> SpecialFormPredicates.effectiveGenerationForDirectLimit(sp, options) == selectedGeneration
+                        && SpecialFormPredicates.hasUsableSpeciesIdentity(sp)
+                        && SpecialFormPredicates.isAllowedBySpecialFormOptions(sp, options)));
+            }
+            if (restrictions.isAllowEvolutionaryRelatives()) {
+                candidates.addFullFamilies(false);
+                candidates = candidates.filter(sp -> SpecialFormPredicates.isAllowedAfterEvolutionaryRelativeExpansion(sp, restrictions, options));
+            }
+        }
+        var movesets = gen3.getMovesLearnt();
+        return candidates.filter(sp -> gen3.getCfruDpeRandomPoolEligibility(sp, movesets).eligible());
     }
 
     private void setupSpeciesRestrictions() {

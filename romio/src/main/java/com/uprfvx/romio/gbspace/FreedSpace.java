@@ -167,18 +167,25 @@ public class FreedSpace {
         reservations.clear(); reservations.addAll(safeReservations);
     }
 
+    /** Validate a release before callers mutate any associated bytes. */
+    public final void checkFreeRange(int start, int length) {
+        if (length < 1) throw new IllegalArgumentException("length must be at least 1");
+        long end = (long) start + length;
+        if (!protectedRanges.isEmpty() && (start < 0 || end > Integer.MAX_VALUE))
+            throw new IllegalArgumentException("Invalid free range.");
+        for (ProtectedRange r : protectedRanges)
+            if ((long) start < r.end() && r.start() < end)
+                throw new IllegalStateException("Cannot free protected range.");
+    }
+
     public void free(int start, int length) {
         // System.out.printf("freeing %d bytes starting from 0x%x.%n", length, start);
         if (length < 1) {
             throw new IllegalArgumentException("length must be at least 1");
         }
 
+        checkFreeRange(start, length);
         long exclusiveEnd = (long) start + length;
-        if (!protectedRanges.isEmpty() && (start < 0 || exclusiveEnd > Integer.MAX_VALUE))
-            throw new IllegalArgumentException("Invalid free range.");
-        for (ProtectedRange r : protectedRanges)
-            if ((long) start < r.end() && r.start() < exclusiveEnd)
-                throw new IllegalStateException("Cannot free protected range.");
         int end = start + length - 1;
         FreedChunk toFree = new FreedChunk(start, end);
 
