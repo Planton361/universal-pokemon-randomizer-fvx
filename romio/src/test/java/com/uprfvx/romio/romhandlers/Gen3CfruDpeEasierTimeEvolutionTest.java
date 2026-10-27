@@ -15,11 +15,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class Gen3CfruDpeEasierTimeEvolutionTest {
     // #78 parser-only synthetic input. None of these values attest a real output.
     private static final class OakFixture {
-        final byte[] memory = new byte[0x200000];
+        final byte[] memory;
         final Properties p = new Properties();
         static final int D = 0x180000, B = 0x180100, SB = 0x180200, SC = 0x180300,
                 CB = 0x180400, CC = 0x180500, FRONT = 0x20000, PALETTE = 0x24000;
-        OakFixture() {
+        OakFixture() { this(0x200000); }
+        OakFixture(int size) {
+            memory = new byte[size];
             memory[0xac]='B'; memory[0xad]='P'; memory[0xae]='R'; memory[0xaf]='E';
             put32(0x128, 0x08000000 + FRONT); put32(0x130, 0x08000000 + PALETTE);
             for (int i=0;i<1440;i++) { put32(FRONT+i*8,0x08040000); put16(FRONT+i*8+4,8); put32(PALETTE+i*8,0x08040200); }
@@ -35,6 +37,9 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
             for(int i=0;i<offs.length;i++) put16(D+offs[i],vals[i]);
             byte[] bits=HexFormat.of().parseHex("feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0f0000e0fffffffffffffffffffffffffffdffffebfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffb3f0000fd03dfffffffffffffffffdf21ffffff1f000000000080ffffffffffffffff7fffffffffffaf780000fefefdffffffffffffffffffffffff7ffe0bfffb6fffffff0f000000c0ffffffffffffffbfffffffffffffffffc39f");
             System.arraycopy(bits,0,memory,B,bits.length);
+            put32(0x3ea7c,0x08090000);put32(0x43e20,0x08090000);
+            for(int i=0;i<1440;i++)put32(0x90000+4*i,0x08093000);
+            memory[0x93002]=(byte)255;
             bridge(SB,SC); bridge(CB,CC);
             hook(0x130f2c,SB);hook(0x12fa78,CB);
             // Synthetic inherited #77 evolution and Pickup roots and physical objects.
@@ -65,10 +70,10 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
             set("insertions.count",1); range("insertions.0",D,D+0x1000);
             String[] types={"EVOLUTION_CODE","EVOLUTION_DATA","PICKUP_CODE","PICKUP_DATA","FRONT_TABLE",
                     "PALETTE_TABLE","FRONT_ASSET","PALETTE_ASSET","SPRITE_HOOK","CRY_HOOK","OTHER_CODE","OTHER_DATA",
-                    "EVOLUTION_RECORD","PICKUP_DATA"};
+                    "EVOLUTION_RECORD","PICKUP_DATA","LEARNSET_TABLE","LEARNSET_ASSET"};
             int[] starts={0x30000,0x50000,0x83000,0x82000,FRONT,PALETTE,0x40000,0x40200,0x130f2c,0x12fa78,0x34000,0x37000,
-                    0x35000,0x84000};
-            int[] lengths={0x80,1440*128,0x200,0x400,1440*8,1440*8,0x100,0x100,20,20,0x80,0x80,32,0x200};
+                    0x35000,0x84000,0x90000,0x93000};
+            int[] lengths={0x80,1440*128,0x200,0x400,1440*8,1440*8,0x100,0x100,20,20,0x80,0x80,32,0x200,1440*4,0x200};
             set("protected.count",types.length);
             for(int i=0;i<types.length;i++) {set("protected."+i+".type",types[i]);range("protected."+i,starts[i],starts[i]+lengths[i]);}
             digest();
@@ -155,6 +160,84 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
         }
         var duplicate=new OakFixture();System.arraycopy(duplicate.memory,OakFixture.D,duplicate.memory,OakFixture.D+0x700,8);
         duplicate.digest();assertThrows(RomIOException.class,duplicate::parse);
+    }
+
+    @Test void oakWitnessRejectsMissingTruncatedForgedAndOverlappingLearnsetOwners() throws Exception {
+        for (String type : new String[]{"LEARNSET_TABLE","LEARNSET_ASSET"}) {
+            var f=new OakFixture();
+            for(int i=0;i<Integer.parseInt(f.p.getProperty("protected.count"));i++)
+                if(type.equals(f.p.getProperty("protected."+i+".type"))) f.set("protected."+i+".type","OTHER_DATA");
+            assertThrows(RomIOException.class,f::parse,type);
+        }
+        var shortTable=new OakFixture();shortTable.range("protected.14",0x90000,0x90004);
+        assertThrows(RomIOException.class,shortTable::parse);
+        var shortBlob=new OakFixture();shortBlob.range("protected.15",0x93000,0x93002);
+        assertThrows(RomIOException.class,shortBlob::parse);
+        var wrongRoot=new OakFixture();wrongRoot.put32(0x43e20,0x08094000);wrongRoot.digest();
+        assertThrows(RomIOException.class,wrongRoot::parse);
+        var wrongAsset=new OakFixture();wrongAsset.put32(0x90000+4,0x08094000);wrongAsset.digest();
+        assertThrows(RomIOException.class,wrongAsset::parse);
+        var unterminated=new OakFixture();unterminated.memory[0x93002]=0;unterminated.digest();
+        assertThrows(RomIOException.class,unterminated::parse);
+        var overlap=new OakFixture();overlap.range("protected.15",OakFixture.D,OakFixture.D+96);
+        assertThrows(RomIOException.class,overlap::parse);
+    }
+
+    @Test void oakWitnessRequiresCoverageForBothDistinctLearnsetTables() throws Exception {
+        var f=new OakFixture();System.arraycopy(f.memory,0x90000,f.memory,0x95000,1440*4);
+        f.put32(0x43e20,0x08095000);f.set("protected.count",17);f.set("protected.16.type","LEARNSET_TABLE");
+        f.range("protected.16",0x95000,0x95000+1440*4);f.digest();assertNotNull(f.parse());
+        f.range("protected.16",0x95000,0x95004);assertThrows(RomIOException.class,f::parse);
+    }
+
+    @Test void oakWitnessRejectsSourceOwnerInLearnsetAllocationArena() throws Exception {
+        var f=new OakFixture(0x1600000);int target=0x1219a48;
+        f.range("sprite.consumer",target,target+64);f.put32(OakFixture.D+40,0x08000001+target);
+        f.put32(OakFixture.SB+24,0x08000001+target);f.set("insertions.count",2);
+        f.range("insertions.1",target,target+64);f.digest();
+        var failure=assertThrows(RomIOException.class,f::parse);
+        assertTrue(failure.getMessage().contains("learnset allocator"));
+    }
+
+    @Test void oakWitnessCoversFullFiftyMoveListAndItsTerminator() throws Exception {
+        var f=new OakFixture();
+        for(int i=0;i<50;i++) {f.put16(0x93000+3*i,1);f.memory[0x93002+3*i]=5;}
+        f.put16(0x93000+150,0);f.memory[0x93000+152]=(byte)255;f.digest();assertNotNull(f.parse());
+        f.memory[0x93000+152]=0;f.digest();assertThrows(RomIOException.class,f::parse);
+    }
+
+    @Test void oakOwnerCanStillBeReturnedByExistingSharedAllocator() throws Exception {
+        var f=new OakFixture();
+        Arrays.fill(f.memory,OakFixture.SC,OakFixture.SC+64,(byte)0xff);f.digest();
+        assertNotNull(f.parse(),"the witness declares the complete consumer owner");
+        var handler=new Gen3RomHandler();
+        var romField=AbstractGBRomHandler.class.getDeclaredField("rom");romField.setAccessible(true);romField.set(handler,f.memory);
+        handler.getFreedSpace().free(OakFixture.SC,64);
+        assertFalse(handler.isRomSpaceUsed(OakFixture.SC,32),"the generic guard recognizes bytes only");
+        assertEquals(OakFixture.SC,handler.getFreedSpace().findAndUnfree(32),"the ledger can return the attested owner");
+        // A separate allocator models the same collision with opt-in protection.
+        var protectedHandler=new Gen3RomHandler();romField.set(protectedHandler,f.memory);
+        var ledger=protectedHandler.getFreedSpace();ledger.free(OakFixture.SC-16,96);var stale=ledger.snapshot();
+        byte[] before=f.memory.clone();f.parse().protectOakOwners(ledger);assertArrayEquals(before,f.memory);
+        assertEquals(OakFixture.SC-16,ledger.findAndUnfree(16));
+        assertEquals(OakFixture.SC+64,ledger.findAndUnfree(16));assertEquals(-1,ledger.findAndUnfree(1));
+        ledger.restore(stale);assertThrows(IllegalStateException.class,()->ledger.free(OakFixture.SC,1));
+        assertEquals(OakFixture.SC-16,ledger.findAndUnfree(16));assertEquals(OakFixture.SC+64,ledger.findAndUnfree(16));
+        assertArrayEquals(before,f.memory);
+    }
+
+    @Test void sharedDataRewriterFaultRollsBackWhileOakProtectionSurvivesStaleSnapshot() {
+        var f=new AbstractGBRomHandlerDataRewriterTransactionTest.Fixture(true);
+        var ledger=f.getFreedSpace();var stale=ledger.snapshot();
+        ledger.protectRanges(List.of(new com.uprfvx.romio.gbspace.FreedSpace.ProtectedRange("OAK_CONSUMER",280,300)));
+        byte[] before=f.rom.clone();String protectedLedger=ledger.toString();
+        f.fault=AbstractGBRomHandlerDataRewriterTransactionTest.Fault.WRITE;
+        assertThrows(RomIOException.class,f::rewrite);assertArrayEquals(before,f.rom);assertEquals(protectedLedger,ledger.toString());
+        ledger.restore(stale);assertEquals(protectedLedger,ledger.toString());
+        assertThrows(IllegalStateException.class,()->ledger.free(280,20));
+        f.fault=null;f.rewrite();
+        assertArrayEquals(Arrays.copyOfRange(before,280,300),Arrays.copyOfRange(f.rom,280,300));
+        assertEquals(260,f.readPointer(AbstractGBRomHandlerDataRewriterTransactionTest.PRIMARY));
     }
 
     private static final Set<Integer> LEVEL = Set.of(4,8,9,10,11,12,13,14,16,18,20,21,22,23,28,31,32,35,41,42);

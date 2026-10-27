@@ -22,7 +22,10 @@ package com.uprfvx.romio.gbspace;
 /*--  along with this program. If not, see <http://www.gnu.org/licenses/>.  --*/
 /*----------------------------------------------------------------------------*/
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.ListIterator;
 
 /**
@@ -57,10 +60,79 @@ public class FreedSpace {
 
     protected final LinkedList<FreedChunk> freedChunks = new LinkedList<>();
 
+    /** Half-open physical interval. Registration is monotonic for this allocator. */
+    public record ProtectedRange(String type, int start, int end) {
+        public ProtectedRange {
+            if (type == null || !type.matches("[A-Z][A-Z0-9_]{0,63}") || start < 0 || end <= start)
+                throw new IllegalArgumentException("Invalid protected range.");
+        }
+    }
+
+    private final List<ProtectedRange> protectedRanges = new ArrayList<>();
+    // Reservations made by this allocator are conservatively live until freed
+    // or a transaction snapshot is restored. Never claim they are free owners.
+    private final List<FreedChunk> reservations = new ArrayList<>();
+
+    private static boolean overlaps(int start, int end, int otherStart, int otherEnd) {
+        return start < otherEnd && otherStart < end;
+    }
+
+    /** Atomically exclude a set of separately typed, disjoint physical owners. */
+    public final void protectRanges(List<ProtectedRange> ranges) {
+        if (ranges == null || ranges.isEmpty()) throw new IllegalArgumentException("Missing protected ranges.");
+        List<ProtectedRange> combined = new ArrayList<>(protectedRanges);
+        for (ProtectedRange r : ranges) {
+            if (r == null) throw new IllegalArgumentException("Null protected range.");
+            for (FreedChunk allocation : reservations) {
+                if ((long) r.start() <= allocation.end && (long) allocation.start < r.end())
+                    throw new IllegalStateException("Protected range overlaps an active reservation.");
+            }
+            combined.add(r);
+        }
+        combined.sort(Comparator.comparingInt(ProtectedRange::start));
+        for (int i = 1; i < combined.size(); i++) {
+            if (combined.get(i - 1).end() > combined.get(i).start())
+                throw new IllegalArgumentException("Overlapping protected ranges.");
+        }
+        LinkedList<FreedChunk> carved = withoutProtected(freedChunks, combined);
+        protectedRanges.clear(); protectedRanges.addAll(combined);
+        freedChunks.clear(); freedChunks.addAll(carved);
+    }
+
+    private static LinkedList<FreedChunk> withoutProtected(Iterable<FreedChunk> chunks, List<ProtectedRange> excluded) {
+        LinkedList<FreedChunk> result = new LinkedList<>();
+        for (FreedChunk chunk : chunks) {
+            long cursor = chunk.start, end = (long) chunk.end + 1;
+            for (ProtectedRange range : excluded) {
+                if (range.end() <= cursor) continue;
+                if (range.start() >= end) break;
+                if (cursor < range.start()) result.add(new FreedChunk((int) cursor, range.start() - 1));
+                cursor = Math.max(cursor, (long) range.end());
+                if (cursor >= end) break;
+            }
+            if (cursor < end) result.add(new FreedChunk((int) cursor, (int) (end - 1)));
+        }
+        return result;
+    }
+
+    private void releaseReservations(int start, int end) {
+        List<FreedChunk> remaining = new ArrayList<>();
+        for (FreedChunk r : reservations) {
+            long rEnd = (long) r.end + 1;
+            if ((long) start >= rEnd || end <= r.start) remaining.add(r);
+            else {
+                if (r.start < start) remaining.add(new FreedChunk(r.start, start - 1));
+                if (end < rEnd) remaining.add(new FreedChunk(end, r.end));
+            }
+        }
+        reservations.clear(); reservations.addAll(remaining);
+    }
+
     /** A deep, immutable ledger belonging exclusively to the allocator that captured it. */
     public static final class Snapshot {
         private final FreedSpace owner;
         private final int[][] chunks;
+        private final int[][] reservations;
 
         private Snapshot(FreedSpace owner) {
             this.owner = owner;
@@ -69,6 +141,8 @@ public class FreedSpace {
             for (FreedChunk chunk : owner.freedChunks) {
                 chunks[i++] = new int[]{chunk.start, chunk.end};
             }
+            reservations = new int[owner.reservations.size()][2]; i = 0;
+            for (FreedChunk r : owner.reservations) reservations[i++] = new int[]{r.start, r.end};
         }
     }
 
@@ -85,8 +159,12 @@ public class FreedSpace {
         for (int[] chunk : snapshot.chunks) {
             restored.add(new FreedChunk(chunk[0], chunk[1]));
         }
-        freedChunks.clear();
-        freedChunks.addAll(restored);
+        LinkedList<FreedChunk> safe = withoutProtected(restored, protectedRanges);
+        List<FreedChunk> restoredReservations = new ArrayList<>();
+        for (int[] r : snapshot.reservations) restoredReservations.add(new FreedChunk(r[0], r[1]));
+        LinkedList<FreedChunk> safeReservations = withoutProtected(restoredReservations, protectedRanges);
+        freedChunks.clear(); freedChunks.addAll(safe);
+        reservations.clear(); reservations.addAll(safeReservations);
     }
 
     public void free(int start, int length) {
@@ -95,6 +173,12 @@ public class FreedSpace {
             throw new IllegalArgumentException("length must be at least 1");
         }
 
+        long exclusiveEnd = (long) start + length;
+        if (!protectedRanges.isEmpty() && (start < 0 || exclusiveEnd > Integer.MAX_VALUE))
+            throw new IllegalArgumentException("Invalid free range.");
+        for (ProtectedRange r : protectedRanges)
+            if ((long) start < r.end() && r.start() < exclusiveEnd)
+                throw new IllegalStateException("Cannot free protected range.");
         int end = start + length - 1;
         FreedChunk toFree = new FreedChunk(start, end);
 
@@ -119,6 +203,8 @@ public class FreedSpace {
         if (!freedChunkAdded) {
             freedChunks.add(toFree);
         }
+        if (exclusiveEnd <= Integer.MAX_VALUE && exclusiveEnd >= Integer.MIN_VALUE)
+            releaseReservations(start, (int) exclusiveEnd);
         // System.out.println("after:\t" + this);
     }
 
@@ -157,6 +243,7 @@ public class FreedSpace {
     }
 
     public int findAndUnfree(int length) {
+        if (!protectedRanges.isEmpty() && length < 1) throw new IllegalArgumentException("Invalid allocation length.");
         // System.out.println("looking for " + length + " bytes");
         FreedChunk found = find(length);
         if (found == null) {
@@ -179,6 +266,7 @@ public class FreedSpace {
 
     protected final void unfree(FreedChunk toUnfree, int length) {
         // System.out.println("unfreeing " + length + " bytes starting from 0x" + Integer.toHexString(toUnfree.start));
+        if (length > 0) reservations.add(new FreedChunk(toUnfree.start, toUnfree.start + length - 1));
         toUnfree.start += length;
         if (toUnfree.start > toUnfree.end) {
             freedChunks.remove(toUnfree);

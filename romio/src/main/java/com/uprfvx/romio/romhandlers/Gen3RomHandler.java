@@ -391,7 +391,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         private static final String BITMAP_SHA = "7b0c3b997e23687bed98ab9dc3cf3e9ba42a37c1441271c34278b370a07d85c1";
         private static final Set<String> PROTECTED_TYPES = Set.of("EVOLUTION_CODE", "EVOLUTION_DATA",
                 "PICKUP_CODE", "PICKUP_DATA", "EVOLUTION_RECORD", "FRONT_TABLE", "PALETTE_TABLE", "FRONT_ASSET",
-                "PALETTE_ASSET", "SPRITE_HOOK", "CRY_HOOK", "OTHER_CODE", "OTHER_DATA");
+                "PALETTE_ASSET", "SPRITE_HOOK", "CRY_HOOK", "LEARNSET_TABLE", "LEARNSET_ASSET", "OTHER_CODE", "OTHER_DATA");
         private final String buildId, configId, configSha256, inputSha256;
         private final List<EvolutionOwner> insertions, protectedOwners;
         private final EvolutionOwner descriptor, bitmap, spriteBridge, spriteConsumer, cryBridge, cryConsumer;
@@ -501,6 +501,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             all.add(new EvolutionOwner("PALETTE_ROOT", 0x130, 0x134));
             all.add(new EvolutionOwner("EVOLUTION_HOOK", CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8));
             all.add(new EvolutionOwner("EVOLUTION_ROOT", CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4));
+            all.add(new EvolutionOwner("LEARNSET_RUNTIME_ROOT", CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION,
+                    CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION + 4));
+            all.add(new EvolutionOwner("LEARNSET_FALLBACK_ROOT", CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION,
+                    CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION + 4));
             for (int at : CFRU_PICKUP_REPOINTS) all.add(new EvolutionOwner("PICKUP_ROOT", at, at + 4));
             for (int i = 0; i < all.size(); i++) for (int j = 0; j < i; j++)
                 if (all.get(i).overlaps(all.get(j))) throw error("overlapping physical owners");
@@ -532,8 +536,53 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             validateHook(original, sh, spriteBridge);
             validateHook(original, ch, cryBridge);
             validateInheritedOwners(original, protectedRanges);
+            validateLearnsetOwners(original, protectedRanges, oak);
             validateBytes(original, envelopes);
             insertions = List.copyOf(envelopes); protectedOwners = List.copyOf(protectedRanges);
+        }
+
+        // This only reserves declared ranges in a supplied allocator. It does
+        // not accept a real witness, authorize a write, or install a preflight.
+        void protectOakOwners(FreedSpace allocator) {
+            if (allocator == null) throw error("missing allocator");
+            List<FreedSpace.ProtectedRange> ranges = new ArrayList<>();
+            for (EvolutionOwner owner : List.of(descriptor, bitmap, spriteBridge, spriteConsumer, cryBridge, cryConsumer))
+                ranges.add(new FreedSpace.ProtectedRange(owner.type, owner.start, owner.end));
+            allocator.protectRanges(ranges);
+        }
+
+        // Both source roots and every nonempty pointer in either native table
+        // must be owned; an arbitrary OTHER_DATA range cannot attest learnsets.
+        private static void validateLearnsetOwners(byte[] b, List<EvolutionOwner> owners, List<EvolutionOwner> oak) {
+            int fallback = pointer(b, CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION, false);
+            int runtime = pointer(b, CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION, false);
+            Set<Integer> tables = new HashSet<>(List.of(fallback, runtime));
+            for (int table : tables) {
+                covered(owners, "LEARNSET_TABLE", table, CFRU_DPE_SPECIES_COUNT * 4);
+                for (int id = 0; id < CFRU_DPE_SPECIES_COUNT; id++) {
+                    long raw = Integer.toUnsignedLong(IOFunctions.readFullInt(b, table + id * 4));
+                    if (raw == 0) continue;
+                    if (raw < 0x08000000L || raw >= 0x08000000L + b.length)
+                        throw error("invalid learnset asset pointer");
+                    int at = (int) (raw - 0x08000000L), length = 0;
+                    boolean terminated = false;
+                    // A serialized list may contain 50 moves plus its terminator.
+                    for (int i = 0; i <= CFRU_DPE_MAX_LEARNABLE_MOVES; i++) {
+                        covered(owners, "LEARNSET_ASSET", at, length + CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE);
+                        int entry = at + length; length += CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE;
+                        if (IOFunctions.read2ByteInt(b, entry) == 0 && (b[entry + 2] & 255) == 255) {
+                            terminated = true; break;
+                        }
+                    }
+                    if (!terminated) throw error("unterminated learnset asset");
+                }
+            }
+            // The existing writer searches this entire range by free byte alone.
+            // No Oak object may be located there, even if its bytes look occupied now.
+            EvolutionOwner allocator = new EvolutionOwner("LEARNSET_ALLOCATOR", CFRU_DPE_LEARNSET_REPOINT_FREE_SPACE_START,
+                    CFRU_DPE_LEARNSET_REPOINT_FREE_SPACE_END);
+            for (EvolutionOwner owner : oak) if (owner.overlaps(allocator))
+                throw error("Oak owner overlaps learnset allocator");
         }
 
         // Verify the entire encoded LZ10 stream remains within its declared
