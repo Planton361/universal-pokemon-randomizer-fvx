@@ -108,6 +108,179 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
         }
     }
 
+    // Combined input is entirely synthetic. The two schemas declare the same
+    // source/build/input; neither establishes provenance of an installed output.
+    static final class DualFixture {
+        final OakFixture oak = new OakFixture();
+        final CfruDpeEvolutionFixture handler;
+        final Properties evolution = new Properties();
+        DualFixture() throws Exception {
+            handler = new CfruDpeEvolutionFixture();
+            handler.setField("rom", oak.memory);
+            handler.setField("originalRom", oak.memory.clone());
+            handler.getRomEntry().setRomType(com.uprfvx.romio.constants.Gen3Constants.RomType_FRLG);
+            handler.getRomEntry().putIntValue("PokemonEvolutions", 0x50000);
+            handler.loadEvolutions();
+            String[][] values = {{"schema","EVOLUTION_OWNERSHIP_WITNESS_CFRU78_V1"}, {"version","1"},
+                    {"cfru.sha","196058edbc2b8b7d8c725b715b1f967ba60f5c83"},
+                    {"dpe.sha","d887185de1f6ae6a78e85c4311bbadde17041d00"},
+                    {"build.id","synthetic-build"}, {"config.id","synthetic-config"}, {"config.sha256","0".repeat(64)},
+                    {"input.size",Integer.toString(oak.memory.length)}, {"input.sha256",oak.p.getProperty("input.sha256")},
+                    {"record.offset","0x35000"}, {"table.rows","1440"}, {"table.slots","16"}, {"table.entryBytes","8"},
+                    {"insertions.count","3"}, {"protected.count","4"}};
+            for (String[] pair : values) evolution.setProperty(pair[0],pair[1]);
+            range("consumer",0x30000,0x30080); range("table",0x50000,0x7d000);
+            range("insertions.0",0x30000,0x30100); range("insertions.1",0x35000,0x35100);
+            range("insertions.2",0x50000,0x7d000);
+            String[] types={"PICKUP_CODE","PICKUP_DATA","OTHER_CODE","OTHER_DATA"};
+            int[] starts={0x83000,0x82000,0x34000,0x37000}, ends={0x83200,0x82400,0x34080,0x37080};
+            for(int i=0;i<types.length;i++) { evolution.setProperty("protected."+i+".type",types[i]);
+                range("protected."+i,starts[i],ends[i]); }
+        }
+        void range(String name,int start,int end) {
+            evolution.setProperty(name+".start",Integer.toString(start));
+            evolution.setProperty(name+".end",Integer.toString(end));
+        }
+        void bind() throws Exception {
+            handler.acceptSyntheticEvolutionWitness(evolution,new java.io.ByteArrayInputStream(oak.serialized()));
+        }
+        byte[] bytes() { return oak.memory.clone(); }
+    }
+
+    @Test void cfru78DualWitnessProtectsEveryOwnerAndPreservesIntroOnOffAndReplay() throws Exception {
+        for (boolean introOn : new boolean[]{false,true}) {
+            var f=new DualFixture(); byte[] before=f.bytes();
+            int[] owners={OakFixture.D,OakFixture.B,OakFixture.SB,OakFixture.SC,OakFixture.CB,OakFixture.CC,
+                    0x30000,0x50000,0x83000,0x82000,OakFixture.FRONT,OakFixture.PALETTE,0x40000,0x40200,
+                    0x130f2c,0x12fa78,0x34000,0x37000,0x35000,0x84000,0x90000,0x93000,
+                    OakFixture.BACK,0x40400,OakFixture.SHINY,0x40600,0xa0,0x128,0x12c,0x130,0x134,
+                    0x42ec4,0x42f6c,0x43e20,0x3ea7c,0x14c1c};
+            for(int at:owners) f.handler.getFreedSpace().free(at,1);
+            if(introOn) installSyntheticOak(f.handler,f.oak);
+            f.bind(); f.handler.preflightCfruEvolutionEasier(40); f.handler.preflightCfruEvolutionEasier(40);
+            assertArrayEquals(before,f.oak.memory);
+            for(int at:owners) assertThrows(IllegalStateException.class,()->f.handler.getFreedSpace().free(at,1));
+            f.handler.condenseLevelEvolutions(40); f.handler.makeEvolutionsEasier(false,false);
+            assertEquals(160,f.oak.memory[0x3501c]&255);
+            if(introOn) assertTrue(f.handler.setIntroPokemon(f.handler.species[277]));
+            byte[] after=f.bytes(); f.handler.condenseLevelEvolutions(40); f.handler.makeEvolutionsEasier(false,false);
+            assertArrayEquals(after,f.oak.memory);
+            for(int i=0;i<before.length;i++)
+                if(i!=0x3501c && !(introOn && (i==OakFixture.D+92 || i==OakFixture.D+93)))
+                    assertEquals(before[i],after[i]);
+        }
+    }
+
+    @Test void cfru78ProductionIngressRequiresAndMatchesBothExplicitSyntheticWitnesses() throws Exception {
+        String oldE=System.getProperty("uprfvx.cfruEvolutionOwnership"), oldO=System.getProperty("uprfvx.cfruOakOwnership");
+        var efile=java.nio.file.Files.createTempFile("synthetic-evolution-78-", ".properties");
+        var ofile=java.nio.file.Files.createTempFile("synthetic-oak-78-", ".properties");
+        try {
+            for(boolean introOn:new boolean[]{false,true}) {
+                var f=new DualFixture();
+                try(var out=java.nio.file.Files.newOutputStream(efile)) { f.evolution.store(out,null); }
+                java.nio.file.Files.write(ofile,f.oak.serialized());
+                System.setProperty("uprfvx.cfruEvolutionOwnership",efile.toString());
+                System.setProperty("uprfvx.cfruOakOwnership",ofile.toString());
+                byte[] before=f.bytes(); if(introOn) f.handler.preflightCfruDpeOakIntro();
+                f.handler.preflightCfruEvolutionEasier(40); assertArrayEquals(before,f.oak.memory);
+                assertThrows(IllegalStateException.class,()->f.handler.getFreedSpace().free(OakFixture.SC,1));
+            }
+            var duplicate=new DualFixture();
+            var out=new java.io.ByteArrayOutputStream();duplicate.evolution.store(out,null);
+            out.write("build.id=duplicate\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+            java.nio.file.Files.write(efile,out.toByteArray());java.nio.file.Files.write(ofile,duplicate.oak.serialized());
+            byte[] before=duplicate.bytes();
+            assertThrows(RomIOException.class,()->duplicate.handler.preflightCfruEvolutionEasier(40));
+            assertArrayEquals(before,duplicate.oak.memory);duplicate.handler.getFreedSpace().free(OakFixture.D,1);
+        } finally {
+            java.nio.file.Files.deleteIfExists(efile); java.nio.file.Files.deleteIfExists(ofile);
+            if(oldE==null)System.clearProperty("uprfvx.cfruEvolutionOwnership");else System.setProperty("uprfvx.cfruEvolutionOwnership",oldE);
+            if(oldO==null)System.clearProperty("uprfvx.cfruOakOwnership");else System.setProperty("uprfvx.cfruOakOwnership",oldO);
+        }
+    }
+
+    @Test void cfru78RejectsMissingOakAndConflictingDeclaredRevisionsBeforeMutation() throws Exception {
+        String prior=System.getProperty("uprfvx.cfruOakOwnership"); System.clearProperty("uprfvx.cfruOakOwnership");
+        try {
+            var missing=new DualFixture(); byte[] before=missing.bytes();
+            assertThrows(RomIOException.class,()->missing.handler.acceptSyntheticEvolutionWitness(missing.evolution));
+            assertArrayEquals(before,missing.oak.memory); missing.handler.getFreedSpace().free(OakFixture.D,1);
+            for(String[] pair : new String[][]{{"schema","OWNERSHIP_WITNESS_V1"},
+                    {"cfru.sha","e27e2113e4d59dc76cf5da8d4c43b067addae348"},
+                    {"dpe.sha","0".repeat(40)}}) {
+                var f=new DualFixture(); f.evolution.setProperty(pair[0],pair[1]); before=f.bytes();
+                assertThrows(RomIOException.class,f::bind); assertArrayEquals(before,f.oak.memory);
+            }
+            var legacy=new Gen3CfruDpeEvolutionPreservationTest.WitnessFixture(); legacy.attest(220);
+            assertThrows(RomIOException.class,()->legacy.acceptSyntheticEvolutionWitness(legacy.witness,
+                    new java.io.ByteArrayInputStream(new byte[0])));
+        } finally { if(prior==null) System.clearProperty("uprfvx.cfruOakOwnership"); else System.setProperty("uprfvx.cfruOakOwnership",prior); }
+    }
+
+    @Test void cfru78RejectsIdentityOwnerAndStaleInputFailuresBeforeProtection() throws Exception {
+        for(int mode=0;mode<18;mode++) {
+            var f=new DualFixture();
+            switch(mode) {
+                case 0 -> f.evolution.setProperty("build.id","another-build");
+                case 1 -> f.evolution.setProperty("config.id","another-config");
+                case 2 -> f.evolution.setProperty("config.sha256","1".repeat(64));
+                case 3 -> f.evolution.setProperty("input.sha256","1".repeat(64));
+                case 4 -> f.evolution.setProperty("input.size",Integer.toString(f.oak.memory.length-4));
+                case 5 -> f.evolution.setProperty("unknown","bad");
+                case 6 -> f.evolution.remove("build.id");
+                case 7 -> f.evolution.setProperty("consumer.end",Integer.toString(0x30040));
+                case 8 -> f.evolution.setProperty("protected.0.end",Integer.toString(0x83100));
+                case 9 -> f.evolution.setProperty("protected.3.start",Integer.toString(0x50000));
+                case 10 -> f.oak.p.setProperty("protected.0.end",Integer.toString(0x30040));
+                case 11 -> f.oak.range("protected.10",OakFixture.SC,OakFixture.SC+64);
+                case 12 -> f.oak.memory[OakFixture.SC]^=1;
+                case 13 -> f.oak.p.remove("protected.0.type");
+                case 14 -> f.oak.p.setProperty("build.id","another-build");
+                case 15 -> f.oak.p.setProperty("input.size",Integer.toString(f.oak.memory.length-4));
+                case 16 -> f.oak.p.setProperty("input.sha256","1".repeat(64));
+                case 17 -> f.oak.p.setProperty("protected.0.type","UNKNOWN_CODE");
+            }
+            byte[] before=f.bytes(); String ledger=f.handler.getFreedSpace().toString();
+            assertThrows(RomIOException.class,f::bind,"mode "+mode);
+            assertArrayEquals(before,f.oak.memory); assertEquals(ledger,f.handler.getFreedSpace().toString());
+            f.handler.getFreedSpace().free(OakFixture.D,1);
+        }
+    }
+
+    @Test void introOnRejectsPairIdentityAndOwnerMismatchBeforeEvolutionMutation() throws Exception {
+        for(String field:List.of("build.id","config.id","config.sha256","consumer.end")) {
+            var f=new DualFixture();installSyntheticOak(f.handler,f.oak);byte[] before=f.bytes();
+            f.evolution.setProperty(field,switch(field) {
+                case "config.sha256" -> "1".repeat(64);
+                case "consumer.end" -> Integer.toString(0x30040);
+                default -> "different";
+            });
+            assertThrows(RomIOException.class,f::bind,field);assertArrayEquals(before,f.oak.memory);
+            assertThrows(IllegalStateException.class,()->f.handler.getFreedSpace().free(OakFixture.SC,1));
+        }
+    }
+
+    @Test void legacyWitnessCannotBeFollowedByContradictoryOakDeclaration() throws Exception {
+        String prior=System.getProperty("uprfvx.cfruOakOwnership"); System.clearProperty("uprfvx.cfruOakOwnership");
+        try {
+            var f=new DualFixture(); f.evolution.setProperty("schema","OWNERSHIP_WITNESS_V1");
+            f.evolution.setProperty("cfru.sha","e27e2113e4d59dc76cf5da8d4c43b067addae348");
+            f.handler.acceptSyntheticEvolutionWitness(f.evolution);byte[] before=f.bytes();
+            assertThrows(RomIOException.class,()->installSyntheticOak(f.handler,f.oak));
+            assertArrayEquals(before,f.oak.memory);f.handler.getFreedSpace().free(OakFixture.D,1);
+        } finally {if(prior==null)System.clearProperty("uprfvx.cfruOakOwnership");else System.setProperty("uprfvx.cfruOakOwnership",prior);}
+    }
+
+    @Test void cfru78RejectsActiveAllocatorCollisionWithoutPartialProtection() throws Exception {
+        var f=new DualFixture(); f.handler.getFreedSpace().free(OakFixture.SC,64);
+        assertEquals(OakFixture.SC,f.handler.getFreedSpace().findAndUnfree(8));
+        byte[] before=f.bytes();String ledger=f.handler.getFreedSpace().toString();
+        assertThrows(IllegalStateException.class,f::bind);
+        assertArrayEquals(before,f.oak.memory);assertEquals(ledger,f.handler.getFreedSpace().toString());
+        f.handler.getFreedSpace().free(OakFixture.D,1);
+    }
+
     @Test void oakWitnessAcceptsOnlyStructurallyValidSyntheticInputWithoutMutatingIt() throws Exception {
         var f=new OakFixture();byte[] before=f.memory.clone();
         assertNotNull(f.parse());assertArrayEquals(before,f.memory);

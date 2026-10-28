@@ -224,7 +224,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     private static RomIOException evolutionOwnershipError(String reason) {
         // Never include a local path, manifest value, input digest or nested IO exception.
         return new RomIOException("CFRU Make Evolutions Easier: " + reason
-                + ". Requires an independently user-validated OWNERSHIP_WITNESS_V1");
+                + ". Requires an independently user-validated evolution ownership witness");
     }
 
     private record EvolutionOwner(String type, int start, int end) {
@@ -236,10 +236,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
      * Pilot trust premise: the user independently accepts the exact fresh build/link/output.
      * Parsing this witness does not prove that premise. All offsets are ROM-relative,
      * half-open intervals. No private witness or ROM identity is logged or serialized.
+     * The #78 schema EVOLUTION_OWNERSHIP_WITNESS_CFRU78_V1 uses the same strict
+     * fields as legacy V1, but requires a matching independently supplied Oak V1.
      */
     static final class EvolutionOwnershipWitness {
         final String inputSha256, buildId, configId, configSha256;
         final int inputSize, recordOffset;
+        final boolean cfru78;
         final EvolutionOwner consumer, table;
         final List<EvolutionOwner> insertions, protectedOwners;
 
@@ -248,8 +251,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     "build.id", "config.id", "config.sha256", "input.size", "input.sha256",
                     "record.offset", "consumer.start", "consumer.end", "table.start", "table.end",
                     "table.rows", "table.slots", "table.entryBytes", "insertions.count", "protected.count"));
-            if (!"OWNERSHIP_WITNESS_V1".equals(p.getProperty("schema")) || number(p, "version") != 1
-                    || !"e27e2113e4d59dc76cf5da8d4c43b067addae348".equals(p.getProperty("cfru.sha"))
+            boolean legacy = "OWNERSHIP_WITNESS_V1".equals(p.getProperty("schema"))
+                    && "e27e2113e4d59dc76cf5da8d4c43b067addae348".equals(p.getProperty("cfru.sha"));
+            cfru78 = "EVOLUTION_OWNERSHIP_WITNESS_CFRU78_V1".equals(p.getProperty("schema"))
+                    && "196058edbc2b8b7d8c725b715b1f967ba60f5c83".equals(p.getProperty("cfru.sha"));
+            if ((!legacy && !cfru78) || number(p, "version") != 1
                     || !"d887185de1f6ae6a78e85c4311bbadde17041d00".equals(p.getProperty("dpe.sha"))) {
                 throw evolutionOwnershipError("unsupported schema or public source revision");
             }
@@ -381,8 +387,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     /**
      * A structural, input-bound #78 witness candidate, NOT an attestation or a
      * write capability. The independently reviewed full link/insertion and
-     * source-to-output provenance remain an external prerequisite. This parser
-     * deliberately has no production ingress or selector-writing path.
+     * source-to-output provenance remain an external prerequisite. Parsing and
+     * binding this structure do not establish that provenance.
      *
      * All intervals are half-open, physical input offsets. Named owners cover
      * whole objects/functions, not merely the bytes used by this parser.
@@ -393,6 +399,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 "PICKUP_CODE", "PICKUP_DATA", "EVOLUTION_RECORD", "FRONT_TABLE", "PALETTE_TABLE", "FRONT_ASSET",
                 "PALETTE_ASSET", "BACK_TABLE", "BACK_ASSET", "SHINY_TABLE", "SHINY_ASSET", "SPRITE_HOOK", "CRY_HOOK", "LEARNSET_TABLE", "LEARNSET_ASSET", "OTHER_CODE", "OTHER_DATA");
         private final String buildId, configId, configSha256, inputSha256;
+        private final int inputSize;
         private final List<EvolutionOwner> insertions, protectedOwners, allOwners;
         private final EvolutionOwner descriptor, bitmap, spriteBridge, spriteConsumer, cryBridge, cryConsumer;
 
@@ -452,6 +459,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             buildId = p.getProperty("build.id"); configId = p.getProperty("config.id");
             configSha256 = p.getProperty("config.sha256"); inputSha256 = p.getProperty("input.sha256");
             int size = number(p, "input.size");
+            inputSize = size;
             if (original == null || size != original.length || size < 0x130f34 || size > 0x2000000
                     || !inputSha256.equals(HexFormat.of().formatHex(sha256(original)))
                     || !romCode(original, "BPRE") || original[Gen3Constants.romVersionOffset] != 0)
@@ -770,6 +778,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         OakOwnershipWitness candidate = OakOwnershipWitness.read(input, originalRom);
         validatePristineOakOwners(candidate);
         validateOakPool(candidate, pool);
+        if (evolutionOwnershipWitness != null) {
+            if (!evolutionOwnershipWitness.cfru78)
+                throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
+            validateEvolutionOakPair(evolutionOwnershipWitness, candidate);
+        }
         candidate.protectAllOwners(freedSpace);
         oakWitnessInput = originalRom;
         oakOwnershipWitness = candidate;
@@ -819,9 +832,15 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
                 throw evolutionOwnershipError("cannot read explicitly selected witness");
             }
-            validateEvolutionOwnership(candidate, true);
-            validatePristineEvolutionOwners(candidate);
-            evolutionOwnershipWitness = candidate;
+            installEvolutionWitness(candidate, null);
+        }
+        if (!evolutionOwnershipWitness.cfru78 && (oakOwnershipWitness != null
+                || !System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY, "").isBlank()))
+            throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
+        if (evolutionOwnershipWitness.cfru78) {
+            if (oakOwnershipWitness == null || oakWitnessInput != originalRom)
+                throw evolutionOwnershipError("matching Oak witness required");
+            validateEvolutionOakPair(evolutionOwnershipWitness, oakOwnershipWitness);
         }
         validateEvolutionOwnership(evolutionOwnershipWitness, true);
         validateCfruEvolutionMethods(prepareCfruDpeEvolutionRows());
@@ -829,10 +848,66 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     // Package-only seam for synthetic in-memory source tests; no public runtime bypass.
     void acceptSyntheticEvolutionWitness(Properties properties) {
-        EvolutionOwnershipWitness candidate = EvolutionOwnershipWitness.parse(properties);
+        installEvolutionWitness(EvolutionOwnershipWitness.parse(properties), null);
+    }
+
+    // The streams in this package-only seam are synthetic test data, never an attestation.
+    void acceptSyntheticEvolutionWitness(Properties properties, InputStream oakInput) {
+        installEvolutionWitness(EvolutionOwnershipWitness.parse(properties), oakInput);
+    }
+
+    private void installEvolutionWitness(EvolutionOwnershipWitness candidate, InputStream syntheticOak) {
         validateEvolutionOwnership(candidate, true);
         validatePristineEvolutionOwners(candidate);
+        OakOwnershipWitness oak = oakOwnershipWitness;
+        if (candidate.cfru78) {
+            if (oak == null) {
+                if (!useCfruDpeGen9SpeciesCount || romEntry == null || !isRomHack
+                        || !"BPRE".equals(romEntry.getRomCode()) || romEntry.getVersion() != 0
+                        || romEntry.getRomType() != Gen3Constants.RomType_FRLG
+                        || romEntry.getIntValue("PokemonCount") != CFRU_DPE_SPECIES_COUNT)
+                    throw OakOwnershipWitness.error("selected profile mismatch");
+                if (syntheticOak != null) oak = OakOwnershipWitness.read(syntheticOak, originalRom);
+                else {
+                    String path = System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY);
+                    if (path == null || path.isBlank()) throw OakOwnershipWitness.error("explicit independent witness required");
+                    try (InputStream input = Files.newInputStream(Path.of(path))) {
+                        oak = OakOwnershipWitness.read(input, originalRom);
+                    } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
+                        throw OakOwnershipWitness.error("cannot read explicitly selected witness");
+                    }
+                }
+            } else if (oakWitnessInput != originalRom) throw OakOwnershipWitness.error("input changed after preflight");
+            validatePristineOakOwners(oak);
+            validateEvolutionOakPair(candidate, oak);
+            if (oakOwnershipWitness == null) {
+                oak.protectAllOwners(freedSpace);
+                oakWitnessInput = originalRom;
+                oakOwnershipWitness = oak;
+            }
+        } else if (oak != null || syntheticOak != null
+                || !System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY, "").isBlank()) {
+            throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
+        }
         evolutionOwnershipWitness = candidate;
+    }
+
+    private static void validateEvolutionOakPair(EvolutionOwnershipWitness evolution, OakOwnershipWitness oak) {
+        if (evolution.inputSize != oak.inputSize || !evolution.inputSha256.equals(oak.inputSha256)
+                || !evolution.buildId.equals(oak.buildId) || !evolution.configId.equals(oak.configId)
+                || !evolution.configSha256.equals(oak.configSha256))
+            throw evolutionOwnershipError("evolution and Oak identity mismatch");
+        for (EvolutionOwner owner : oak.protectedOwners) {
+            if (owner.type.endsWith("_CODE") && ((owner.start | owner.end) & 1) != 0)
+                throw evolutionOwnershipError("unaligned Oak code owner");
+        }
+        List<EvolutionOwner> shared = new ArrayList<>(evolution.protectedOwners);
+        shared.add(evolution.consumer); shared.add(evolution.table);
+        shared.add(new EvolutionOwner("EVOLUTION_RECORD", evolution.recordOffset, evolution.recordOffset + 32));
+        for (EvolutionOwner owner : shared) {
+            if (oak.protectedOwners.stream().filter(o -> o.equals(owner)).count() != 1)
+                throw evolutionOwnershipError("evolution and Oak owner extents mismatch");
+        }
     }
 
     private void validatePristineEvolutionOwners(EvolutionOwnershipWitness w) {
