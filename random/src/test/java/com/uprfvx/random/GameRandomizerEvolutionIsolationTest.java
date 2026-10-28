@@ -92,7 +92,7 @@ class GameRandomizerEvolutionIsolationTest {
         return new GameRandomizer(settings, null, f, bundle, false);
     }
 
-    private static void bindJointWitness(EarlyGateFixture f) throws Exception {
+    private static Properties bindJointWitness(EarlyGateFixture f) throws Exception {
         byte[] memory=f.memory;int record=0x48200;
         memory[0xAC]='B';memory[0xAD]='P';memory[0xAE]='R';memory[0xAF]='E';
         memory[0x42EC4]=0;memory[0x42EC5]=0x4B;memory[0x42EC6]=0x18;memory[0x42EC7]=0x47;
@@ -125,6 +125,39 @@ class GameRandomizerEvolutionIsolationTest {
         f.setField("originalRom",memory.clone());f.loadEvolutions();
         var bind=com.uprfvx.romio.romhandlers.Gen3RomHandler.class.getDeclaredMethod("acceptSyntheticEvolutionWitness",Properties.class);
         bind.setAccessible(true);bind.invoke(f,witness);
+        return witness;
+    }
+
+    @Test
+    void declared78MissingOakFailsBeforeRandomizerMutationWithIntroOnAndOff() throws Exception {
+        String oldEvolution=System.getProperty("uprfvx.cfruEvolutionOwnership");
+        String oldOak=System.getProperty("uprfvx.cfruOakOwnership");
+        Path witnessFile=Files.createTempFile("synthetic-evolution-78-", ".properties");
+        try {
+            System.clearProperty("uprfvx.cfruOakOwnership");
+            for(boolean introOn:new boolean[]{false,true}) {
+                var f=new EarlyGateFixture();f.populateExactSource();Properties witness=bindJointWitness(f);
+                f.setField("evolutionOwnershipWitness",null);
+                witness.setProperty("schema","EVOLUTION_OWNERSHIP_WITNESS_CFRU78_V1");
+                witness.setProperty("cfru.sha","196058edbc2b8b7d8c725b715b1f967ba60f5c83");
+                try(var out=Files.newOutputStream(witnessFile)) { witness.store(out,null); }
+                System.setProperty("uprfvx.cfruEvolutionOwnership",witnessFile.toString());
+                f.rejectRestrictions=true;
+                var settings=new Settings();settings.setMakeEvolutionsEasier(true);settings.setMakeEvolutionsEasierLvl(40);
+                settings.setRandomizeIntroMon(introOn);settings.setUpdateBaseStats(true);
+                settings.setBaseStatisticsMod(Settings.BaseStatisticsMod.RANDOM);
+                byte[] before=f.memory.clone();
+                var result=randomizer(f,settings).randomize("UNUSED_SYNTHETIC_OUTPUT",new PrintStream(OutputStream.nullOutputStream()),726);
+                assertFalse(result.wasSaveSuccessful());assertInstanceOf(RomIOException.class,result.getException());
+                assertTrue(result.getException().getMessage().contains("Oak"));assertEquals(0,f.restrictions);
+                assertEquals(0,f.standaloneCaps);assertEquals(0,f.standaloneEasier);
+                assertEquals(50,f.species[1].getHp());assertArrayEquals(before,f.memory);
+            }
+        } finally {
+            Files.deleteIfExists(witnessFile);
+            if(oldEvolution==null)System.clearProperty("uprfvx.cfruEvolutionOwnership");else System.setProperty("uprfvx.cfruEvolutionOwnership",oldEvolution);
+            if(oldOak==null)System.clearProperty("uprfvx.cfruOakOwnership");else System.setProperty("uprfvx.cfruOakOwnership",oldOak);
+        }
     }
 
     @Test
