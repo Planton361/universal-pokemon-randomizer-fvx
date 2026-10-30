@@ -211,6 +211,13 @@ public class GameRandomizer {
             final long startTime = System.currentTimeMillis();
             randomSource.seed(seed);
 
+            if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()
+                    && (settings.getMovesetsMod() != Settings.MovesetsMod.UNCHANGED
+                        || settings.isReorderDamagingMoves())) {
+                throw new RandomizationException("CFRU/DPE level-up learnset changes are unavailable: "
+                        + "select Unchanged, disable Reorder Damaging Moves, and do not use Metronome Only.");
+            }
+
             if (settings.isRandomizeIntroMon() && romHandler instanceof Gen3RomHandler gen3
                     && gen3.usesCfruDpeRandomPoolPolicy()) {
                 gen3.preflightCfruDpeOakIntro(() -> oakIntroPool(gen3));
