@@ -6543,8 +6543,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 	@Override
 	public void setMovesLearnt(Map<Integer, List<MoveLearnt>> movesets) {
         if (shouldUseCfruDpeLevelUpLearnsets(useCfruDpeGen9SpeciesCount, jamboMovesetHack)) {
-            setCfruDpeMovesLearnt(movesets);
-            return;
+            throw new RomIOException("CFRU/DPE level-up learnset writes are unavailable without a verified allocator; "
+                    + "keep movesets unchanged and disable Reorder Damaging Moves.");
         }
 
 		int baseOffset = romEntry.getIntValue("PokemonMovesets");
