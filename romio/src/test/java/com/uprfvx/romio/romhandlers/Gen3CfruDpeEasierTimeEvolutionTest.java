@@ -470,8 +470,10 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
     }
 
     @Test void oakPreflightRejectsMissingStaleAndActiveCollisionBeforeAnyMutation() throws Exception {
+        // Without a witness only the structural intro layout is checked; a damaged layout still rejects.
         var fixture=new OakFixture();var missing=oakHandler(fixture);byte[] before=missing.rom.clone();
-        assertThrows(RomIOException.class,missing::preflightCfruDpeOakIntro);assertArrayEquals(before,missing.rom);
+        missing.rom[OakFixture.D]^=1;missing.originalRom[OakFixture.D]^=1;byte[] damaged=missing.rom.clone();
+        assertThrows(RomIOException.class,missing::preflightCfruDpeOakIntro);assertArrayEquals(damaged,missing.rom);
         var stale=oakHandler(fixture);stale.rom[OakFixture.SC]^=1;byte[] staleBefore=stale.rom.clone();
         assertThrows(RomIOException.class,()->installSyntheticOak(stale,fixture));assertArrayEquals(staleBefore,stale.rom);
         var active=oakHandler(fixture);active.getFreedSpace().free(OakFixture.SC,64);
@@ -515,6 +517,94 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
         }
         var missing=oakHandler(new OakFixture());byte[] before=missing.rom.clone();
         assertThrows(RomIOException.class,()->missing.setIntroPokemon(oakSpecies(29)));assertArrayEquals(before,missing.rom);
+    }
+
+    private interface OakCheck { void run() throws Exception; }
+    private static void withoutOakWitness(OakCheck check) throws Exception {
+        String prior=System.getProperty("uprfvx.cfruOakOwnership");System.clearProperty("uprfvx.cfruOakOwnership");
+        try {check.run();}
+        finally {if(prior!=null) System.setProperty("uprfvx.cfruOakOwnership",prior);}
+    }
+
+    @Test void structuralIntroWithoutWitnessWritesOnlySelectorDeterministically() throws Exception {
+        withoutOakWitness(()->{
+            byte[][] outputs=new byte[2][];
+            for(int run=0;run<2;run++) {
+                var h=oakHandler(new OakFixture());byte[] pristine=h.rom.clone();
+                h.preflightCfruDpeOakIntro(()->List.of(oakSpecies(1439)));h.preflightCfruDpeOakIntro();
+                assertArrayEquals(pristine,h.rom);
+                var witness=Gen3RomHandler.class.getDeclaredField("oakOwnershipWitness");witness.setAccessible(true);
+                assertNull(witness.get(h),"structural layout must not become an ownership witness");
+                for(int at:new int[]{OakFixture.D,OakFixture.B,OakFixture.SB,OakFixture.SC,OakFixture.CB,OakFixture.CC,0x130f2c,0x12fa78})
+                    assertThrows(IllegalStateException.class,()->h.getFreedSpace().free(at,1),"owner "+at);
+                for(int id:new int[]{277,413,1439,29}) {
+                    byte[] expected=h.rom.clone();expected[OakFixture.D+92]=(byte)id;expected[OakFixture.D+93]=(byte)(id>>>8);
+                    assertTrue(h.setIntroPokemon(oakSpecies(id)));assertArrayEquals(expected,h.rom,"id "+id);
+                }
+                for(int id:new int[]{0,252,385,410,1440,65535}) {
+                    byte[] before=h.rom.clone();assertFalse(h.setIntroPokemon(oakSpecies(id)));assertArrayEquals(before,h.rom);
+                }
+                assertTrue(h.setIntroPokemon(oakSpecies(1439)));
+                byte[] expected=pristine.clone();expected[OakFixture.D+92]=(byte)1439;expected[OakFixture.D+93]=(byte)(1439>>>8);
+                assertArrayEquals(expected,h.rom);outputs[run]=h.rom.clone();
+            }
+            assertArrayEquals(outputs[0],outputs[1]);
+        });
+    }
+
+    @Test void structuralIntroRejectsInvalidLayoutBeforeAnyMutationOrProtection() throws Exception {
+        withoutOakWitness(()->{
+            for(int mode=0;mode<11;mode++) {
+                var f=new OakFixture();
+                switch(mode) {
+                    case 0 -> f.memory[OakFixture.D]^=1;                       // descriptor magic
+                    case 1 -> f.memory[OakFixture.D+12]^=1;                    // descriptor ABI field
+                    case 2 -> f.memory[OakFixture.D+92]=30;                    // selector not at native default
+                    case 3 -> f.memory[OakFixture.B]^=1;                       // eligibility bitmap
+                    case 4 -> f.memory[OakFixture.SB]^=1;                      // bridge instructions
+                    case 5 -> f.put32(OakFixture.CB+20,0x08190000);            // cry bridge bound to another descriptor
+                    case 6 -> f.memory[0x130f2c]^=1;                           // sprite hook
+                    case 7 -> f.put32(0x12fa78+16,0x09ffff01);                 // hook target outside input
+                    case 8 -> System.arraycopy(f.memory,OakFixture.D,f.memory,0x190000,8); // ambiguous descriptor
+                    case 9 -> f.put32(0x130,0x08000000+OakFixture.D);          // palette table overlaps descriptor
+                    case 10 -> f.memory[0x40000]=0x11;                         // consumed front asset header
+                }
+                var h=oakHandler(f);byte[] before=h.rom.clone();String ledger=h.getFreedSpace().toString();
+                assertThrows(RomIOException.class,h::preflightCfruDpeOakIntro,"mode "+mode);
+                assertArrayEquals(before,h.rom,"mode "+mode);assertEquals(ledger,h.getFreedSpace().toString(),"mode "+mode);
+                assertThrows(RomIOException.class,()->h.setIntroPokemon(oakSpecies(277)),"mode "+mode);
+                assertArrayEquals(before,h.rom,"mode "+mode);
+            }
+            var profile=oakHandler(new OakFixture());
+            var hack=Gen3RomHandler.class.getDeclaredField("isRomHack");hack.setAccessible(true);hack.set(profile,false);
+            byte[] before=profile.rom.clone();
+            assertThrows(RomIOException.class,profile::preflightCfruDpeOakIntro);assertArrayEquals(before,profile.rom);
+            var empty=oakHandler(new OakFixture());String ledger=empty.getFreedSpace().toString();
+            assertThrows(RomIOException.class,()->empty.preflightCfruDpeOakIntro(()->List.of(oakSpecies(252))));
+            assertEquals(ledger,empty.getFreedSpace().toString());
+        });
+    }
+
+    @Test void structuralIntroStaleObjectsAndWriteFaultsRollBack() throws Exception {
+        withoutOakWitness(()->{
+            for(int fault=1;fault<=3;fault++) {
+                var h=oakHandler(new OakFixture());h.preflightCfruDpeOakIntro();byte[] before=h.rom.clone();h.fault=fault;
+                assertThrows(RomIOException.class,()->h.setIntroPokemon(oakSpecies(1439)));assertArrayEquals(before,h.rom);
+                h.fault=0;assertTrue(h.setIntroPokemon(oakSpecies(1439)));
+            }
+            for(int offset:new int[]{OakFixture.B,OakFixture.SB,OakFixture.SC,OakFixture.CB,OakFixture.CC,
+                    0x130f2c,0x12fa78,0x128,0x12c,0x130,0x134,OakFixture.D+94,OakFixture.D+92}) {
+                var h=oakHandler(new OakFixture());h.preflightCfruDpeOakIntro();h.rom[offset]^=1;byte[] before=h.rom.clone();
+                assertThrows(RomIOException.class,()->h.setIntroPokemon(oakSpecies(277)),"offset "+offset);
+                assertArrayEquals(before,h.rom);
+                assertThrows(RomIOException.class,h::preflightCfruDpeOakIntro,"offset "+offset);
+            }
+            var vanilla=oakHandler(new OakFixture());
+            var cfru=Gen3RomHandler.class.getDeclaredField("useCfruDpeGen9SpeciesCount");cfru.setAccessible(true);cfru.set(vanilla,false);
+            vanilla.rom[OakFixture.D]^=1;byte[] before=vanilla.rom.clone();String ledger=vanilla.getFreedSpace().toString();
+            vanilla.preflightCfruDpeOakIntro();
+            assertArrayEquals(before,vanilla.rom);assertEquals(ledger,vanilla.getFreedSpace().toString());
+        });
     }
 
     @Test void emptyRestrictedPoolFailsBeforeOwnershipRegistration() throws Exception {

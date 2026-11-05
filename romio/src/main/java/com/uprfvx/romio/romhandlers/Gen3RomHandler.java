@@ -715,12 +715,23 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
 
         private void validateBytes(byte[] b, List<EvolutionOwner> envelopes) {
-            int d = descriptor.start;
+            validateOakObjects(b, descriptor.start, bitmap.start, spriteBridge.start, spriteConsumer.start,
+                    cryBridge.start, cryConsumer.start);
+            byte[] magic = "CFROAK01".getBytes(StandardCharsets.US_ASCII);
+            int matches = 0;
+            for (EvolutionOwner e : envelopes) for (int i = e.start; i <= e.end - 8; i++)
+                if (Arrays.equals(b, i, i + 8, magic, 0, 8)) matches++;
+            if (matches != 1) throw error("ambiguous descriptor");
+        }
+
+        // #78 Oak ABI bytes of the descriptor, bitmap and both bridges; callers bound-check the extents.
+        private static void validateOakObjects(byte[] b, int d, int bitmap, int spriteBridge, int spriteConsumer,
+                                               int cryBridge, int cryConsumer) {
             byte[] magic = "CFROAK01".getBytes(StandardCharsets.US_ASCII);
             if (!Arrays.equals(b, d, d + 8, magic, 0, 8) || pointer(b, d + 8, false) != d
-                    || pointer(b, d + 28, false) != bitmap.start || pointer(b, d + 36, true) != spriteBridge.start
-                    || pointer(b, d + 40, true) != spriteConsumer.start || pointer(b, d + 44, true) != cryBridge.start
-                    || pointer(b, d + 48, true) != cryConsumer.start
+                    || pointer(b, d + 28, false) != bitmap || pointer(b, d + 36, true) != spriteBridge
+                    || pointer(b, d + 40, true) != spriteConsumer || pointer(b, d + 44, true) != cryBridge
+                    || pointer(b, d + 48, true) != cryConsumer
                     || IOFunctions.readFullInt(b, d + 16) != 1 || IOFunctions.readFullInt(b, d + 52) != 0x08000128
                     || IOFunctions.readFullInt(b, d + 56) != 0x08000130) throw error("descriptor identity/pointers mismatch");
             int[] offsets = {12,14,20,22,24,26,32,34,60,62,64,66,68,70,92,94};
@@ -728,25 +739,123 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             for (int i = 0; i < offsets.length; i++)
                 if (IOFunctions.read2ByteInt(b, d + offsets[i]) != values[i]) throw error("descriptor field mismatch");
             for (int i = 72; i < 92; i++) if (b[d + i] != 0) throw error("descriptor reserved bytes");
-            if (!BITMAP_SHA.equals(HexFormat.of().formatHex(sha256(Arrays.copyOfRange(b, bitmap.start, bitmap.end)))))
+            if (!BITMAP_SHA.equals(HexFormat.of().formatHex(sha256(Arrays.copyOfRange(b, bitmap, bitmap + 180)))))
                 throw error("bitmap mismatch");
             int[] op = {0xb510,0x4904,0x4b04,0xf000,0xf803,0xbc10,0xbc01,0x4700,0x4718,0x46c0};
-            for (EvolutionOwner bridge : List.of(spriteBridge, cryBridge)) {
-                EvolutionOwner consumer = bridge == spriteBridge ? spriteConsumer : cryConsumer;
+            for (int bridge : new int[]{spriteBridge, cryBridge}) {
+                int consumer = bridge == spriteBridge ? spriteConsumer : cryConsumer;
                 for (int i = 0; i < op.length; i++)
-                    if (IOFunctions.read2ByteInt(b, bridge.start + 2*i) != op[i]) throw error("bridge instructions mismatch");
-                if (pointer(b, bridge.start + 20, false) != d || pointer(b, bridge.start + 24, true) != consumer.start)
+                    if (IOFunctions.read2ByteInt(b, bridge + 2*i) != op[i]) throw error("bridge instructions mismatch");
+                if (pointer(b, bridge + 20, false) != d || pointer(b, bridge + 24, true) != consumer)
                     throw error("bridge binding mismatch");
             }
-            int matches = 0;
-            for (EvolutionOwner e : envelopes) for (int i = e.start; i <= e.end - 8; i++)
-                if (Arrays.equals(b, i, i + 8, magic, 0, 8)) matches++;
-            if (matches != 1) throw error("ambiguous descriptor");
+        }
+
+        // The objects the 2-byte selector write depends on; identical to the former inline write filter.
+        OakIntroLayout introLayout() {
+            Set<String> fixed = Set.of("SPRITE_HOOK", "CRY_HOOK", "FRONT_ROOT", "BACK_ROOT", "PALETTE_ROOT", "SHINY_ROOT");
+            List<EvolutionOwner> immutable = allOwners.stream().filter(o -> o == bitmap || o == spriteBridge
+                    || o == spriteConsumer || o == cryBridge || o == cryConsumer || fixed.contains(o.type)).toList();
+            return new OakIntroLayout(descriptor.start, bitmap.start, immutable);
+        }
+    }
+
+    /**
+     * #78 Oak intro selector located from the loaded input alone: fixed sprite/cry
+     * hooks, their bridges and the single CFROAK01 descriptor they share. This is a
+     * structural intro-only check, NOT an ownership witness: it attests no build,
+     * provenance or owner for Evolution, Pickup, learnsets or any other writer.
+     */
+    record OakIntroLayout(int descriptor, int bitmap, List<EvolutionOwner> immutable) {
+        private static final int SPRITE_HOOK = 0x130f2c, CRY_HOOK = 0x12fa78, HOOK_SIZE = 20;
+
+        private static RomIOException error(String reason) {
+            return new RomIOException("Oak #78 intro layout: " + reason);
+        }
+
+        private static int object(byte[] b, int at, boolean thumb, int length) {
+            int start = OakOwnershipWitness.pointer(b, at, thumb);
+            if ((long) start + length > b.length) throw error("object exceeds input");
+            return start;
+        }
+
+        static OakIntroLayout read(byte[] b) {
+            if (b == null || b.length < SPRITE_HOOK + HOOK_SIZE || b.length > 0x2000000
+                    || !romCode(b, "BPRE") || b[Gen3Constants.romVersionOffset] != 0)
+                throw error("input profile mismatch");
+            try {
+                int sb = object(b, SPRITE_HOOK + 16, true, 28), cb = object(b, CRY_HOOK + 16, true, 28);
+                EvolutionOwner sh = new EvolutionOwner("SPRITE_HOOK", SPRITE_HOOK, SPRITE_HOOK + HOOK_SIZE);
+                EvolutionOwner ch = new EvolutionOwner("CRY_HOOK", CRY_HOOK, CRY_HOOK + HOOK_SIZE);
+                OakOwnershipWitness.validateHook(b, sh, new EvolutionOwner("SPRITE_BRIDGE", sb, sb + 28));
+                OakOwnershipWitness.validateHook(b, ch, new EvolutionOwner("CRY_BRIDGE", cb, cb + 28));
+                int d = object(b, sb + 20, false, 96);
+                int bitmap = object(b, d + 28, false, 180);
+                int sc = object(b, d + 40, true, 2), cc = object(b, d + 48, true, 2);
+                OakOwnershipWitness.validateOakObjects(b, d, bitmap, sb, sc, cb, cc);
+                byte[] magic = "CFROAK01".getBytes(StandardCharsets.US_ASCII);
+                int matches = 0;
+                for (int i = 0; i <= b.length - 8; i++)
+                    if (b[i] == magic[0] && Arrays.equals(b, i, i + 8, magic, 0, 8)) matches++;
+                if (matches != 1) throw error("ambiguous descriptor");
+
+                int front = object(b, 0x128, false, CFRU_DPE_SPECIES_COUNT * 8);
+                int palette = object(b, 0x130, false, CFRU_DPE_SPECIES_COUNT * 8);
+                List<EvolutionOwner> oak = List.of(new EvolutionOwner("DESCRIPTOR", d, d + 96),
+                        new EvolutionOwner("BITMAP", bitmap, bitmap + 180), new EvolutionOwner("SPRITE_BRIDGE", sb, sb + 28),
+                        new EvolutionOwner("SPRITE_CONSUMER", sc, sc + 2), new EvolutionOwner("CRY_BRIDGE", cb, cb + 28),
+                        new EvolutionOwner("CRY_CONSUMER", cc, cc + 2), sh, ch);
+                List<EvolutionOwner> all = new ArrayList<>(oak);
+                all.add(new EvolutionOwner("HEADER", 0xa0, 0xc0));
+                all.add(new EvolutionOwner("FRONT_ROOT", 0x128, 0x12c));
+                all.add(new EvolutionOwner("BACK_ROOT", 0x12c, 0x130));
+                all.add(new EvolutionOwner("PALETTE_ROOT", 0x130, 0x134));
+                all.add(new EvolutionOwner("SHINY_ROOT", 0x134, 0x138));
+                all.add(new EvolutionOwner("EVOLUTION_HOOK", CFRU_EVOLUTION_HOOK, CFRU_EVOLUTION_HOOK + 8));
+                all.add(new EvolutionOwner("EVOLUTION_ROOT", CFRU_EVOLUTION_TABLE_POINTER, CFRU_EVOLUTION_TABLE_POINTER + 4));
+                all.add(new EvolutionOwner("LEARNSET_RUNTIME_ROOT", CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION,
+                        CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION + 4));
+                all.add(new EvolutionOwner("LEARNSET_FALLBACK_ROOT", CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION,
+                        CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION + 4));
+                for (int at : CFRU_PICKUP_REPOINTS) all.add(new EvolutionOwner("PICKUP_ROOT", at, at + 4));
+                all.add(new EvolutionOwner("FRONT_TABLE", front, front + CFRU_DPE_SPECIES_COUNT * 8));
+                all.add(new EvolutionOwner("PALETTE_TABLE", palette, palette + CFRU_DPE_SPECIES_COUNT * 8));
+                for (int i = 0; i < all.size(); i++) for (int j = 0; j < i; j++)
+                    if (all.get(i).overlaps(all.get(j))) throw error("overlapping Oak objects or native roots");
+
+                // The consumers read only the front and normal palette rows (descriptor +52/+56).
+                EvolutionOwner input = new EvolutionOwner("INPUT", 0, b.length);
+                for (int id = 1; id < CFRU_DPE_SPECIES_COUNT; id++) {
+                    if ((b[bitmap + (id >> 3)] & (1 << (id & 7))) == 0) continue;
+                    for (int table : new int[]{front, palette}) {
+                        int at = table + id * 8;
+                        if (IOFunctions.readFullInt(b, at) == 0) continue;
+                        int size = table == front ? IOFunctions.read2ByteInt(b, at + 4) : 32;
+                        OakOwnershipWitness.validateCompressedAsset(b, input, OakOwnershipWitness.pointer(b, at, false), size);
+                    }
+                }
+                List<EvolutionOwner> immutable = new ArrayList<>(oak.subList(1, oak.size()));
+                immutable.addAll(all.subList(oak.size() + 1, oak.size() + 5));
+                return new OakIntroLayout(d, bitmap, List.copyOf(immutable));
+            } catch (RomIOException e) {
+                throw e.getMessage().startsWith("Oak #78 intro layout") ? e : error("structure mismatch (" + e.getMessage() + ")");
+            }
+        }
+
+        // Allocator exclusion for the Oak objects and hooks only; native tables keep their own owners.
+        List<FreedSpace.ProtectedRange> protectedRanges() {
+            List<FreedSpace.ProtectedRange> ranges = new ArrayList<>();
+            ranges.add(new FreedSpace.ProtectedRange("DESCRIPTOR", descriptor, descriptor + 96));
+            for (EvolutionOwner o : immutable) if (!o.type.endsWith("_ROOT"))
+                ranges.add(new FreedSpace.ProtectedRange(o.type, o.start, o.end));
+            return ranges;
         }
     }
 
     private static final String CFRU_OAK_OWNERSHIP_PROPERTY = "uprfvx.cfruOakOwnership";
     private OakOwnershipWitness oakOwnershipWitness;
+    // Intro-only structural binding when no witness is supplied; never consulted by other writers.
+    private OakIntroLayout oakIntroLayout;
     private byte[] oakWitnessInput;
     private int oakSelectedSpecies = 29;
 
@@ -758,11 +867,14 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (oakOwnershipWitness != null) {
             if (oakWitnessInput != originalRom) throw OakOwnershipWitness.error("input changed after preflight");
             validatePristineOakOwners(oakOwnershipWitness);
-            validateOakPool(oakOwnershipWitness, pool);
+            validateOakPool(oakOwnershipWitness.bitmap.start, pool);
             return;
         }
         String path = System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY);
-        if (path == null || path.isBlank()) throw OakOwnershipWitness.error("explicit independent witness required");
+        if (path == null || path.isBlank()) {
+            installOakIntroLayout(pool);
+            return;
+        }
         try (InputStream input = Files.newInputStream(Path.of(path))) {
             installOakWitness(input, pool);
         } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
@@ -770,14 +882,46 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
     }
 
+    private boolean isSelectedOakProfile() {
+        return useCfruDpeGen9SpeciesCount && romEntry != null && isRomHack
+                && "BPRE".equals(romEntry.getRomCode()) && romEntry.getVersion() == 0
+                && romEntry.getRomType() == Gen3Constants.RomType_FRLG && romEntry.getIntValue("PokemonCount") == 1440;
+    }
+
+    private void installOakIntroLayout(java.util.function.Supplier<? extends Collection<Species>> pool) {
+        if (oakIntroLayout != null) {
+            if (oakWitnessInput != originalRom) throw OakIntroLayout.error("input changed after preflight");
+            validatePristineOakLayout(oakIntroLayout);
+            validateOakPool(oakIntroLayout.bitmap(), pool);
+            return;
+        }
+        if (!isSelectedOakProfile()) throw OakIntroLayout.error("selected profile mismatch");
+        if (evolutionOwnershipWitness != null && !evolutionOwnershipWitness.cfru78)
+            throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
+        OakIntroLayout candidate = OakIntroLayout.read(originalRom);
+        validatePristineOakLayout(candidate);
+        validateOakPool(candidate.bitmap(), pool);
+        freedSpace.protectRanges(candidate.protectedRanges());
+        oakWitnessInput = originalRom;
+        oakIntroLayout = candidate;
+    }
+
+    private void validatePristineOakLayout(OakIntroLayout layout) {
+        if (originalRom == null || rom == null || originalRom.length != rom.length)
+            throw OakIntroLayout.error("input identity changed");
+        int d = layout.descriptor();
+        if (!Arrays.equals(originalRom, d, d + 96, rom, d, d + 96))
+            throw OakIntroLayout.error("descriptor changed before preflight");
+        for (EvolutionOwner owner : layout.immutable())
+            if (!Arrays.equals(originalRom, owner.start, owner.end, rom, owner.start, owner.end))
+                throw OakIntroLayout.error("Oak object changed before preflight");
+    }
+
     private void installOakWitness(InputStream input, java.util.function.Supplier<? extends Collection<Species>> pool) {
-        if (!useCfruDpeGen9SpeciesCount || romEntry == null || !isRomHack
-                || !"BPRE".equals(romEntry.getRomCode()) || romEntry.getVersion() != 0
-                || romEntry.getRomType() != Gen3Constants.RomType_FRLG || romEntry.getIntValue("PokemonCount") != 1440)
-            throw OakOwnershipWitness.error("selected profile mismatch");
+        if (!isSelectedOakProfile()) throw OakOwnershipWitness.error("selected profile mismatch");
         OakOwnershipWitness candidate = OakOwnershipWitness.read(input, originalRom);
         validatePristineOakOwners(candidate);
-        validateOakPool(candidate, pool);
+        validateOakPool(candidate.bitmap.start, pool);
         if (evolutionOwnershipWitness != null) {
             if (!evolutionOwnershipWitness.cfru78)
                 throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
@@ -788,18 +932,18 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         oakOwnershipWitness = candidate;
     }
 
-    private void validateOakPool(OakOwnershipWitness witness, java.util.function.Supplier<? extends Collection<Species>> pool) {
+    private void validateOakPool(int bitmap, java.util.function.Supplier<? extends Collection<Species>> pool) {
         if (pool == null) return;
         Collection<Species> candidates = pool.get();
-        if (candidates == null || candidates.stream().noneMatch(species -> oakEligible(witness, species)))
+        if (candidates == null || candidates.stream().noneMatch(species -> oakEligible(bitmap, species)))
             throw OakOwnershipWitness.error("no eligible intro species in restricted pool");
     }
 
-    private boolean oakEligible(OakOwnershipWitness witness, Species species) {
+    private boolean oakEligible(int bitmap, Species species) {
         if (species == null || originalRom == null) return false;
         int id = species.getSpeciesSetIdentityNumber();
         return id > 0 && id < CFRU_DPE_SPECIES_COUNT
-                && (originalRom[witness.bitmap.start + (id >> 3)] & (1 << (id & 7))) != 0;
+                && (originalRom[bitmap + (id >> 3)] & (1 << (id & 7))) != 0;
     }
 
     private void validatePristineOakOwners(OakOwnershipWitness witness) {
@@ -1268,7 +1412,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     @Override
     public void midLoadingSetUp() {
         freedSpace = new FreedSpace();
-        oakOwnershipWitness = null; oakWitnessInput = null; oakSelectedSpecies = 29;
+        oakOwnershipWitness = null; oakIntroLayout = null; oakWitnessInput = null; oakSelectedSpecies = 29;
         super.midLoadingSetUp();
         evolutionOwnershipWitness = null;
         cfruEvolutionEasierApplied = false;
@@ -10579,21 +10723,19 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private boolean setCfruDpeOakIntro(Species species) {
-        if (oakOwnershipWitness == null || oakWitnessInput != originalRom)
-            throw OakOwnershipWitness.error("preflight required before selector write");
         OakOwnershipWitness w = oakOwnershipWitness;
-        if (!oakEligible(w, species)) return false;
+        OakIntroLayout layout = w != null ? w.introLayout() : oakIntroLayout;
+        if (layout == null || oakWitnessInput != originalRom)
+            throw OakOwnershipWitness.error("preflight required before selector write");
+        if (!oakEligible(layout.bitmap(), species)) return false;
         if (rom == null || originalRom == null || rom.length != originalRom.length
-                || !w.inputSha256.equals(HexFormat.of().formatHex(sha256(originalRom))))
+                || (w != null && !w.inputSha256.equals(HexFormat.of().formatHex(sha256(originalRom)))))
             throw OakOwnershipWitness.error("input identity changed");
-        for (EvolutionOwner o : w.allOwners) {
-            if (!(o == w.bitmap || o == w.spriteBridge || o == w.spriteConsumer || o == w.cryBridge || o == w.cryConsumer
-                    || Set.of("SPRITE_HOOK", "CRY_HOOK", "FRONT_ROOT", "BACK_ROOT", "PALETTE_ROOT", "SHINY_ROOT").contains(o.type)))
-                continue;
+        for (EvolutionOwner o : layout.immutable()) {
             if (!Arrays.equals(originalRom, o.start, o.end, rom, o.start, o.end))
                 throw OakOwnershipWitness.error("immutable Oak owner changed");
         }
-        int d = w.descriptor.start, selector = d + 92;
+        int d = layout.descriptor(), selector = d + 92;
         if (!Arrays.equals(originalRom, d, selector, rom, d, selector)
                 || !Arrays.equals(originalRom, d + 94, d + 96, rom, d + 94, d + 96)
                 || IOFunctions.read2ByteInt(rom, selector) != oakSelectedSpecies)
