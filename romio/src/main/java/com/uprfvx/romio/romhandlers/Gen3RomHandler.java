@@ -829,7 +829,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     if ((b[bitmap + (id >> 3)] & (1 << (id & 7))) == 0) continue;
                     for (int table : new int[]{front, palette}) {
                         int at = table + id * 8;
-                        if (IOFunctions.readFullInt(b, at) == 0) continue;
+                        if (IOFunctions.readFullInt(b, at) == 0) throw error("eligible species graphics row missing");
                         int size = table == front ? IOFunctions.read2ByteInt(b, at + 4) : 32;
                         OakOwnershipWitness.validateCompressedAsset(b, input, OakOwnershipWitness.pointer(b, at, false), size);
                     }
@@ -978,7 +978,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
             installEvolutionWitness(candidate, null);
         }
-        if (!evolutionOwnershipWitness.cfru78 && (oakOwnershipWitness != null
+        if (!evolutionOwnershipWitness.cfru78 && (oakOwnershipWitness != null || oakIntroLayout != null
                 || !System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY, "").isBlank()))
             throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
         if (evolutionOwnershipWitness.cfru78) {
@@ -1001,6 +1001,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     }
 
     private void installEvolutionWitness(EvolutionOwnershipWitness candidate, InputStream syntheticOak) {
+        // A structurally bound #78 Oak intro contradicts a #77 evolution witness; reject before any validation state.
+        if (!candidate.cfru78 && oakIntroLayout != null)
+            throw evolutionOwnershipError("conflicting declared Oak and evolution source revisions");
         validateEvolutionOwnership(candidate, true);
         validatePristineEvolutionOwners(candidate);
         OakOwnershipWitness oak = oakOwnershipWitness;

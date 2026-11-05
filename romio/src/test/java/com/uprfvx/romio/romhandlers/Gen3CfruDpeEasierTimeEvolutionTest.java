@@ -554,7 +554,7 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
 
     @Test void structuralIntroRejectsInvalidLayoutBeforeAnyMutationOrProtection() throws Exception {
         withoutOakWitness(()->{
-            for(int mode=0;mode<11;mode++) {
+            for(int mode=0;mode<13;mode++) {
                 var f=new OakFixture();
                 switch(mode) {
                     case 0 -> f.memory[OakFixture.D]^=1;                       // descriptor magic
@@ -568,6 +568,8 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
                     case 8 -> System.arraycopy(f.memory,OakFixture.D,f.memory,0x190000,8); // ambiguous descriptor
                     case 9 -> f.put32(0x130,0x08000000+OakFixture.D);          // palette table overlaps descriptor
                     case 10 -> f.memory[0x40000]=0x11;                         // consumed front asset header
+                    case 11 -> f.put32(OakFixture.FRONT+277*8,0);              // eligible species without front row
+                    case 12 -> f.put32(OakFixture.PALETTE+1439*8,0);           // eligible species without palette row
                 }
                 var h=oakHandler(f);byte[] before=h.rom.clone();String ledger=h.getFreedSpace().toString();
                 assertThrows(RomIOException.class,h::preflightCfruDpeOakIntro,"mode "+mode);
@@ -575,6 +577,8 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
                 assertThrows(RomIOException.class,()->h.setIntroPokemon(oakSpecies(277)),"mode "+mode);
                 assertArrayEquals(before,h.rom,"mode "+mode);
             }
+            var ineligible=new OakFixture();ineligible.put32(OakFixture.FRONT+252*8,0);ineligible.put32(OakFixture.PALETTE+252*8,0);
+            oakHandler(ineligible).preflightCfruDpeOakIntro();                    // empty rows outside the bitmap stay allowed
             var profile=oakHandler(new OakFixture());
             var hack=Gen3RomHandler.class.getDeclaredField("isRomHack");hack.setAccessible(true);hack.set(profile,false);
             byte[] before=profile.rom.clone();
@@ -604,6 +608,30 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
             vanilla.rom[OakFixture.D]^=1;byte[] before=vanilla.rom.clone();String ledger=vanilla.getFreedSpace().toString();
             vanilla.preflightCfruDpeOakIntro();
             assertArrayEquals(before,vanilla.rom);assertEquals(ledger,vanilla.getFreedSpace().toString());
+        });
+    }
+
+    @Test void structuralIntroAndLegacy77EvolutionWitnessRejectInBothOrders() throws Exception {
+        withoutOakWitness(()->{
+            var layout=Gen3RomHandler.class.getDeclaredField("oakIntroLayout");layout.setAccessible(true);
+            var evolution=Gen3RomHandler.class.getDeclaredField("evolutionOwnershipWitness");evolution.setAccessible(true);
+            for(boolean evolutionFirst:new boolean[]{true,false}) {
+                var f=new DualFixture();f.evolution.setProperty("schema","OWNERSHIP_WITNESS_V1");
+                f.evolution.setProperty("cfru.sha","e27e2113e4d59dc76cf5da8d4c43b067addae348");
+                if(evolutionFirst) f.handler.acceptSyntheticEvolutionWitness(f.evolution);
+                else {f.handler.preflightCfruDpeOakIntro();assertNotNull(layout.get(f.handler));}
+                byte[] before=f.bytes();String ledger=f.handler.getFreedSpace().toString();
+                org.junit.jupiter.api.function.Executable second=evolutionFirst?()->f.handler.preflightCfruDpeOakIntro()
+                        :()->f.handler.acceptSyntheticEvolutionWitness(f.evolution);
+                var failure=assertThrows(RomIOException.class,second,"evolutionFirst="+evolutionFirst);
+                assertTrue(failure.getMessage().contains("conflicting declared Oak"),failure.getMessage());
+                assertArrayEquals(before,f.oak.memory);assertEquals(ledger,f.handler.getFreedSpace().toString());
+                if(evolutionFirst) {
+                    assertNull(layout.get(f.handler));
+                    assertThrows(RomIOException.class,()->f.handler.setIntroPokemon(f.handler.species[277]));
+                } else assertNull(evolution.get(f.handler));
+                assertArrayEquals(before,f.oak.memory);
+            }
         });
     }
 
