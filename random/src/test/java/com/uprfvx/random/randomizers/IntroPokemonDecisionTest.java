@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class IntroPokemonDecisionTest {
 
     @Test
-    public void missingOakWitnessStopsFullRandomizerBeforeRestrictionsOrOtherMutations() throws Exception {
+    public void invalidOakLayoutWithoutWitnessStopsFullRandomizerBeforeRestrictionsOrOtherMutations() throws Exception {
         class Fixture extends com.uprfvx.romio.romhandlers.CfruDpeEvolutionFixture {
             boolean watching; int restrictionsAccess;
             Fixture() throws Exception {super();}
@@ -51,7 +51,7 @@ public class IntroPokemonDecisionTest {
         byte[] before=f.memory.clone();f.watching=true;
         var result=randomizer.randomize("synthetic-unused",new java.io.PrintStream(java.io.OutputStream.nullOutputStream()),1234);
         assertFalse(result.wasSaveSuccessful());
-        assertEquals(0,f.restrictionsAccess);assertTrue(result.getException().getMessage().contains("explicit independent witness"));
+        assertEquals(0,f.restrictionsAccess);assertTrue(result.getException().getMessage().contains("Oak #78 intro layout"));
         org.junit.jupiter.api.Assertions.assertArrayEquals(before,f.memory);
     }
 
