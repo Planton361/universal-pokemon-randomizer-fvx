@@ -762,7 +762,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     /**
      * #78 Oak intro selector located from the loaded input alone: fixed sprite/cry
-     * hooks, their bridges and the single CFROAK01 descriptor they share. This is a
+     * hooks, their bridges and the CFROAK01 descriptor both bridges bind. This is a
      * structural intro-only check, NOT an ownership witness: it attests no build,
      * provenance or owner for Evolution, Pickup, learnsets or any other writer.
      */
@@ -789,15 +789,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 EvolutionOwner ch = new EvolutionOwner("CRY_HOOK", CRY_HOOK, CRY_HOOK + HOOK_SIZE);
                 OakOwnershipWitness.validateHook(b, sh, new EvolutionOwner("SPRITE_BRIDGE", sb, sb + 28));
                 OakOwnershipWitness.validateHook(b, ch, new EvolutionOwner("CRY_BRIDGE", cb, cb + 28));
+                // The descriptor is the one both fixed-hook bridges bind; other CFROAK01 bytes
+                // (e.g. constant data in C code) are unreferenced and do not identify it.
                 int d = object(b, sb + 20, false, 96);
+                if (object(b, cb + 20, false, 96) != d) throw error("bridges bound to different descriptors");
                 int bitmap = object(b, d + 28, false, 180);
                 int sc = object(b, d + 40, true, 2), cc = object(b, d + 48, true, 2);
                 OakOwnershipWitness.validateOakObjects(b, d, bitmap, sb, sc, cb, cc);
-                byte[] magic = "CFROAK01".getBytes(StandardCharsets.US_ASCII);
-                int matches = 0;
-                for (int i = 0; i <= b.length - 8; i++)
-                    if (b[i] == magic[0] && Arrays.equals(b, i, i + 8, magic, 0, 8)) matches++;
-                if (matches != 1) throw error("ambiguous descriptor");
 
                 int front = object(b, 0x128, false, CFRU_DPE_SPECIES_COUNT * 8);
                 int palette = object(b, 0x130, false, CFRU_DPE_SPECIES_COUNT * 8);

@@ -554,7 +554,7 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
 
     @Test void structuralIntroRejectsInvalidLayoutBeforeAnyMutationOrProtection() throws Exception {
         withoutOakWitness(()->{
-            for(int mode=0;mode<13;mode++) {
+            for(int mode=0;mode<15;mode++) {
                 var f=new OakFixture();
                 switch(mode) {
                     case 0 -> f.memory[OakFixture.D]^=1;                       // descriptor magic
@@ -565,11 +565,15 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
                     case 5 -> f.put32(OakFixture.CB+20,0x08190000);            // cry bridge bound to another descriptor
                     case 6 -> f.memory[0x130f2c]^=1;                           // sprite hook
                     case 7 -> f.put32(0x12fa78+16,0x09ffff01);                 // hook target outside input
-                    case 8 -> System.arraycopy(f.memory,OakFixture.D,f.memory,0x190000,8); // ambiguous descriptor
+                    case 8 -> {System.arraycopy(f.memory,OakFixture.D,f.memory,0x190000,96);   // cry bridge bound to a
+                               f.put32(0x190008,0x08190000);f.put32(OakFixture.CB+20,0x08190000);} // valid-looking copy
                     case 9 -> f.put32(0x130,0x08000000+OakFixture.D);          // palette table overlaps descriptor
                     case 10 -> f.memory[0x40000]=0x11;                         // consumed front asset header
                     case 11 -> f.put32(OakFixture.FRONT+277*8,0);              // eligible species without front row
                     case 12 -> f.put32(OakFixture.PALETTE+1439*8,0);           // eligible species without palette row
+                    case 13 -> {f.bridge(0x180600,OakFixture.SC);f.hook(0x130f2c,0x180600);} // hook to undeclared bridge
+                    case 14 -> {System.arraycopy(f.memory,OakFixture.D,f.memory,0x190000,8);   // both bridges bound to
+                                f.put32(OakFixture.SB+20,0x08190000);f.put32(OakFixture.CB+20,0x08190000);} // a bare magic
                 }
                 var h=oakHandler(f);byte[] before=h.rom.clone();String ledger=h.getFreedSpace().toString();
                 assertThrows(RomIOException.class,h::preflightCfruDpeOakIntro,"mode "+mode);
@@ -586,6 +590,23 @@ class Gen3CfruDpeEasierTimeEvolutionTest {
             var empty=oakHandler(new OakFixture());String ledger=empty.getFreedSpace().toString();
             assertThrows(RomIOException.class,()->empty.preflightCfruDpeOakIntro(()->List.of(oakSpecies(252))));
             assertEquals(ledger,empty.getFreedSpace().toString());
+        });
+    }
+
+    @Test void structuralIntroIgnoresUnreferencedRawOakMagic() throws Exception {
+        withoutOakWitness(()->{
+            byte[] magic="CFROAK01".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            var f=new OakFixture();
+            System.arraycopy(magic,0,f.memory,0x34040,8);                     // const identity in C code (OTHER_CODE)
+            System.arraycopy(magic,0,f.memory,0x37040,8);                     // constant data (OTHER_DATA)
+            System.arraycopy(magic,0,f.memory,0x1ffff8,8);                    // unreferenced tail of the input
+            System.arraycopy(f.memory,OakFixture.D,f.memory,0x190000,96);     // complete unreferenced descriptor copy
+            var h=oakHandler(f);byte[] pristine=h.rom.clone();
+            h.preflightCfruDpeOakIntro(()->List.of(oakSpecies(277)));assertArrayEquals(pristine,h.rom);
+            assertThrows(IllegalStateException.class,()->h.getFreedSpace().free(OakFixture.D,1));
+            assertTrue(h.setIntroPokemon(oakSpecies(1439)));
+            byte[] expected=pristine.clone();expected[OakFixture.D+92]=(byte)1439;expected[OakFixture.D+93]=(byte)(1439>>>8);
+            assertArrayEquals(expected,h.rom);                                // only the hook-bound selector changed
         });
     }
 
