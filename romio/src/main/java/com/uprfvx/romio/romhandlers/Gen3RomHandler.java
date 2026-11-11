@@ -6789,6 +6789,184 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 + " brokenSharedPointerGroups=" + brokenSharedPointerGroups);
     }
 
+    // #753: with EXPAND_MOVESETS, CFRU links its own gLevelUpLearnsets (packed {u16 move, u8 level})
+    // into its insert (linker.ld ORIGIN 0x9000000, bounded by DPE's insert at 0x9600000), and
+    // repoints installs that table at 0x43E20. Reorder only permutes move fields of existing entries
+    // there: no allocation, no pointer, length, level or terminator change.
+    private static final int CFRU_INSERT_START = 0x1000000;
+    private static final int CFRU_INSERT_END = 0x1600000;
+
+    public boolean usesCfruDpeLevelUpLearnsets() {
+        return shouldUseCfruDpeLevelUpLearnsets(useCfruDpeGen9SpeciesCount, jamboMovesetHack);
+    }
+
+    /** Validates the active CFRU table before any randomizer step; mutates nothing. */
+    public void preflightCfruDpeLearnsetReorder() {
+        planCfruDpeLearnsetReorder(null);
+    }
+
+    /** Writes a reordering of the stored learnsets in place, atomically; anything else is rejected. */
+    public void reorderCfruDpeMovesLearntInPlace(Map<Integer, List<MoveLearnt>> movesets) {
+        if (movesets == null) {
+            throw learnsetReorderError("no movesets");
+        }
+        Map<Integer, byte[]> plan = planCfruDpeLearnsetReorder(movesets);
+        Map<Integer, byte[]> original = new LinkedHashMap<>();
+        for (Map.Entry<Integer, byte[]> write : plan.entrySet()) {
+            original.put(write.getKey(), Arrays.copyOfRange(rom, write.getKey(), write.getKey() + write.getValue().length));
+        }
+        try {
+            for (Map.Entry<Integer, byte[]> write : plan.entrySet()) {
+                byte[] bytes = write.getValue();
+                for (int i = 0; i < bytes.length; i += CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE) {
+                    if (readWord(bytes, i) != readWord(write.getKey() + i)) {
+                        writeWord(write.getKey() + i, readWord(bytes, i));
+                    }
+                }
+            }
+        } catch (RuntimeException | Error failure) {
+            original.forEach((at, bytes) -> System.arraycopy(bytes, 0, rom, at, bytes.length));
+            throw failure;
+        }
+    }
+
+    private static RomIOException learnsetReorderError(String reason) {
+        return new RomIOException("CFRU/DPE in-place learnset reorder rejected: " + reason);
+    }
+
+    /** Blob start -> its new bytes, for changed blobs only; validates every native slot first. */
+    private Map<Integer, byte[]> planCfruDpeLearnsetReorder(Map<Integer, List<MoveLearnt>> movesets) {
+        if (!usesCfruDpeLevelUpLearnsets()) {
+            throw learnsetReorderError("not the CFRU/DPE learnset profile");
+        }
+        if (!hasValidCfruRuntimeLevelUpLearnsetsPointer(rom)) {
+            throw learnsetReorderError("no CFRU gLevelUpLearnsets table at 0x43E20");
+        }
+        int table = readCfruRuntimeLevelUpLearnsetsOffset(rom);
+        int tableEnd = table + cfruDpeLevelUpLearnsetsTableLength();
+        if (table % GBConstants.longSize != 0 || table < CFRU_INSERT_START || tableEnd > CFRU_INSERT_END) {
+            throw learnsetReorderError("table is not inside the CFRU insert");
+        }
+        Map<Integer, byte[]> blobs = new TreeMap<>();
+        Map<Integer, List<Integer>> slotsByBlob = new TreeMap<>();
+        for (int slot = 0; slot < CFRU_DPE_SPECIES_COUNT; slot++) {
+            long raw = Integer.toUnsignedLong(IOFunctions.readFullInt(rom, table + slot * GBConstants.longSize));
+            if (raw == 0) {
+                continue;
+            }
+            if (raw < 0x08000000L + CFRU_INSERT_START || raw >= 0x08000000L + Math.min(CFRU_INSERT_END, rom.length)) {
+                throw learnsetReorderError("slot " + slot + " points outside the CFRU insert");
+            }
+            int at = (int) (raw - 0x08000000L);
+            if (!blobs.containsKey(at)) {
+                blobs.put(at, readTerminatedCfruDpeLearnset(at, slot));
+            }
+            slotsByBlob.computeIfAbsent(at, k -> new ArrayList<>()).add(slot);
+        }
+        List<EvolutionOwner> foreign = new ArrayList<>();
+        foreign.add(new EvolutionOwner("LEARNSET_TABLE", table, tableEnd));
+        if (oakIntroLayout != null) {
+            for (FreedSpace.ProtectedRange r : oakIntroLayout.protectedRanges()) {
+                foreign.add(new EvolutionOwner(r.type(), r.start(), r.end()));
+            }
+        }
+        if (oakOwnershipWitness != null) {
+            for (EvolutionOwner o : oakOwnershipWitness.allOwners) {
+                if (!o.type.startsWith("LEARNSET_")) foreign.add(o);
+            }
+        }
+        int previousEnd = -1;
+        for (Map.Entry<Integer, byte[]> blob : blobs.entrySet()) {
+            EvolutionOwner range = new EvolutionOwner("LEARNSET_ASSET", blob.getKey(), blob.getKey() + blob.getValue().length);
+            if (range.start < previousEnd) {
+                throw learnsetReorderError("learnsets at 0x" + Integer.toHexString(range.start) + " overlap another learnset");
+            }
+            for (EvolutionOwner owner : foreign) {
+                if (range.overlaps(owner)) throw learnsetReorderError("learnset overlaps " + owner.type);
+            }
+            previousEnd = range.end;
+        }
+        if (movesets == null) {
+            return Map.of();
+        }
+        for (Map.Entry<Integer, List<MoveLearnt>> entry : movesets.entrySet()) {
+            int slot = entry.getKey() == null ? -1 : entry.getKey();
+            if (slot < 0 || slot >= CFRU_DPE_SPECIES_COUNT) {
+                throw learnsetReorderError("species " + slot + " is outside the native table");
+            }
+            if (entry.getValue() != null && !entry.getValue().isEmpty()
+                    && IOFunctions.readFullInt(rom, table + slot * GBConstants.longSize) == 0) {
+                throw learnsetReorderError("species " + slot + " has moves but no stored learnset");
+            }
+        }
+        Map<Integer, byte[]> plan = new LinkedHashMap<>();
+        for (Map.Entry<Integer, byte[]> blob : blobs.entrySet()) {
+            byte[] stored = blob.getValue(), result = null;
+            for (int slot : slotsByBlob.get(blob.getKey())) {
+                List<MoveLearnt> moves = movesets.get(slot);
+                if (moves == null) {
+                    continue;
+                }
+                byte[] candidate = reorderedCfruDpeLearnset(stored, moves, slot);
+                if (result != null && !Arrays.equals(result, candidate)) {
+                    throw learnsetReorderError("species sharing the learnset at 0x"
+                            + Integer.toHexString(blob.getKey()) + " were reordered differently");
+                }
+                result = candidate;
+            }
+            if (result != null && !Arrays.equals(result, stored)) {
+                plan.put(blob.getKey(), result);
+            }
+        }
+        return plan;
+    }
+
+    /** Entries plus terminator, or rejected when unterminated within 50 moves or the CFRU insert. */
+    private byte[] readTerminatedCfruDpeLearnset(int at, int slot) {
+        for (int i = 0; i <= CFRU_DPE_MAX_LEARNABLE_MOVES; i++) {
+            int entry = at + i * CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE;
+            if (entry + CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE > Math.min(CFRU_INSERT_END, rom.length)) {
+                break;
+            }
+            if (readWord(entry) == 0 && (rom[entry + 2] & 0xFF) == 0xFF) {
+                return Arrays.copyOfRange(rom, at, entry + CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE);
+            }
+        }
+        throw learnsetReorderError("learnset of slot " + slot + " is unterminated or truncated");
+    }
+
+    /**
+     * The stored entries with the loaded moves replaced, in order, by {@code moves}. Unloaded move IDs
+     * and level-0 entries stay in place; levels, length and the move multiset must not change.
+     */
+    private byte[] reorderedCfruDpeLearnset(byte[] stored, List<MoveLearnt> moves, int slot) {
+        byte[] result = stored.clone();
+        List<Integer> before = new ArrayList<>(), after = new ArrayList<>();
+        int next = 0;
+        for (int i = 0; i + CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE < stored.length; i += CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE) {
+            int move = readWord(stored, i), level = stored[i + 2] & 0xFF;
+            if (!isLoadedMoveId(move)) {
+                continue;
+            }
+            if (next >= moves.size()) {
+                throw learnsetReorderError("species " + slot + " has fewer moves than its stored learnset");
+            }
+            MoveLearnt ml = moves.get(next++);
+            if (ml == null || ml.level != level || !isLoadedMoveId(ml.move) || (level == 0 && ml.move != move)) {
+                throw learnsetReorderError("species " + slot + " changes a level, an unknown move or a level-0 move");
+            }
+            before.add(move);
+            after.add(ml.move);
+            writeWord(result, i, ml.move);
+        }
+        Collections.sort(before);
+        Collections.sort(after);
+        if (next != moves.size() || !before.equals(after)) {
+            throw learnsetReorderError("species " + slot + " is not a reordering of its stored learnset");
+        }
+        return result;
+    }
+
     private void validateCfruDpeLevelUpLearnsetsTable(int baseOffset) {
         int tableLength = cfruDpeLevelUpLearnsetsTableLength();
         boolean isRuntimeTable = hasValidCfruRuntimeLevelUpLearnsetsPointer(rom)
