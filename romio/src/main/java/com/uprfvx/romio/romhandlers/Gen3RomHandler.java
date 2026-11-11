@@ -6792,7 +6792,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     // #753: with EXPAND_MOVESETS, CFRU links its own gLevelUpLearnsets (packed {u16 move, u8 level})
     // into its insert (linker.ld ORIGIN 0x9000000, bounded by DPE's insert at 0x9600000), and
     // repoints installs that table at 0x43E20. Reorder only permutes move fields of existing entries
-    // there: no allocation, no pointer, length, level or terminator change.
+    // there: no allocation, no pointer, length, level or terminator change. Location is not
+    // ownership: the input-bound OAK_OWNERSHIP_WITNESS_V1 must own the table and every learnset.
     private static final int CFRU_INSERT_START = 0x1000000;
     private static final int CFRU_INSERT_END = 0x1600000;
 
@@ -6800,8 +6801,25 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return shouldUseCfruDpeLevelUpLearnsets(useCfruDpeGen9SpeciesCount, jamboMovesetHack);
     }
 
-    /** Validates the active CFRU table before any randomizer step; mutates nothing. */
+    /** Binds the owner witness and validates the active CFRU table before any randomizer step. */
     public void preflightCfruDpeLearnsetReorder() {
+        if (!usesCfruDpeLevelUpLearnsets()) {
+            throw learnsetReorderError("not the CFRU/DPE learnset profile");
+        }
+        if (oakOwnershipWitness == null) {
+            if (oakIntroLayout != null) {
+                throw learnsetReorderError("the structural Oak layout does not attest learnset owners");
+            }
+            String path = System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY);
+            if (path == null || path.isBlank()) {
+                throw learnsetReorderError("no input-bound learnset owner witness (-D" + CFRU_OAK_OWNERSHIP_PROPERTY + ")");
+            }
+            try (InputStream input = Files.newInputStream(Path.of(path))) {
+                installOakWitness(input, null);
+            } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
+                throw learnsetReorderError("cannot read the selected owner witness");
+            }
+        }
         planCfruDpeLearnsetReorder(null);
     }
 
@@ -6847,6 +6865,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (table % GBConstants.longSize != 0 || table < CFRU_INSERT_START || tableEnd > CFRU_INSERT_END) {
             throw learnsetReorderError("table is not inside the CFRU insert");
         }
+        OakOwnershipWitness witness = oakOwnershipWitness;
+        if (witness == null || oakWitnessInput != originalRom) {
+            throw learnsetReorderError("no input-bound learnset owner witness for this input");
+        }
+        if (!ownedBy(witness, "LEARNSET_TABLE", table, tableEnd)) {
+            throw learnsetReorderError("the table is not a witnessed LEARNSET_TABLE owner");
+        }
         Map<Integer, byte[]> blobs = new TreeMap<>();
         Map<Integer, List<Integer>> slotsByBlob = new TreeMap<>();
         for (int slot = 0; slot < CFRU_DPE_SPECIES_COUNT; slot++) {
@@ -6880,6 +6905,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             EvolutionOwner range = new EvolutionOwner("LEARNSET_ASSET", blob.getKey(), blob.getKey() + blob.getValue().length);
             if (range.start < previousEnd) {
                 throw learnsetReorderError("learnsets at 0x" + Integer.toHexString(range.start) + " overlap another learnset");
+            }
+            if (!ownedBy(witness, "LEARNSET_ASSET", range.start, range.end)) {
+                throw learnsetReorderError("learnset at 0x" + Integer.toHexString(range.start)
+                        + " is not a witnessed LEARNSET_ASSET owner");
+            }
+            if (!Arrays.equals(originalRom, range.start, range.end, rom, range.start, range.end)) {
+                throw learnsetReorderError("learnset at 0x" + Integer.toHexString(range.start) + " changed since input");
             }
             for (EvolutionOwner owner : foreign) {
                 if (range.overlaps(owner)) throw learnsetReorderError("learnset overlaps " + owner.type);
@@ -6919,6 +6951,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
         }
         return plan;
+    }
+
+    private static boolean ownedBy(OakOwnershipWitness witness, String type, int start, int end) {
+        return witness.allOwners.stream().anyMatch(o -> o.type.equals(type) && o.contains(start, end - start));
     }
 
     /** Entries plus terminator, or rejected when unterminated within 50 moves or the CFRU insert. */
