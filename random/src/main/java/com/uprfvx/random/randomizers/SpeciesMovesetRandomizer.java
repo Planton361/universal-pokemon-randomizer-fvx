@@ -4,6 +4,7 @@ import com.uprfvx.random.Settings;
 import com.uprfvx.romio.constants.GlobalConstants;
 import com.uprfvx.romio.constants.MoveIDs;
 import com.uprfvx.romio.gamedata.*;
+import com.uprfvx.romio.romhandlers.Gen3RomHandler;
 import com.uprfvx.romio.romhandlers.RomHandler;
 
 import java.util.*;
@@ -468,10 +469,28 @@ public class SpeciesMovesetRandomizer extends Randomizer {
     public void orderDamagingMovesByDamage() {
         Map<Integer, List<MoveLearnt>> movesets = romHandler.getMovesLearnt();
         List<Move> allMoves = romHandler.getMoves();
+        // CFRU/DPE writes in place, where species share stored learnsets: equal lists get one ordering.
+        Gen3RomHandler inPlace = romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeLevelUpLearnsets()
+                ? gen3 : null;
+        Map<List<Integer>, List<Integer>> orderings = new HashMap<>();
         for (Integer pkmn : movesets.keySet()) {
             List<MoveLearnt> moves = movesets.get(pkmn);
             if (moves == null || moves.isEmpty()) {
                 continue;
+            }
+            List<Integer> key = new ArrayList<>();
+            if (inPlace != null) {
+                for (MoveLearnt ml : moves) {
+                    key.add(ml.move);
+                    key.add(ml.level);
+                }
+                List<Integer> known = orderings.get(key);
+                if (known != null) {
+                    for (int i = 0; i < moves.size(); i++) {
+                        moves.get(i).move = known.get(i);
+                    }
+                    continue;
+                }
             }
 
             // Build up a list of damaging moves and their positions
@@ -504,10 +523,17 @@ public class SpeciesMovesetRandomizer extends Randomizer {
             for (int i = 0; i < damagingMoves.size(); i++) {
                 moves.get(damagingMoveIndices.get(i)).move = damagingMoves.get(i).number;
             }
+            if (inPlace != null) {
+                orderings.put(key, moves.stream().map(ml -> ml.move).toList());
+            }
         }
 
         // Done, save
-        romHandler.setMovesLearnt(movesets);
+        if (inPlace != null) {
+            inPlace.reorderCfruDpeMovesLearntInPlace(movesets);
+        } else {
+            romHandler.setMovesLearnt(movesets);
+        }
         changesMade = true;
     }
 

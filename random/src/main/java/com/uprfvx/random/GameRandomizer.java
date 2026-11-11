@@ -32,6 +32,7 @@ import com.uprfvx.random.updaters.SpeciesBaseStatUpdater;
 import com.uprfvx.random.updaters.TypeEffectivenessUpdater;
 import com.uprfvx.random.updaters.Updater;
 import com.uprfvx.romio.MiscTweak;
+import com.uprfvx.romio.exceptions.RomIOException;
 import com.uprfvx.romio.graphics.packs.CustomPlayerGraphics;
 import com.uprfvx.romio.romhandlers.Gen1RomHandler;
 import com.uprfvx.romio.romhandlers.Gen3RomHandler;
@@ -211,11 +212,20 @@ public class GameRandomizer {
             final long startTime = System.currentTimeMillis();
             randomSource.seed(seed);
 
-            if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()
-                    && (settings.getMovesetsMod() != Settings.MovesetsMod.UNCHANGED
-                        || settings.isReorderDamagingMoves())) {
-                throw new RandomizationException("CFRU/DPE level-up learnset changes are unavailable: "
-                        + "select Unchanged, disable Reorder Damaging Moves, and do not use Metronome Only.");
+            if (romHandler instanceof Gen3RomHandler gen3 && gen3.usesCfruDpeRandomPoolPolicy()) {
+                if (settings.getMovesetsMod() != Settings.MovesetsMod.UNCHANGED) {
+                    throw new RandomizationException("CFRU/DPE level-up learnset changes are unavailable: "
+                            + "select Unchanged and do not use Metronome Only; only Reorder Damaging Moves is "
+                            + "supported, in place.");
+                }
+                if (settings.isReorderDamagingMoves()) {
+                    try {
+                        gen3.preflightCfruDpeLearnsetReorder();
+                    } catch (RomIOException e) {
+                        throw new RandomizationException("CFRU/DPE level-up learnset changes are unavailable: "
+                                + e.getMessage());
+                    }
+                }
             }
 
             if (settings.isRandomizeIntroMon() && romHandler instanceof Gen3RomHandler gen3
