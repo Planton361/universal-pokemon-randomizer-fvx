@@ -429,6 +429,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         }
 
         static OakOwnershipWitness read(InputStream input, byte[] original) {
+            return read(input, original, true);
+        }
+
+        // allocatorGate=false only for the in-place learnset reorder, which never allocates.
+        static OakOwnershipWitness read(InputStream input, byte[] original, boolean allocatorGate) {
             if (input == null) throw error("missing witness");
             try {
                 byte[] text = input.readNBytes(65537);
@@ -440,11 +445,11 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                     }
                 };
                 p.load(new java.io.ByteArrayInputStream(text));
-                return new OakOwnershipWitness(p, original);
+                return new OakOwnershipWitness(p, original, allocatorGate);
             } catch (IOException | IllegalArgumentException e) { throw error("invalid witness encoding"); }
         }
 
-        private OakOwnershipWitness(Properties p, byte[] original) {
+        private OakOwnershipWitness(Properties p, byte[] original, boolean allocatorGate) {
             Set<String> keys = new HashSet<>(Set.of("schema", "version", "cfru.sha", "dpe.sha", "build.id",
                     "config.id", "config.sha256", "input.size", "input.sha256", "selector.offset",
                     "selector.width", "insertions.count", "protected.count"));
@@ -551,7 +556,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             validateHook(original, sh, spriteBridge);
             validateHook(original, ch, cryBridge);
             validateInheritedOwners(original, protectedRanges);
-            validateLearnsetOwners(original, protectedRanges, all);
+            validateLearnsetOwners(original, protectedRanges, all, allocatorGate);
             validateBytes(original, envelopes);
             insertions = List.copyOf(envelopes); protectedOwners = List.copyOf(protectedRanges);
             allOwners = List.copyOf(all);
@@ -576,7 +581,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
         // Both source roots and every nonempty pointer in either native table
         // must be owned; an arbitrary OTHER_DATA range cannot attest learnsets.
-        private static void validateLearnsetOwners(byte[] b, List<EvolutionOwner> owners, List<EvolutionOwner> all) {
+        private static void validateLearnsetOwners(byte[] b, List<EvolutionOwner> owners, List<EvolutionOwner> all,
+                boolean allocatorGate) {
             int fallback = pointer(b, CFRU_DPE_LEVEL_UP_LEARNSETS_POINTER_LOCATION, false);
             int runtime = pointer(b, CFRU_RUNTIME_LEVEL_UP_LEARNSETS_POINTER_LOCATION, false);
             Set<Integer> tables = new HashSet<>(List.of(fallback, runtime));
@@ -602,10 +608,13 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             }
             // The existing writer searches this entire range by free byte alone.
             // No Oak object may be located there, even if its bytes look occupied now.
+            if (allocatorGate && overlapsLearnsetAllocator(all)) throw error("owner overlaps learnset allocator");
+        }
+
+        private static boolean overlapsLearnsetAllocator(List<EvolutionOwner> owners) {
             EvolutionOwner allocator = new EvolutionOwner("LEARNSET_ALLOCATOR", CFRU_DPE_LEARNSET_REPOINT_FREE_SPACE_START,
                     CFRU_DPE_LEARNSET_REPOINT_FREE_SPACE_END);
-            for (EvolutionOwner owner : all) if (owner.overlaps(allocator))
-                throw error("owner overlaps learnset allocator");
+            return owners.stream().anyMatch(owner -> owner.overlaps(allocator));
         }
 
         // Verify the entire encoded LZ10 stream remains within its declared
@@ -852,6 +861,9 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
 
     private static final String CFRU_OAK_OWNERSHIP_PROPERTY = "uprfvx.cfruOakOwnership";
     private OakOwnershipWitness oakOwnershipWitness;
+    // Reorder-only witness read without the learnset allocator gate; never shared with other writers.
+    private OakOwnershipWitness learnsetReorderWitness;
+    private byte[] learnsetReorderWitnessInput;
     // Intro-only structural binding when no witness is supplied; never consulted by other writers.
     private OakIntroLayout oakIntroLayout;
     private byte[] oakWitnessInput;
@@ -1414,6 +1426,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     public void midLoadingSetUp() {
         freedSpace = new FreedSpace();
         oakOwnershipWitness = null; oakIntroLayout = null; oakWitnessInput = null; oakSelectedSpecies = 29;
+        learnsetReorderWitness = null; learnsetReorderWitnessInput = null;
         super.midLoadingSetUp();
         evolutionOwnershipWitness = null;
         cfruEvolutionEasierApplied = false;
@@ -6806,7 +6819,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (!usesCfruDpeLevelUpLearnsets()) {
             throw learnsetReorderError("not the CFRU/DPE learnset profile");
         }
-        if (oakOwnershipWitness == null) {
+        if (oakOwnershipWitness == null && learnsetReorderWitness == null) {
             if (oakIntroLayout != null) {
                 throw learnsetReorderError("the structural Oak layout does not attest learnset owners");
             }
@@ -6814,11 +6827,25 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             if (path == null || path.isBlank()) {
                 throw learnsetReorderError("no input-bound learnset owner witness (-D" + CFRU_OAK_OWNERSHIP_PROPERTY + ")");
             }
+            if (!isSelectedOakProfile()) throw OakOwnershipWitness.error("selected profile mismatch");
+            byte[] text;
             try (InputStream input = Files.newInputStream(Path.of(path))) {
-                installOakWitness(input, null);
+                text = input.readNBytes(65537);
             } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
                 throw learnsetReorderError("cannot read the selected owner witness");
             }
+            OakOwnershipWitness candidate = OakOwnershipWitness.read(new java.io.ByteArrayInputStream(text), originalRom, false);
+            if (!OakOwnershipWitness.overlapsLearnsetAllocator(candidate.allOwners)) {
+                // Strictly valid as well: install it once for every writer, as before.
+                installOakWitness(new java.io.ByteArrayInputStream(text), null);
+                planCfruDpeLearnsetReorder(null);
+                return;
+            }
+            validatePristineOakOwners(candidate);
+            // Kept out of oakOwnershipWitness: Oak, evolution and selector writers still parse strictly.
+            candidate.protectAllOwners(freedSpace);
+            learnsetReorderWitnessInput = originalRom;
+            learnsetReorderWitness = candidate;
         }
         planCfruDpeLearnsetReorder(null);
     }
@@ -6865,8 +6892,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (table % GBConstants.longSize != 0 || table < CFRU_INSERT_START || tableEnd > CFRU_INSERT_END) {
             throw learnsetReorderError("table is not inside the CFRU insert");
         }
-        OakOwnershipWitness witness = oakOwnershipWitness;
-        if (witness == null || oakWitnessInput != originalRom) {
+        // A strictly installed witness is reused; otherwise only the reorder's own one.
+        OakOwnershipWitness witness = oakOwnershipWitness != null ? oakOwnershipWitness : learnsetReorderWitness;
+        byte[] witnessInput = oakOwnershipWitness != null ? oakWitnessInput : learnsetReorderWitnessInput;
+        if (witness == null || witnessInput != originalRom) {
             throw learnsetReorderError("no input-bound learnset owner witness for this input");
         }
         if (!ownedBy(witness, "LEARNSET_TABLE", table, tableEnd)) {
@@ -6895,10 +6924,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 foreign.add(new EvolutionOwner(r.type(), r.start(), r.end()));
             }
         }
-        if (oakOwnershipWitness != null) {
-            for (EvolutionOwner o : oakOwnershipWitness.allOwners) {
-                if (!o.type.startsWith("LEARNSET_")) foreign.add(o);
-            }
+        for (EvolutionOwner o : witness.allOwners) {
+            if (!o.type.startsWith("LEARNSET_")) foreign.add(o);
         }
         int previousEnd = -1;
         for (Map.Entry<Integer, byte[]> blob : blobs.entrySet()) {

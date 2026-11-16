@@ -18,15 +18,22 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class Gen3CfruDpeLearnsetReorderTest {
     static final int TABLE = 0x1000000, BLOBS = 0x1002000, OWNED = 0x1000;
+    // Inside the old learnset allocator arena [0x1219A48, 0x1600000).
+    static final int ARENA_TABLE = 0x1300000, ARENA_BLOBS = 0x1302000;
     static final String PROPERTY = "uprfvx.cfruOakOwnership";
 
     static class Fixture extends CfruDpeEvolutionFixture {
         final Gen3CfruDpeEasierTimeEvolutionTest.OakFixture oak = new Gen3CfruDpeEasierTimeEvolutionTest.OakFixture(0x1600000);
         final byte[] rom = oak.memory;
+        final int table, blobs;
         int failAfter = -1, writes;
 
-        Fixture() throws Exception {
+        Fixture() throws Exception { this(TABLE, BLOBS); }
+
+        Fixture(int table, int blobs) throws Exception {
             super();
+            this.table = table;
+            this.blobs = blobs;
             setField("rom", rom);
             setField("originalRom", rom.clone());
             getRomEntry().setRomType(Gen3Constants.RomType_FRLG);
@@ -36,28 +43,44 @@ class Gen3CfruDpeLearnsetReorderTest {
                 moves[id].number = id;
             }
             setField("moves", moves);
-            pointer(0x43E20, TABLE);
+            pointer(0x43E20, table);
         }
 
-        /** Declares the table and [BLOBS, BLOBS + OWNED) as witnessed learnset owners and binds the witness. */
+        /** Declares the table and [blobs, blobs + OWNED) as witnessed learnset owners and binds the witness. */
         void attest() throws Exception {
+            declareOwners();
+            withWitness(this::preflightCfruDpeLearnsetReorder);
+        }
+
+        void declareOwners() throws Exception {
             int count = Integer.parseInt(oak.p.getProperty("protected.count"));
             oak.set("protected." + count + ".type", "LEARNSET_TABLE");
-            oak.range("protected." + count, TABLE, TABLE + 1440 * 4);
+            oak.range("protected." + count, table, table + 1440 * 4);
             oak.set("protected." + (count + 1) + ".type", "LEARNSET_ASSET");
-            oak.range("protected." + (count + 1), BLOBS, BLOBS + OWNED);
+            oak.range("protected." + (count + 1), blobs, blobs + OWNED);
             oak.set("protected.count", count + 2);
             oak.digest();
             setField("originalRom", rom.clone());
+        }
+
+        interface Step { void run() throws Exception; }
+
+        void withWitness(Step step) throws Exception {
             Path file = Files.createTempFile("synthetic-oak-witness", ".properties");
             try {
                 Files.write(file, oak.serialized());
                 System.setProperty(PROPERTY, file.toString());
-                preflightCfruDpeLearnsetReorder();
+                step.run();
             } finally {
                 System.clearProperty(PROPERTY);
                 Files.delete(file);
             }
+        }
+
+        Object field(String name) throws Exception {
+            java.lang.reflect.Field f = Gen3RomHandler.class.getDeclaredField(name);
+            f.setAccessible(true);
+            return f.get(this);
         }
 
         @Override protected void writeWord(int offset, int value) {
@@ -81,9 +104,9 @@ class Gen3CfruDpeLearnsetReorderTest {
             rom[at] = (byte) move; rom[at + 1] = (byte) (move >>> 8); rom[at + 2] = (byte) level;
         }
 
-        void slot(int species, int at) { pointer(TABLE + species * 4, at); }
+        void slot(int species, int at) { pointer(table + species * 4, at); }
 
-        void clearSlot(int species) { Arrays.fill(rom, TABLE + species * 4, TABLE + species * 4 + 4, (byte) 0); }
+        void clearSlot(int species) { Arrays.fill(rom, table + species * 4, table + species * 4 + 4, (byte) 0); }
     }
 
     private static List<MoveLearnt> moves(int... moveLevel) {
@@ -119,6 +142,97 @@ class Gen3CfruDpeLearnsetReorderTest {
         // Move words of entries 0..2 only; levels, terminator, table and roots are untouched.
         assertTrue(Set.of(at, at + 1, at + 3, at + 4, at + 6, at + 7).containsAll(changed), changed.toString());
         assertEquals(List.of(30, 1, 10, 5, 20, 9, 0, 0xFF), decode(f, at, 4));
+    }
+
+    @Test void aStrictWitnessIsSharedWithTheOakPreflight() throws Exception {
+        Fixture f = new Fixture();
+        f.slot(1, f.learnset(BLOBS, 10, 1, 20, 5));
+        f.attest();
+        assertNotNull(f.field("oakOwnershipWitness"));
+        assertNull(f.field("learnsetReorderWitness"));
+        f.withWitness(f::preflightCfruDpeOakIntro);           // reused, not protected a second time
+        f.reorderCfruDpeMovesLearntInPlace(movesets(1, moves(20, 1, 10, 5)));
+        assertEquals(List.of(20, 1, 10, 5, 0, 0xFF), decode(f, BLOBS, 3));
+    }
+
+    @Test void ownersInTheOldAllocatorArenaOnlyEnableTheInPlaceReorder() throws Exception {
+        Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        int at = f.learnset(ARENA_BLOBS, 10, 1, 20, 5, 30, 9);
+        f.slot(1, at);
+        f.declareOwners();
+        RomIOException parser = assertThrows(RomIOException.class, f.oak::parse);
+        assertTrue(parser.getMessage().contains("owner overlaps learnset allocator"), parser.getMessage());
+        byte[] before = f.rom.clone();
+        f.withWitness(() -> {
+            f.preflightCfruDpeLearnsetReorder();
+            // Right after the reorder preflight, before any learnset mutation: Oak still parses strictly.
+            RomIOException oak = assertThrows(RomIOException.class, f::preflightCfruDpeOakIntro);
+            assertTrue(oak.getMessage().contains("owner overlaps learnset allocator"), oak.getMessage());
+        });
+        assertArrayEquals(before, f.rom);
+        assertNull(f.field("oakOwnershipWitness"));            // what Oak, evolution and the selector consult
+        assertNull(f.field("oakIntroLayout"));
+        assertNotNull(f.field("learnsetReorderWitness"));
+
+        f.reorderCfruDpeMovesLearntInPlace(movesets(1, moves(30, 1, 10, 5, 20, 9)));
+        Set<Integer> changed = new TreeSet<>();
+        for (int i = 0; i < f.rom.length; i++) if (f.rom[i] != before[i]) changed.add(i);
+        assertTrue(Set.of(at, at + 1, at + 3, at + 4, at + 6, at + 7).containsAll(changed), changed.toString());
+        assertEquals(List.of(30, 1, 10, 5, 20, 9, 0, 0xFF), decode(f, at, 4));
+        byte[] after = f.rom.clone();
+        f.withWitness(() -> assertThrows(RomIOException.class, f::preflightCfruDpeOakIntro));
+        assertArrayEquals(after, f.rom);
+    }
+
+    @Test void theArenaWitnessKeepsEveryOtherOwnerCheck() throws Exception {
+        Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        f.slot(1, f.learnset(ARENA_BLOBS, 10, 1, 20, 5));
+        f.attest();
+        f.slot(2, f.learnset(ARENA_BLOBS + OWNED + 0x100, 30, 1, 40, 5));   // inside the arena, not owned
+        assertRejected(f, movesets(1, moves(20, 1, 10, 5), 2, moves(40, 1, 30, 5)),
+                "is not a witnessed LEARNSET_ASSET owner");
+        f.clearSlot(2);
+        f.entry(ARENA_BLOBS, 20, 1);                                       // changed since the input
+        assertRejected(f, movesets(1, moves(10, 1, 20, 5)), "changed since input");
+
+        Fixture g = new Fixture(ARENA_TABLE, ARENA_BLOBS);                 // unowned pointer already in the input
+        g.slot(1, g.learnset(ARENA_BLOBS, 10, 1, 20, 5));
+        g.slot(2, g.learnset(ARENA_BLOBS + OWNED + 0x100, 30, 1, 40, 5));
+        byte[] before = g.rom.clone();
+        assertThrows(RomIOException.class, g::attest);
+        assertArrayEquals(before, g.rom);
+        assertNull(g.field("learnsetReorderWitness"));
+        assertRejected(g, movesets(1, moves(20, 1, 10, 5)), "no input-bound learnset owner witness");
+
+        Fixture h = new Fixture(ARENA_TABLE, ARENA_BLOBS);                 // bound to a different input object
+        h.slot(1, h.learnset(ARENA_BLOBS, 10, 1, 20, 5));
+        h.attest();
+        h.setField("originalRom", h.rom.clone());
+        assertRejected(h, movesets(1, moves(20, 1, 10, 5)), "no input-bound learnset owner witness for this input");
+
+        Fixture k = new Fixture(ARENA_TABLE, ARENA_BLOBS);                 // a foreign build's witness
+        k.slot(1, k.learnset(ARENA_BLOBS, 10, 1, 20, 5));
+        k.declareOwners();
+        k.oak.set("input.sha256", "0".repeat(64));
+        byte[] untouched = k.rom.clone();
+        RomIOException foreign = assertThrows(RomIOException.class, () -> k.withWitness(k::preflightCfruDpeLearnsetReorder));
+        assertTrue(foreign.getMessage().contains("input identity/profile mismatch"), foreign.getMessage());
+        assertArrayEquals(untouched, k.rom);
+        assertNull(k.field("learnsetReorderWitness"));
+    }
+
+    @Test void loadingAnotherRomDropsTheReorderWitness() throws Exception {
+        Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        f.slot(1, f.learnset(ARENA_BLOBS, 10, 1, 20, 5));
+        f.attest();
+        assertNotNull(f.field("learnsetReorderWitness"));
+        try {
+            f.midLoadingSetUp();
+        } catch (RuntimeException ignored) {
+            // The synthetic handler has no real ROM entry; the owner state is reset first.
+        }
+        assertNull(f.field("learnsetReorderWitness"));
+        assertNull(f.field("learnsetReorderWitnessInput"));
     }
 
     @Test void writesNeedAnInputBoundLearnsetOwnerWitness() throws Exception {
