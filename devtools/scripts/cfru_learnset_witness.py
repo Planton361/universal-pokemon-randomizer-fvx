@@ -4,8 +4,8 @@
 Reads, never writes, the exact CFRU checkout's build/linked.o and the untouched input ROM.
 CFRU links its insert at 0x09000000 (linker.ld) and scripts/insert.py writes the objcopy'd
 .text at ROM offset 0x1000000, so a symbol at VMA v is installed at v - 0x08000000. Owners
-are only the gLevelUpLearnsets table and the compiled s*LevelUpLearnset objects it points
-to, with ELF sizes, and only if their installed bytes equal the linked bytes exactly.
+are only the gLevelUpLearnsets table and the compiled s*LevelUpLearnset objects (plus the
+single-terminator sEmptyMoveset) it points to, with ELF sizes, and only if their installed bytes equal the linked bytes exactly.
 
 Prints PASS, FAIL <CATEGORY> or UNKNOWN <CATEGORY>; never paths, hashes or bytes. The
 witness file is written only on PASS and stays local. It is not full D1 provenance.
@@ -26,6 +26,7 @@ ROOT = 0x43E20
 SLOTS = 1440
 ENTRY, MAX_ENTRIES = 3, 51
 OBJECT_NAME = re.compile(r"s\w*LevelUpLearnset")
+EMPTY_NAME, EMPTY_BYTES = "sEmptyMoveset", b"\0\0\xff"
 
 
 class Outcome(Exception):
@@ -127,7 +128,12 @@ def derive(elf, rom):
 
     candidates = {}
     for symbol, value, size in symbols:
-        if OBJECT_NAME.fullmatch(symbol):
+        if symbol == EMPTY_NAME:
+            # CFRU's shared empty learnset: exactly one terminator and nothing else.
+            if size != len(EMPTY_BYTES) or linked(value, size) != EMPTY_BYTES:
+                raise fail("OBJECT_INVALID")
+            candidates.setdefault(value, set()).add(size)
+        elif OBJECT_NAME.fullmatch(symbol):
             candidates.setdefault(value, set()).add(size)
     objects = set()
     for slot in range(SLOTS):

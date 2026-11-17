@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cfru_learnset_witness as w  # noqa: E402
 
 TABLE_OFF = 0x100                      # inside .text
-A_OFF, B_OFF, OTHER_OFF = 0x1800, 0x1810, 0x1840
+A_OFF, B_OFF, OTHER_OFF, EMPTY_OFF = 0x1800, 0x1810, 0x1840, 0x1850
 
 
 def learnset(*move_level):
@@ -80,6 +80,32 @@ class WitnessTest(unittest.TestCase):
         # Shared A once, B; the unreferenced and wrongly named sOtherData is not an owner.
         self.assertEqual(owners, [(w.INSERT_START + A_OFF, w.INSERT_START + A_OFF + 9),
                                   (w.INSERT_START + B_OFF, w.INSERT_START + B_OFF + 6)])
+
+    def test_shared_empty_moveset_passes(self):
+        b = Build()
+        b.text[EMPTY_OFF:EMPTY_OFF + 3] = b"\0\0\xff"
+        b.symbols.append(("sEmptyMoveset", w.TEXT_VMA + EMPTY_OFF, 3))
+        for slot in (0, 4, 252, 1439):                                        # several slots share it
+            struct.pack_into("<I", b.text, TABLE_OFF + slot * 4, w.TEXT_VMA + EMPTY_OFF)
+        table, owners = w.derive(b.elf(), bytes(b.rom()))
+        self.assertIn((w.INSERT_START + EMPTY_OFF, w.INSERT_START + EMPTY_OFF + 3), owners)
+        self.assertEqual(len(owners), 3)
+        rom = b.rom(); rom[w.INSERT_START + EMPTY_OFF + 2] = 0                # ROM must still equal the build
+        self.assertEqual(self.outcome(b, rom), ("FAIL", "OBJECT_BYTES"))
+
+    def test_empty_moveset_must_be_exactly_one_terminator(self):
+        # A valid one-move learnset, or a lone non-terminator, under the empty name.
+        for size, data in ((6, b"\x01\0\x05\0\0\xff"), (3, b"\x01\0\xff")):
+            b = Build()
+            b.text[EMPTY_OFF:EMPTY_OFF + len(data)] = data
+            b.symbols.append(("sEmptyMoveset", w.TEXT_VMA + EMPTY_OFF, size))
+            struct.pack_into("<I", b.text, TABLE_OFF + 4 * 4, w.TEXT_VMA + EMPTY_OFF)
+            self.assertEqual(self.outcome(b), ("FAIL", "OBJECT_INVALID"))
+        b = Build()                                                           # another single-terminator symbol
+        b.text[EMPTY_OFF:EMPTY_OFF + 3] = b"\0\0\xff"
+        b.symbols.append(("sOtherData", w.TEXT_VMA + EMPTY_OFF, 3))
+        struct.pack_into("<I", b.text, TABLE_OFF + 4 * 4, w.TEXT_VMA + EMPTY_OFF)
+        self.assertEqual(self.outcome(b), ("FAIL", "UNMAPPED_POINTER"))
 
     def test_missing_zero_or_unnamed_symbols_fail(self):
         b = Build()
