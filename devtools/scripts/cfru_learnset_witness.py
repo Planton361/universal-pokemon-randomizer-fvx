@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """USER-ONLY: derive a LEARNSET_REORDER_WITNESS_V1 for the CFRU/DPE in-place learnset reorder.
 
-Reads, never writes, the exact CFRU checkout's build/linked.o and the untouched input ROM.
-CFRU links its insert at 0x09000000 (linker.ld) and scripts/insert.py writes the objcopy'd
-.text at ROM offset 0x1000000, so a symbol at VMA v is installed at v - 0x08000000. Owners
-are only the gLevelUpLearnsets table and the compiled s*LevelUpLearnset objects (plus the
-single-terminator sEmptyMoveset) it points to, with ELF sizes, and only if their installed bytes equal the linked bytes exactly.
+Reads, never writes, the exact CFRU checkout's build/linked.o and build/output.bin and the
+untouched input ROM. CFRU links its insert at 0x09000000 (linker.ld); scripts/build.py makes
+output.bin with `objcopy -O binary` (every loaded section at its load address from the lowest
+one, gaps zero-filled) and scripts/insert.py writes it at ROM offset 0x1000000, resolving
+symbols relative to .text. The image rebuilt from the ELF must equal output.bin and start at
+.text, so a symbol at VMA v is installed at v - 0x08000000. Owners are only the
+gLevelUpLearnsets table and the compiled s*LevelUpLearnset objects (plus the single-terminator
+sEmptyMoveset) it points to, with ELF sizes, and only if their installed bytes equal the
+linked bytes exactly.
 
 Prints PASS, FAIL <CATEGORY> or UNKNOWN <CATEGORY>; never paths, hashes or bytes. The
 witness file is written only on PASS and stays local. It is not full D1 provenance.
@@ -52,15 +56,20 @@ def check_revision(repo):
 
 
 def parse_elf(elf):
-    """The single allocated .text image at TEXT_VMA and its sized symbols."""
+    """The objcopy -O binary image of all loaded sections, based at .text = TEXT_VMA, and
+    the sized STT_OBJECT symbols inside those sections."""
     if len(elf) < 52 or elf[:4] != b"\x7fELF" or elf[4] != 1 or elf[5] != 1:
         raise fail("ELF_LAYOUT")
     e_type, e_machine = struct.unpack_from("<HH", elf, 16)
-    e_shoff, = struct.unpack_from("<I", elf, 32)
-    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", elf, 46)
+    e_phoff, e_shoff = struct.unpack_from("<II", elf, 28)
+    e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHHHH", elf, 42)
     if e_type != 2 or e_machine != 40 or e_shentsize != 40 or not 0 < e_shnum <= 4096 \
-            or e_shstrndx >= e_shnum or e_shoff + e_shnum * 40 > len(elf):
+            or e_shstrndx >= e_shnum or e_shoff + e_shnum * 40 > len(elf) \
+            or e_phentsize != 32 or not 0 < e_phnum <= 64 or e_phoff + e_phnum * 32 > len(elf):
         raise fail("ELF_LAYOUT")
+    # PT_LOAD with file contents: (offset, vaddr, paddr, filesz).
+    segments = [struct.unpack_from("<IIIII", elf, e_phoff + i * 32) for i in range(e_phnum)]
+    segments = [p[1:5] for p in segments if p[0] == 1 and p[4]]
     sections = [struct.unpack_from("<IIIIIIIIII", elf, e_shoff + i * 40) for i in range(e_shnum)]
     for s in sections:
         if s[1] != 8 and s[4] + s[5] > len(elf):           # every non-NOBITS section within the file
@@ -73,13 +82,31 @@ def parse_elf(elf):
             raise fail("ELF_LAYOUT")
         return elf[table[4] + offset:end].decode("ascii", "replace")
 
-    # objcopy -O binary emits every allocated PROGBITS section: only .text may contribute.
-    loaded = [i for i, s in enumerate(sections) if s[1] == 1 and s[2] & 2 and s[5]]
-    if len(loaded) != 1 or name(names, sections[loaded[0]][0]) != ".text" or sections[loaded[0]][3] != TEXT_VMA:
+    # objcopy -O binary emits every allocated section with contents; only PROGBITS is known here.
+    loaded = [i for i, s in enumerate(sections) if s[2] & 2 and s[1] != 8 and s[5]]
+    if not loaded or any(sections[i][1] != 1 for i in loaded):
         raise fail("ELF_LAYOUT")
-    text_index = loaded[0]
-    text = sections[text_index]
-    image = elf[text[4]:text[4] + text[5]]
+    for i in loaded:
+        _, _, _, addr, offset, size, _, _, align, _ = sections[i]
+        # Its load address must be its VMA: exactly one segment holds it with paddr == vaddr.
+        holders = [g for g in segments if g[1] <= addr and addr + size <= g[1] + g[3]
+                   and offset - g[0] == addr - g[1]]
+        if len(holders) != 1 or holders[0][2] != holders[0][1] or (align > 1 and addr % align):
+            raise fail("ELF_LAYOUT")
+    loaded.sort(key=lambda i: sections[i][3])
+    first = sections[loaded[0]]
+    if name(names, first[0]) != ".text" or first[3] != TEXT_VMA:
+        raise fail("ELF_LAYOUT")
+    image, end = bytearray(), TEXT_VMA
+    for i in loaded:
+        addr, offset, size = sections[i][3:6]
+        if addr < end:
+            raise fail("ELF_LAYOUT")                       # overlapping sections
+        image += bytes(addr - end) + elf[offset:offset + size]
+        end = addr + size
+    if len(image) > INSERT_END - INSERT_START:
+        raise fail("ELF_LAYOUT")
+    bounds = {i: (sections[i][3], sections[i][3] + sections[i][5]) for i in loaded}
     symtabs = [s for s in sections if s[1] == 2]
     if len(symtabs) != 1 or symtabs[0][9] != 16 or symtabs[0][6] >= e_shnum:
         raise fail("ELF_LAYOUT")
@@ -87,9 +114,11 @@ def parse_elf(elf):
     symbols = []
     for at in range(symtab[4], symtab[4] + symtab[5] - 15, 16):
         st_name, value, size, info, _, shndx = struct.unpack_from("<IIIBBH", elf, at)
-        if st_name and shndx == text_index and info & 15 == 1 and size:   # sized STT_OBJECT in .text
+        if st_name and shndx in bounds and info & 15 == 1 and size:     # sized STT_OBJECT, loaded
+            if value < bounds[shndx][0] or value + size > bounds[shndx][1]:
+                raise fail("ELF_LAYOUT")
             symbols.append((name(strtab, st_name), value, size))
-    return image, symbols
+    return bytes(image), symbols
 
 
 def terminated_once(data):
@@ -98,9 +127,11 @@ def terminated_once(data):
     return all((e == b"\0\0\xff") == (i == len(entries) - 1) for i, e in enumerate(entries))
 
 
-def derive(elf, rom):
+def derive(elf, binary, rom):
     """Validated (table, objects) owners as ROM offsets; raises Outcome otherwise."""
     image, symbols = parse_elf(elf)
+    if image != binary:
+        raise fail("IMAGE_MISMATCH")                   # output.bin is not this ELF's image
     text_end = TEXT_VMA + len(image)
 
     def linked(vma, size):
@@ -118,8 +149,6 @@ def derive(elf, rom):
 
     if len(rom) < INSERT_START + len(image) or rom[0xAC:0xB0] != b"BPRE" or rom[0xBC] != 0:
         raise fail("ROM_IDENTITY")
-    if INSERT_START + len(image) > INSERT_END:
-        raise fail("ELF_LAYOUT")
     if struct.unpack_from("<I", rom, ROOT)[0] != table_vma:
         raise fail("ROOT_MISMATCH")
     table = table_vma - 0x08000000
@@ -180,11 +209,13 @@ def run(repo, rom_path, out_path, revision=check_revision):
     try:
         with open(os.path.join(repo, "build", "linked.o"), "rb") as f:
             elf = f.read()
+        with open(os.path.join(repo, "build", "output.bin"), "rb") as f:
+            binary = f.read()
         with open(rom_path, "rb") as f:
             rom = f.read()
     except OSError:
         raise Outcome("UNKNOWN", "UNREADABLE_EVIDENCE")
-    table, owners = derive(elf, rom)
+    table, owners = derive(elf, binary, rom)
     fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="ascii") as f:
         f.write(witness_text(elf, rom, table, owners))
