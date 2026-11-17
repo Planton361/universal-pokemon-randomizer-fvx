@@ -864,6 +864,10 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
     // Reorder-only witness read without the learnset allocator gate; never shared with other writers.
     private OakOwnershipWitness learnsetReorderWitness;
     private byte[] learnsetReorderWitnessInput;
+    // LEARNSET_REORDER_WITNESS_V1 from the exact linked CFRU build; consulted by the in-place reorder only.
+    private static final String CFRU_LEARNSET_WITNESS_PROPERTY = "uprfvx.cfruLearnsetReorderWitness";
+    private LearnsetReorderWitness learnsetOnlyWitness;
+    private byte[] learnsetOnlyWitnessInput;
     // Intro-only structural binding when no witness is supplied; never consulted by other writers.
     private OakIntroLayout oakIntroLayout;
     private byte[] oakWitnessInput;
@@ -1427,6 +1431,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         freedSpace = new FreedSpace();
         oakOwnershipWitness = null; oakIntroLayout = null; oakWitnessInput = null; oakSelectedSpecies = 29;
         learnsetReorderWitness = null; learnsetReorderWitnessInput = null;
+        learnsetOnlyWitness = null; learnsetOnlyWitnessInput = null;
         super.midLoadingSetUp();
         evolutionOwnershipWitness = null;
         cfruEvolutionEasierApplied = false;
@@ -6819,13 +6824,25 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (!usesCfruDpeLevelUpLearnsets()) {
             throw learnsetReorderError("not the CFRU/DPE learnset profile");
         }
-        if (oakOwnershipWitness == null && learnsetReorderWitness == null) {
+        String learnsetPath = System.getProperty(CFRU_LEARNSET_WITNESS_PROPERTY);
+        if (learnsetOnlyWitness == null && learnsetPath != null && !learnsetPath.isBlank()) {
+            if (!isSelectedOakProfile()) throw learnsetReorderError("selected profile mismatch");
+            LearnsetReorderWitness candidate;
+            try (InputStream input = Files.newInputStream(Path.of(learnsetPath))) {
+                candidate = LearnsetReorderWitness.read(input, originalRom);
+            } catch (IOException | java.nio.file.InvalidPathException | SecurityException e) {
+                throw learnsetReorderError("cannot read the selected learnset witness");
+            }
+            learnsetOnlyWitnessInput = originalRom;
+            learnsetOnlyWitness = candidate;
+        } else if (learnsetOnlyWitness == null && oakOwnershipWitness == null && learnsetReorderWitness == null) {
             if (oakIntroLayout != null) {
                 throw learnsetReorderError("the structural Oak layout does not attest learnset owners");
             }
             String path = System.getProperty(CFRU_OAK_OWNERSHIP_PROPERTY);
             if (path == null || path.isBlank()) {
-                throw learnsetReorderError("no input-bound learnset owner witness (-D" + CFRU_OAK_OWNERSHIP_PROPERTY + ")");
+                throw learnsetReorderError("no input-bound learnset owner witness (-D" + CFRU_LEARNSET_WITNESS_PROPERTY
+                        + " or -D" + CFRU_OAK_OWNERSHIP_PROPERTY + ")");
             }
             if (!isSelectedOakProfile()) throw OakOwnershipWitness.error("selected profile mismatch");
             byte[] text;
@@ -6879,6 +6896,98 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return new RomIOException("CFRU/DPE in-place learnset reorder rejected: " + reason);
     }
 
+    /**
+     * Reorder-only owners from the exact linked CFRU build: the runtime table and each referenced
+     * compiled learnset object. Not an Oak witness and not full D1 provenance; re-validated here
+     * against the input before any write.
+     */
+    static final class LearnsetReorderWitness {
+        final List<EvolutionOwner> owners;
+
+        private LearnsetReorderWitness(List<EvolutionOwner> owners) { this.owners = owners; }
+
+        private static RomIOException error(String reason) { return learnsetReorderError("learnset witness: " + reason); }
+
+        private static int number(Properties p, String key) {
+            String v = p.getProperty(key, "");
+            if (!v.matches("(?:0|[1-9][0-9]{0,9}|0x[0-9a-fA-F]{1,8})")) throw error("invalid number");
+            long n = v.startsWith("0x") ? Long.parseLong(v.substring(2), 16) : Long.parseLong(v);
+            if (n > Integer.MAX_VALUE) throw error("number overflow");
+            return (int) n;
+        }
+
+        static LearnsetReorderWitness read(InputStream input, byte[] original) {
+            if (input == null) throw error("missing witness");
+            Properties p = new Properties() {
+                @Override public synchronized Object put(Object k, Object v) {
+                    if (containsKey(k)) throw error("duplicate field");
+                    return super.put(k, v);
+                }
+            };
+            try {
+                byte[] text = input.readNBytes(262145);
+                if (text.length > 262144) throw error("witness too large");
+                p.load(new java.io.ByteArrayInputStream(text));
+            } catch (IOException | IllegalArgumentException e) { throw error("invalid witness encoding"); }
+            Set<String> keys = new HashSet<>(Set.of("schema", "version", "cfru.sha", "dpe.sha", "elf.sha256",
+                    "input.size", "input.sha256", "table.start", "table.end", "objects.count"));
+            if (!"LEARNSET_REORDER_WITNESS_V1".equals(p.getProperty("schema")) || number(p, "version") != 1
+                    || !"196058edbc2b8b7d8c725b715b1f967ba60f5c83".equals(p.getProperty("cfru.sha"))
+                    || !"d887185de1f6ae6a78e85c4311bbadde17041d00".equals(p.getProperty("dpe.sha")))
+                throw error("schema or source revision mismatch");
+            for (String k : List.of("elf.sha256", "input.sha256"))
+                if (!p.getProperty(k, "").matches("[0-9a-f]{64}")) throw error("invalid digest");
+            if (original == null || number(p, "input.size") != original.length
+                    || !p.getProperty("input.sha256").equals(HexFormat.of().formatHex(sha256(original)))
+                    || !romCode(original, "BPRE") || original[Gen3Constants.romVersionOffset] != 0)
+                throw error("input identity/profile mismatch");
+            int limit = Math.min(CFRU_INSERT_END, original.length);
+            int table = number(p, "table.start"), tableEnd = number(p, "table.end");
+            if (!hasValidCfruRuntimeLevelUpLearnsetsPointer(original)
+                    || readCfruRuntimeLevelUpLearnsetsOffset(original) != table
+                    || tableEnd != table + cfruDpeLevelUpLearnsetsTableLength() || table % GBConstants.longSize != 0
+                    || table < CFRU_INSERT_START || tableEnd > limit)
+                throw error("table does not match the runtime root");
+            int count = number(p, "objects.count");
+            if (count < 1 || count > CFRU_DPE_SPECIES_COUNT) throw error("invalid object count");
+            EvolutionOwner tableOwner = new EvolutionOwner("LEARNSET_TABLE", table, tableEnd);
+            List<EvolutionOwner> owners = new ArrayList<>(List.of(tableOwner));
+            Map<Integer, EvolutionOwner> byStart = new HashMap<>();
+            int previousEnd = CFRU_INSERT_START;
+            for (int i = 0; i < count; i++) {
+                String n = "objects." + i;
+                keys.add(n + ".start"); keys.add(n + ".end");
+                int start = number(p, n + ".start"), end = number(p, n + ".end"), length = end - start;
+                if (start < previousEnd || end > limit || length < CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE
+                        || length % CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE != 0
+                        || length > (CFRU_DPE_MAX_LEARNABLE_MOVES + 1) * CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE)
+                    throw error("invalid, unsorted or overlapping object bounds");
+                EvolutionOwner object = new EvolutionOwner("LEARNSET_ASSET", start, end);
+                if (object.overlaps(tableOwner)) throw error("object overlaps the table");
+                // Exactly one learnset: its only terminator is its last entry.
+                for (int at = start; at < end; at += CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE) {
+                    boolean terminator = IOFunctions.read2ByteInt(original, at) == 0 && (original[at + 2] & 255) == 255;
+                    if (terminator != (at == end - CFRU_DPE_LEVEL_UP_MOVE_ENTRY_SIZE))
+                        throw error("object is not exactly one terminated learnset");
+                }
+                owners.add(object);
+                byStart.put(start, object);
+                previousEnd = end;
+            }
+            if (p.size() != keys.size() || !p.stringPropertyNames().equals(keys)) throw error("incomplete or unknown fields");
+            Set<EvolutionOwner> referenced = new HashSet<>();
+            for (int slot = 0; slot < CFRU_DPE_SPECIES_COUNT; slot++) {
+                long raw = Integer.toUnsignedLong(IOFunctions.readFullInt(original, table + slot * GBConstants.longSize));
+                if (raw == 0) continue;
+                EvolutionOwner object = raw < 0x08000000L ? null : byStart.get((int) (raw - 0x08000000L));
+                if (object == null) throw error("slot " + slot + " is not the start of a witnessed object");
+                referenced.add(object);
+            }
+            if (referenced.size() != count) throw error("unreferenced object");
+            return new LearnsetReorderWitness(List.copyOf(owners));
+        }
+    }
+
     /** Blob start -> its new bytes, for changed blobs only; validates every native slot first. */
     private Map<Integer, byte[]> planCfruDpeLearnsetReorder(Map<Integer, List<MoveLearnt>> movesets) {
         if (!usesCfruDpeLevelUpLearnsets()) {
@@ -6892,13 +7001,20 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         if (table % GBConstants.longSize != 0 || table < CFRU_INSERT_START || tableEnd > CFRU_INSERT_END) {
             throw learnsetReorderError("table is not inside the CFRU insert");
         }
-        // A strictly installed witness is reused; otherwise only the reorder's own one.
-        OakOwnershipWitness witness = oakOwnershipWitness != null ? oakOwnershipWitness : learnsetReorderWitness;
-        byte[] witnessInput = oakOwnershipWitness != null ? oakWitnessInput : learnsetReorderWitnessInput;
-        if (witness == null || witnessInput != originalRom) {
+        // The learnset-only witness first; else a strictly installed Oak witness, else the reorder's own one.
+        List<EvolutionOwner> owners = null;
+        byte[] witnessInput = null;
+        if (learnsetOnlyWitness != null) {
+            owners = learnsetOnlyWitness.owners;
+            witnessInput = learnsetOnlyWitnessInput;
+        } else if (oakOwnershipWitness != null || learnsetReorderWitness != null) {
+            owners = (oakOwnershipWitness != null ? oakOwnershipWitness : learnsetReorderWitness).allOwners;
+            witnessInput = oakOwnershipWitness != null ? oakWitnessInput : learnsetReorderWitnessInput;
+        }
+        if (owners == null || witnessInput != originalRom) {
             throw learnsetReorderError("no input-bound learnset owner witness for this input");
         }
-        if (!ownedBy(witness, "LEARNSET_TABLE", table, tableEnd)) {
+        if (!ownedBy(owners, "LEARNSET_TABLE", table, tableEnd)) {
             throw learnsetReorderError("the table is not a witnessed LEARNSET_TABLE owner");
         }
         Map<Integer, byte[]> blobs = new TreeMap<>();
@@ -6924,7 +7040,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
                 foreign.add(new EvolutionOwner(r.type(), r.start(), r.end()));
             }
         }
-        for (EvolutionOwner o : witness.allOwners) {
+        for (EvolutionOwner o : owners) {
             if (!o.type.startsWith("LEARNSET_")) foreign.add(o);
         }
         int previousEnd = -1;
@@ -6933,7 +7049,7 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
             if (range.start < previousEnd) {
                 throw learnsetReorderError("learnsets at 0x" + Integer.toHexString(range.start) + " overlap another learnset");
             }
-            if (!ownedBy(witness, "LEARNSET_ASSET", range.start, range.end)) {
+            if (!ownedBy(owners, "LEARNSET_ASSET", range.start, range.end)) {
                 throw learnsetReorderError("learnset at 0x" + Integer.toHexString(range.start)
                         + " is not a witnessed LEARNSET_ASSET owner");
             }
@@ -6980,8 +7096,8 @@ public class Gen3RomHandler extends AbstractGBRomHandler {
         return plan;
     }
 
-    private static boolean ownedBy(OakOwnershipWitness witness, String type, int start, int end) {
-        return witness.allOwners.stream().anyMatch(o -> o.type.equals(type) && o.contains(start, end - start));
+    private static boolean ownedBy(List<EvolutionOwner> owners, String type, int start, int end) {
+        return owners.stream().anyMatch(o -> o.type.equals(type) && o.contains(start, end - start));
     }
 
     /** Entries plus terminator, or rejected when unterminated within 50 moves or the CFRU insert. */

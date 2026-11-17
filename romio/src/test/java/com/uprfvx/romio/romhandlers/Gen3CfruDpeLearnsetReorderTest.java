@@ -21,6 +21,7 @@ class Gen3CfruDpeLearnsetReorderTest {
     // Inside the old learnset allocator arena [0x1219A48, 0x1600000).
     static final int ARENA_TABLE = 0x1300000, ARENA_BLOBS = 0x1302000;
     static final String PROPERTY = "uprfvx.cfruOakOwnership";
+    static final String LEARNSET_PROPERTY = "uprfvx.cfruLearnsetReorderWitness";
 
     static class Fixture extends CfruDpeEvolutionFixture {
         final Gen3CfruDpeEasierTimeEvolutionTest.OakFixture oak = new Gen3CfruDpeEasierTimeEvolutionTest.OakFixture(0x1600000);
@@ -73,6 +74,40 @@ class Gen3CfruDpeLearnsetReorderTest {
                 step.run();
             } finally {
                 System.clearProperty(PROPERTY);
+                Files.delete(file);
+            }
+        }
+
+        /** A LEARNSET_REORDER_WITNESS_V1 as devtools/scripts/cfru_learnset_witness.py writes it. */
+        Properties learnsetWitness(int... bounds) throws Exception {
+            setField("originalRom", rom.clone());
+            Properties p = new Properties();
+            p.setProperty("schema", "LEARNSET_REORDER_WITNESS_V1");
+            p.setProperty("version", "1");
+            p.setProperty("cfru.sha", "196058edbc2b8b7d8c725b715b1f967ba60f5c83");
+            p.setProperty("dpe.sha", "d887185de1f6ae6a78e85c4311bbadde17041d00");
+            p.setProperty("elf.sha256", "1".repeat(64));
+            p.setProperty("input.size", Integer.toString(rom.length));
+            p.setProperty("input.sha256", HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(rom)));
+            p.setProperty("table.start", "0x" + Integer.toHexString(table));
+            p.setProperty("table.end", "0x" + Integer.toHexString(table + 1440 * 4));
+            p.setProperty("objects.count", Integer.toString(bounds.length / 2));
+            for (int i = 0; i < bounds.length; i += 2) {
+                p.setProperty("objects." + i / 2 + ".start", "0x" + Integer.toHexString(bounds[i]));
+                p.setProperty("objects." + i / 2 + ".end", "0x" + Integer.toHexString(bounds[i + 1]));
+            }
+            return p;
+        }
+
+        void bindLearnsets(Properties witness) throws Exception {
+            Path file = Files.createTempFile("synthetic-learnset-witness", ".properties");
+            try {
+                try (var out = Files.newOutputStream(file)) { witness.store(out, null); }
+                System.setProperty(LEARNSET_PROPERTY, file.toString());
+                preflightCfruDpeLearnsetReorder();
+            } finally {
+                System.clearProperty(LEARNSET_PROPERTY);
                 Files.delete(file);
             }
         }
@@ -233,6 +268,116 @@ class Gen3CfruDpeLearnsetReorderTest {
         }
         assertNull(f.field("learnsetReorderWitness"));
         assertNull(f.field("learnsetReorderWitnessInput"));
+    }
+
+    /** Arena fixture: A shared by slots 1 and 2, B in slot 3; returns {A, A end, B, B end}. */
+    private static int[] linkedLearnsets(Fixture f) {
+        int a = f.learnset(ARENA_BLOBS, 10, 1, 20, 5, 30, 9), b = f.learnset(ARENA_BLOBS + 0x20, 40, 1, 50, 5);
+        f.slot(1, a); f.slot(2, a); f.slot(3, b);
+        return new int[] {a, a + 12, b, b + 9};
+    }
+
+    @Test void theLearnsetOnlyWitnessEnablesOnlyTheInPlaceReorder() throws Exception {
+        Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        int[] o = linkedLearnsets(f);
+        byte[] before = f.rom.clone();
+        f.bindLearnsets(f.learnsetWitness(o));
+        assertArrayEquals(before, f.rom);
+        assertNotNull(f.field("learnsetOnlyWitness"));
+        assertNull(f.field("oakOwnershipWitness"));
+        assertNull(f.field("learnsetReorderWitness"));
+        // Oak keeps its own strict witness; the learnset-only one attests nothing there.
+        assertThrows(RomIOException.class, () -> f.withWitness(f::preflightCfruDpeOakIntro));
+        assertNull(f.field("oakOwnershipWitness"));
+        assertArrayEquals(before, f.rom);
+
+        f.reorderCfruDpeMovesLearntInPlace(movesets(1, moves(30, 1, 10, 5, 20, 9), 2, moves(30, 1, 10, 5, 20, 9),
+                3, moves(50, 1, 40, 5)));
+        Set<Integer> allowed = new HashSet<>();
+        for (int at : new int[] {o[0], o[0] + 3, o[0] + 6, o[2], o[2] + 3}) { allowed.add(at); allowed.add(at + 1); }
+        for (int i = 0; i < f.rom.length; i++) if (f.rom[i] != before[i]) assertTrue(allowed.contains(i), "byte " + i);
+        assertEquals(List.of(30, 1, 10, 5, 20, 9, 0, 0xFF), decode(f, o[0], 4));
+        assertEquals(List.of(50, 1, 40, 5, 0, 0xFF), decode(f, o[2], 3));
+        assertThrows(RomIOException.class, () -> f.setMovesLearnt(movesets(1, moves(30, 1, 10, 5, 20, 9))));
+    }
+
+    @Test void aMismatchedLearnsetWitnessIsRejectedBeforeMutation() throws Exception {
+        Map<String, java.util.function.BiConsumer<Properties, int[]>> cases = new LinkedHashMap<>();
+        cases.put("schema or source revision mismatch", (p, o) -> p.setProperty("cfru.sha", "0".repeat(40)));
+        cases.put("input identity/profile mismatch", (p, o) -> p.setProperty("input.sha256", "0".repeat(64)));
+        cases.put("table does not match the runtime root", (p, o) -> {
+            p.setProperty("table.start", "0x" + Integer.toHexString(ARENA_TABLE + 4));
+            p.setProperty("table.end", "0x" + Integer.toHexString(ARENA_TABLE + 4 + 1440 * 4));
+        });
+        cases.put("slot 1 is not the start of a witnessed object",
+                (p, o) -> p.setProperty("objects.0.start", "0x" + Integer.toHexString(o[0] + 3)));
+        cases.put("exactly one terminated learnset",
+                (p, o) -> p.setProperty("objects.0.end", "0x" + Integer.toHexString(o[1] - 3)));
+        cases.put("slot 3 is not the start of a witnessed object", (p, o) -> {
+            p.setProperty("objects.count", "1"); p.remove("objects.1.start"); p.remove("objects.1.end");
+        });
+        cases.put("unreferenced object", (p, o) -> {
+            p.setProperty("objects.count", "3");
+            p.setProperty("objects.2.start", "0x" + Integer.toHexString(ARENA_BLOBS + 0x40));
+            p.setProperty("objects.2.end", "0x" + Integer.toHexString(ARENA_BLOBS + 0x43));
+        });
+        cases.put("overlapping object bounds", (p, o) -> {
+            p.setProperty("objects.1.start", "0x" + Integer.toHexString(o[0] + 3));
+            p.setProperty("objects.1.end", "0x" + Integer.toHexString(o[1]));
+        });
+        cases.put("incomplete or unknown fields", (p, o) -> p.setProperty("objects.9.start", "0x0"));
+        for (var c : cases.entrySet()) {
+            Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+            int[] o = linkedLearnsets(f);
+            f.entry(ARENA_BLOBS + 0x40, 0, 0xFF);                // an unreferenced terminated object
+            Properties p = f.learnsetWitness(o);
+            c.getValue().accept(p, o);
+            byte[] before = f.rom.clone();
+            RomIOException error = assertThrows(RomIOException.class, () -> f.bindLearnsets(p), c.getKey());
+            assertTrue(error.getMessage().contains(c.getKey()), error.getMessage());
+            assertArrayEquals(before, f.rom);
+            assertNull(f.field("learnsetOnlyWitness"));
+            assertRejected(f, movesets(1, moves(20, 1, 10, 5, 30, 9)), "no input-bound learnset owner witness");
+        }
+        Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        linkedLearnsets(f);
+        System.setProperty(LEARNSET_PROPERTY, "/nonexistent/learnset-witness.properties");
+        try {
+            RomIOException error = assertThrows(RomIOException.class, f::preflightCfruDpeLearnsetReorder);
+            assertTrue(error.getMessage().contains("cannot read the selected learnset witness"), error.getMessage());
+        } finally {
+            System.clearProperty(LEARNSET_PROPERTY);
+        }
+    }
+
+    @Test void theLearnsetOnlyWitnessStaysBoundToItsInputAndOwnedBytes() throws Exception {
+        Fixture f = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        int[] o = linkedLearnsets(f);
+        f.bindLearnsets(f.learnsetWitness(o));
+        f.slot(4, f.learnset(ARENA_BLOBS + 0x100, 30, 1, 40, 5));   // in the insert, not a linked object
+        assertRejected(f, movesets(1, moves(20, 1, 10, 5, 30, 9), 4, moves(40, 1, 30, 5)),
+                "is not a witnessed LEARNSET_ASSET owner");
+        f.clearSlot(4);
+        f.entry(o[2], 50, 1);                                     // owned bytes changed since the input
+        assertRejected(f, movesets(3, moves(40, 1, 50, 5)), "changed since input");
+
+        Fixture g = new Fixture(ARENA_TABLE, ARENA_BLOBS);
+        int[] q = linkedLearnsets(g);
+        g.bindLearnsets(g.learnsetWitness(q));
+        g.failAfter = 3;                                          // A written, the first B write fails
+        byte[] before = g.rom.clone();
+        var movesets = movesets(1, moves(30, 1, 10, 5, 20, 9), 2, moves(30, 1, 10, 5, 20, 9), 3, moves(50, 1, 40, 5));
+        assertThrows(IllegalStateException.class, () -> g.reorderCfruDpeMovesLearntInPlace(movesets));
+        assertArrayEquals(before, g.rom);
+        g.setField("originalRom", g.rom.clone());                // stale: bound to another input object
+        assertRejected(g, movesets, "no input-bound learnset owner witness for this input");
+        try {
+            g.midLoadingSetUp();
+        } catch (RuntimeException ignored) {
+            // The synthetic handler has no real ROM entry; the owner state is reset first.
+        }
+        assertNull(g.field("learnsetOnlyWitness"));
+        assertNull(g.field("learnsetOnlyWitnessInput"));
     }
 
     @Test void writesNeedAnInputBoundLearnsetOwnerWitness() throws Exception {
