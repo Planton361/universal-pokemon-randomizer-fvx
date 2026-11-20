@@ -172,6 +172,8 @@ final class CombinedReplayFixture extends CfruDpeEvolutionFixture {
     @Override public String getPaletteFilesID() { return "FRLG"; }
     @Override public List<Move> getMoves() { return moves; }
     @Override public void setMovesLearnt(Map<Integer,List<MoveLearnt>> value) { var copy = new TreeMap<>(value); learnsets.clear(); learnsets.putAll(copy); }
+    // #753: the CFRU reorder writes in place; this synthetic model keeps learnsets in memory, not ROM bytes.
+    @Override public void reorderCfruDpeMovesLearntInPlace(Map<Integer,List<MoveLearnt>> value) { setMovesLearnt(value); }
     @Override public Map<Integer,List<Integer>> getEggMoves() { return new TreeMap<>(); }
     @Override public void setEggMoves(Map<Integer,List<Integer>> value) { }
     @Override public List<Species> getStarters() { return starters; }
