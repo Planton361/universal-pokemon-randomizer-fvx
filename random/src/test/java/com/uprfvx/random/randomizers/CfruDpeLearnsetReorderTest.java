@@ -26,11 +26,11 @@ class CfruDpeLearnsetReorderTest {
     static final int[][] POWERS = {{1, 0}, {2, 80}, {3, 40}, {4, 40}, {5, 30}, {6, 120}, {7, 40}};
 
     /**
-     * Randomizer-side fixture. The real in-place writer and its witness-owned byte checks are covered by
-     * romio's Gen3CfruDpeLearnsetReorderTest; here an attested handler is simulated and its writes recorded.
+     * Randomizer-side fixture. The real in-place writer and its structural checks are covered by romio's
+     * Gen3CfruDpeLearnsetReorderTest; here a structurally valid handler is simulated and its writes recorded.
      */
     static class Fixture extends CfruDpeEvolutionFixture {
-        boolean attested = true;
+        boolean validStructure = true;
         int restrictions, allocatingWrites;
         final List<Map<Integer, List<Integer>>> inPlaceWrites = new ArrayList<>();
 
@@ -58,7 +58,7 @@ class CfruDpeLearnsetReorderTest {
         }
 
         @Override public void preflightCfruDpeLearnsetReorder() {
-            if (!attested) super.preflightCfruDpeLearnsetReorder();
+            if (!validStructure) super.preflightCfruDpeLearnsetReorder();
         }
         @Override public void reorderCfruDpeMovesLearntInPlace(Map<Integer, List<MoveLearnt>> movesets) {
             Map<Integer, List<Integer>> copy = new TreeMap<>();
@@ -122,7 +122,7 @@ class CfruDpeLearnsetReorderTest {
         return new GameRandomizer(s, null, f, bundle, false);
     }
 
-    @Test void onlyUnchangedWithReorderPassesTheGateAndOnlyWithAnOwnerWitness() throws Exception {
+    @Test void onlyUnchangedWithReorderPassesTheGateAndOnlyOnAValidStructure() throws Exception {
         Fixture f = new Fixture();
         Settings s = new Settings();
         s.setReorderDamagingMoves(true);
@@ -144,10 +144,10 @@ class CfruDpeLearnsetReorderTest {
         }
 
         Fixture h = new Fixture();
-        h.attested = false;                                   // the real preflight: no witness, no write path
+        h.validStructure = false;                             // the real preflight: no CFRU table, no write path
         var rejected = game(h, s).randomize("unused", new PrintStream(OutputStream.nullOutputStream()), 753);
         assertInstanceOf(RandomizationException.class, rejected.getException());
-        assertTrue(rejected.getException().getMessage().contains("no input-bound learnset owner witness"),
+        assertTrue(rejected.getException().getMessage().contains("in-place learnset reorder rejected"),
                 rejected.getException().getMessage());
         assertEquals(0, h.restrictions);
         assertEquals(0, h.inPlaceWrites.size() + h.allocatingWrites);
